@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.kama.jchatmind.mapper.ToolCallLogMapper">
+
+    <resultMap id="BaseResultMap" type="com.kama.jchatmind.model.entity.ToolCallLog">
+        <id property="id" column="id" jdbcType="VARCHAR"/>
+        <result property="taskId" column="task_id" jdbcType="VARCHAR"/>
+        <result property="stepId" column="step_id" jdbcType="VARCHAR"/>
+        <result property="toolName" column="tool_name" jdbcType="VARCHAR"/>
+        <result property="argumentsJson" column="arguments_json" jdbcType="VARCHAR"/>
+        <result property="resultSummary" column="result_summary" jdbcType="VARCHAR"/>
+        <result property="status" column="status" jdbcType="VARCHAR"/>
+        <result property="latencyMs" column="latency_ms" jdbcType="BIGINT"/>
+        <result property="errorMessage" column="error_message" jdbcType="VARCHAR"/>
+        <result property="createdAt" column="created_at" jdbcType="TIMESTAMP"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="com.kama.jchatmind.model.entity.ToolCallLog"
+            keyColumn="id" keyProperty="id" useGeneratedKeys="true">
+        INSERT INTO tool_call_log
+        (task_id, step_id, tool_name, arguments_json, result_summary, status, latency_ms, error_message, created_at)
+        VALUES
+        (CAST(#{taskId} AS uuid),
+         CAST(#{stepId} AS uuid),
+         #{toolName},
+         CAST(#{argumentsJson} AS jsonb),
+         #{resultSummary},
+         #{status},
+         #{latencyMs},
+         #{errorMessage},
+         #{createdAt})
+    </insert>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT id,
+               task_id,
+               step_id,
+               tool_name,
+               arguments_json::text AS arguments_json,
+               result_summary,
+               status,
+               latency_ms,
+               error_message,
+               created_at
+        FROM tool_call_log
+        WHERE id = CAST(#{id} AS uuid)
+    </select>
+
+    <update id="updateById" parameterType="com.kama.jchatmind.model.entity.ToolCallLog">
+        UPDATE tool_call_log
+        <set>
+            <if test="resultSummary != null">result_summary = #{resultSummary},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="latencyMs != null">latency_ms = #{latencyMs},</if>
+            <if test="errorMessage != null">error_message = #{errorMessage},</if>
+        </set>
+        WHERE id = CAST(#{id} AS uuid)
+    </update>
+</mapper>

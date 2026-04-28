@@ -1,0 +1,111 @@
+package com.kama.jchatmind.agent.tools;
+
+import com.kama.jchatmind.agent.AgentExecutionContext;
+import com.kama.jchatmind.message.AgentSseEvent;
+import com.kama.jchatmind.model.dto.RagSearchResult;
+import com.kama.jchatmind.service.RagService;
+import com.kama.jchatmind.service.SseService;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+@Component
+public class KnowledgeTools implements Tool {
+
+    private final RagService ragService;
+    private final SseService sseService;
+
+    public KnowledgeTools(RagService ragService, SseService sseService) {
+        this.ragService = ragService;
+        this.sseService = sseService;
+    }
+
+    @Override
+    public String getName() {
+        return "KnowledgeTool";
+    }
+
+    @Override
+    public String getDescription() {
+        return "用于从知识库执行语义检索（RAG）。输入知识库 ID 和查询文本，返回与查询最相关的内容片段。";
+    }
+
+    @Override
+    public ToolType getType() {
+        return ToolType.FIXED;
+    }
+
+    @org.springframework.ai.tool.annotation.Tool(
+            name = "KnowledgeTool",
+            description = "从指定知识库中执行相似性检索（RAG）。参数为知识库 ID（kbsId）和查询文本（query），返回与查询最相关的知识片段。"
+    )
+    public String knowledgeQuery(String kbsId, String query) {
+        List<RagSearchResult> results = ragService.similaritySearchWithMetadata(kbsId, query);
+        sendRetrievalEvent(kbsId, query, results);
+        if (results.isEmpty()) {
+            return "未检索到相关知识片段。";
+        }
+        return results.stream()
+                .map(this::formatResult)
+                .collect(Collectors.joining("\n\n"));
+    }
+
+    private void sendRetrievalEvent(String kbId, String query, List<RagSearchResult> results) {
+        AgentExecutionContext.Context context = AgentExecutionContext.get();
+        if (context == null) {
+            return;
+        }
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("stepNo", context.getStepNo());
+        payload.put("stepId", context.getCurrentStepId());
+        payload.put("kbId", kbId);
+        payload.put("query", query);
+        payload.put("results", results);
+        sseService.sendEvent(context.getSessionId(), AgentSseEvent.of(
+                context.getTaskId(),
+                context.getSessionId(),
+                AgentSseEvent.Type.RETRIEVAL_RESULT,
+                payload
+        ));
+    }
+
+    private String formatResult(RagSearchResult result) {
+        return "[source]\n"
+                + "chunkId: " + nullToEmpty(result.getChunkId()) + "\n"
+                + "title: " + nullToEmpty(result.getTitle()) + "\n"
+                + "sourceType: " + nullToEmpty(result.getSourceType()) + "\n"
+                + "sourceId: " + nullToEmpty(result.getSourceId()) + "\n"
+                + "score: " + (result.getScore() == null ? "" : result.getScore()) + "\n"
+                + "metadata: " + nullToEmpty(result.getMetadata()) + "\n"
+                + "[content]\n"
+                + nullToEmpty(result.getContent());
+        /*
+        return """
+                [来源]
+                chunkId: %s
+                title: %s
+                sourceType: %s
+                sourceId: %s
+                score: %s
+                metadata: %s
+                [内容]
+                %s
+                """.formatted(
+                nullToEmpty(result.getChunkId()),
+                nullToEmpty(result.getTitle()),
+                nullToEmpty(result.getSourceType()),
+                nullToEmpty(result.getSourceId()),
+                result.getScore() == null ? "" : result.getScore(),
+                nullToEmpty(result.getMetadata()),
+                nullToEmpty(result.getContent())
+        );
+        */
+    }
+
+    private String nullToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+}

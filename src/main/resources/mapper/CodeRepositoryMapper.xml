@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.kama.jchatmind.mapper.CodeRepositoryMapper">
+    <resultMap id="BaseResultMap" type="com.kama.jchatmind.model.entity.CodeRepository">
+        <id property="id" column="id" jdbcType="VARCHAR"/>
+        <result property="name" column="name" jdbcType="VARCHAR"/>
+        <result property="rootPath" column="root_path" jdbcType="VARCHAR"/>
+        <result property="language" column="language" jdbcType="VARCHAR"/>
+        <result property="status" column="status" jdbcType="VARCHAR"/>
+        <result property="createdAt" column="created_at" jdbcType="TIMESTAMP"/>
+        <result property="updatedAt" column="updated_at" jdbcType="TIMESTAMP"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="com.kama.jchatmind.model.entity.CodeRepository"
+            keyColumn="id" keyProperty="id" useGeneratedKeys="true">
+        INSERT INTO code_repository (name, root_path, language, status, created_at, updated_at)
+        VALUES (#{name}, #{rootPath}, #{language}, #{status}, #{createdAt}, #{updatedAt})
+    </insert>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT id, name, root_path, language, status, created_at, updated_at
+        FROM code_repository
+        WHERE id = CAST(#{id} AS uuid)
+    </select>
+
+    <select id="selectExisting" resultMap="BaseResultMap">
+        SELECT id, name, root_path, language, status, created_at, updated_at
+        FROM code_repository
+        WHERE name = #{name} OR root_path = #{rootPath}
+        ORDER BY updated_at DESC
+        LIMIT 1
+    </select>
+
+    <select id="selectAll" resultMap="BaseResultMap">
+        SELECT id, name, root_path, language, status, created_at, updated_at
+        FROM code_repository
+        ORDER BY created_at DESC
+    </select>
+
+    <update id="updateById" parameterType="com.kama.jchatmind.model.entity.CodeRepository">
+        UPDATE code_repository
+        <set>
+            <if test="name != null">name = #{name},</if>
+            <if test="rootPath != null">root_path = #{rootPath},</if>
+            <if test="language != null">language = #{language},</if>
+            <if test="status != null">status = #{status},</if>
+            updated_at = NOW()
+        </set>
+        WHERE id = CAST(#{id} AS uuid)
+    </update>
+</mapper>

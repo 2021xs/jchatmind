@@ -1,0 +1,50 @@
+spring:
+  application:
+    name: jchatmind
+  datasource:
+    url: jdbc:postgresql://localhost:5432/jchatmind
+    username: postgres
+    password: 123
+    driver-class-name: org.postgresql.Driver
+  mail:
+    host: smtp.qq.com
+    port: 587
+    username: your-email
+    password: your-password # 邮箱授权码
+    default-encoding: UTF-8
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+  ai:
+    deepseek:
+      api-key: your-api-key
+      base-url: https://api.deepseek.com
+      chat:
+        options:
+          model: deepseek-chat
+    zhipuai:
+      api-key: your-api-key
+      base-url: https://open.bigmodel.cn/api/paas
+      chat:
+        options:
+          model: glm-4.6
+mybatis:
+  type-aliases-package: com.kama.jchatmind.model.entity
+  mapper-locations: classpath:mapper/*.xml
+  type-handlers-package: com.kama.jchatmind.typehandler
+
+document:
+  storage:
+    base-path: ./data/documents
+
+jchatmind:
+  code-rag:
+    allowed-roots:
+      - D:/Project
+      - D:/workspace
+    max-file-size-bytes: 1048576
+    max-files-per-import: 2000

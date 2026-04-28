@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.kama.jchatmind.mapper.CodeFileMapper">
+    <insert id="insert" parameterType="com.kama.jchatmind.model.entity.CodeFile"
+            keyColumn="id" keyProperty="id" useGeneratedKeys="true">
+        INSERT INTO code_file
+        (repo_id, file_path, file_type, package_name, class_name, checksum, created_at, updated_at)
+        VALUES
+        (CAST(#{repoId} AS uuid), #{filePath}, #{fileType}, #{packageName}, #{className}, #{checksum}, #{createdAt}, #{updatedAt})
+    </insert>
+
+    <delete id="deleteByRepoId">
+        DELETE FROM code_file WHERE repo_id = CAST(#{repoId} AS uuid)
+    </delete>
+</mapper>
