@@ -7,12 +7,14 @@ import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.dto.KnowledgeBaseDTO;
 import com.kama.jchatmind.model.entity.AgentStep;
 import com.kama.jchatmind.model.entity.AgentTask;
-import com.kama.jchatmind.model.entity.ToolCallLog;
 import com.kama.jchatmind.model.response.CreateChatMessageResponse;
 import com.kama.jchatmind.model.vo.ChatMessageVO;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
 import com.kama.jchatmind.service.SseService;
+import com.kama.jchatmind.service.ToolExecutionService;
+import com.kama.jchatmind.tool.ToolExecutionContext;
+import com.kama.jchatmind.tool.ToolExecutionRecord;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -33,10 +35,8 @@ import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Queue;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -58,6 +58,7 @@ public class JChatMind {
     private String chatSessionId;
     private ChatOptions chatOptions;
     private SseService sseService;
+    private ToolExecutionService toolExecutionService;
     private ChatMessageConverter chatMessageConverter;
     private ChatMessageFacadeService chatMessageFacadeService;
     private ChatResponse lastChatResponse;
@@ -65,6 +66,7 @@ public class JChatMind {
     private String userMessageId;
     private String currentTaskId;
     private AgentStep currentStep;
+    private List<String> runtimeToolNames;
 
     private final List<ChatMessageDTO> pendingChatMessages = new ArrayList<>();
 
@@ -82,10 +84,12 @@ public class JChatMind {
                      List<KnowledgeBaseDTO> availableKbs,
                      String chatSessionId,
                      SseService sseService,
+                     ToolExecutionService toolExecutionService,
                      ChatMessageFacadeService chatMessageFacadeService,
                      ChatMessageConverter chatMessageConverter,
                      AgentTaskLogService agentTaskLogService,
-                     String userMessageId) {
+                     String userMessageId,
+                     List<String> runtimeToolNames) {
         this.agentId = agentId;
         this.name = name;
         this.description = description;
@@ -95,10 +99,12 @@ public class JChatMind {
         this.availableKbs = availableKbs;
         this.chatSessionId = chatSessionId;
         this.sseService = sseService;
+        this.toolExecutionService = toolExecutionService;
         this.chatMessageFacadeService = chatMessageFacadeService;
         this.chatMessageConverter = chatMessageConverter;
         this.agentTaskLogService = agentTaskLogService;
         this.userMessageId = userMessageId;
+        this.runtimeToolNames = runtimeToolNames == null ? List.of() : runtimeToolNames;
         this.agentState = AgentState.IDLE;
 
         this.chatMemory = MessageWindowChatMemory.builder()
@@ -256,41 +262,24 @@ public class JChatMind {
                 .build();
 
         List<AssistantMessage.ToolCall> toolCalls = this.lastChatResponse.getResult().getOutput().getToolCalls();
-        Map<String, Queue<ToolCallLog>> runningToolLogs = new HashMap<>();
-        long startedAt = System.currentTimeMillis();
+        ToolExecutionContext executionContext = ToolExecutionContext.builder()
+                .taskId(currentTaskId)
+                .stepId(currentStep == null ? null : currentStep.getId())
+                .sessionId(chatSessionId)
+                .runtimeToolNames(runtimeToolNames)
+                .build();
 
+        List<ToolExecutionRecord> records = new ArrayList<>();
         for (AssistantMessage.ToolCall toolCall : toolCalls) {
-            ToolCallLog log = agentTaskLogService.startToolCall(
-                    currentTaskId,
-                    currentStep == null ? null : currentStep.getId(),
-                    toolCall.name(),
-                    toolCall.arguments()
-            );
-            runningToolLogs.computeIfAbsent(toolCall.name(), key -> new LinkedList<>()).add(log);
-            sendAgentEvent(AgentSseEvent.Type.TOOL_CALL_START, payload(
-                    "stepId", currentStep == null ? null : currentStep.getId(),
-                    "toolCallLogId", log.getId(),
-                    "toolName", toolCall.name(),
-                    "argumentsPreview", truncate(toolCall.arguments())
-            ));
+            records.add(toolExecutionService.beforeToolCall(executionContext, toolCall));
         }
 
         ToolExecutionResult toolExecutionResult;
         try {
             toolExecutionResult = toolCallingManager.executeToolCalls(prompt, this.lastChatResponse);
         } catch (Exception e) {
-            long latencyMs = System.currentTimeMillis() - startedAt;
-            for (Queue<ToolCallLog> logs : runningToolLogs.values()) {
-                for (ToolCallLog log : logs) {
-                    agentTaskLogService.failToolCall(log.getId(), e.getMessage(), latencyMs);
-                    sendAgentEvent(AgentSseEvent.Type.TOOL_CALL_RESULT, payload(
-                            "toolCallLogId", log.getId(),
-                            "toolName", log.getToolName(),
-                            "status", AgentTaskLogService.STATUS_FAILED,
-                            "errorMessage", truncate(e.getMessage()),
-                            "latencyMs", latencyMs
-                    ));
-                }
+            for (ToolExecutionRecord record : records) {
+                toolExecutionService.afterToolFailure(executionContext, record, e);
             }
             throw e;
         }
@@ -302,20 +291,18 @@ public class JChatMind {
                 .conversationHistory()
                 .get(toolExecutionResult.conversationHistory().size() - 1);
 
-        long latencyMs = System.currentTimeMillis() - startedAt;
-        for (ToolResponseMessage.ToolResponse response : toolResponseMessage.getResponses()) {
-            Queue<ToolCallLog> logs = runningToolLogs.get(response.name());
-            ToolCallLog log = logs == null ? null : logs.poll();
-            if (log != null) {
-                agentTaskLogService.finishToolCall(log.getId(), response.responseData(), latencyMs);
-                sendAgentEvent(AgentSseEvent.Type.TOOL_CALL_RESULT, payload(
-                        "toolCallLogId", log.getId(),
-                        "toolName", response.name(),
-                        "status", AgentTaskLogService.STATUS_SUCCESS,
-                        "resultSummary", truncate(response.responseData()),
-                        "latencyMs", latencyMs
-                ));
-            }
+        List<ToolResponseMessage.ToolResponse> responses = toolResponseMessage.getResponses();
+        for (int i = 0; i < responses.size() && i < records.size(); i++) {
+            // Spring AI's ToolResponse is matched to the preflight record by response order here.
+            // ToolCall.id is stored when present, but this response object is not relied on for id matching.
+            toolExecutionService.afterToolSuccess(executionContext, records.get(i), responses.get(i).responseData());
+        }
+        for (int i = responses.size(); i < records.size(); i++) {
+            toolExecutionService.afterToolFailure(
+                    executionContext,
+                    records.get(i),
+                    new IllegalStateException("Tool response missing for call index " + i)
+            );
         }
 
         String collect = toolResponseMessage.getResponses()

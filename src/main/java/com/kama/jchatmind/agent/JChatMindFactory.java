@@ -13,28 +13,38 @@ import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.dto.KnowledgeBaseDTO;
 import com.kama.jchatmind.model.entity.Agent;
 import com.kama.jchatmind.model.entity.KnowledgeBase;
-import com.kama.jchatmind.service.ChatMessageFacadeService;
 import com.kama.jchatmind.service.AgentTaskLogService;
+import com.kama.jchatmind.service.ChatMessageFacadeService;
 import com.kama.jchatmind.service.SseService;
+import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.service.ToolFacadeService;
+import com.kama.jchatmind.tool.ToolRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.messages.*;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-import java.util.*;
-import java.util.function.Function;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 @Component
 public class JChatMindFactory {
 
     private static final Logger log = LoggerFactory.getLogger(JChatMindFactory.class);
+
     private final ChatClientRegistry chatClientRegistry;
     private final SseService sseService;
     private final AgentMapper agentMapper;
@@ -45,8 +55,9 @@ public class JChatMindFactory {
     private final ChatMessageFacadeService chatMessageFacadeService;
     private final ChatMessageConverter chatMessageConverter;
     private final AgentTaskLogService agentTaskLogService;
+    private final ToolExecutionService toolExecutionService;
+    private final ToolRegistry toolRegistry;
 
-    // 运行时 Agent 配置
     private AgentDTO agentConfig;
 
     public JChatMindFactory(
@@ -59,7 +70,9 @@ public class JChatMindFactory {
             ToolFacadeService toolFacadeService,
             ChatMessageFacadeService chatMessageFacadeService,
             ChatMessageConverter chatMessageConverter,
-            AgentTaskLogService agentTaskLogService
+            AgentTaskLogService agentTaskLogService,
+            ToolExecutionService toolExecutionService,
+            ToolRegistry toolRegistry
     ) {
         this.chatClientRegistry = chatClientRegistry;
         this.sseService = sseService;
@@ -71,15 +84,14 @@ public class JChatMindFactory {
         this.chatMessageFacadeService = chatMessageFacadeService;
         this.chatMessageConverter = chatMessageConverter;
         this.agentTaskLogService = agentTaskLogService;
+        this.toolExecutionService = toolExecutionService;
+        this.toolRegistry = toolRegistry;
     }
 
     private Agent loadAgent(String agentId) {
         return agentMapper.selectById(agentId);
     }
 
-    /**
-     * 将数据库中存储的记忆恢复成 List<Message> 结构
-     */
     private List<Message> loadMemory(String chatSessionId) {
         int messageLength = agentConfig.getChatOptions().getMessageLength();
         List<ChatMessageDTO> chatMessages = chatMessageFacadeService.getChatMessagesBySessionIdRecently(chatSessionId, messageLength);
@@ -87,33 +99,30 @@ public class JChatMindFactory {
         for (ChatMessageDTO chatMessageDTO : chatMessages) {
             switch (chatMessageDTO.getRole()) {
                 case SYSTEM:
-                    if (!StringUtils.hasLength(chatMessageDTO.getContent())) continue;
-                    memory.add(0, new SystemMessage(chatMessageDTO.getContent()));
+                    if (StringUtils.hasLength(chatMessageDTO.getContent())) {
+                        memory.add(0, new SystemMessage(chatMessageDTO.getContent()));
+                    }
                     break;
                 case USER:
-                    if (!StringUtils.hasLength(chatMessageDTO.getContent())) continue;
-                    memory.add(new UserMessage(chatMessageDTO.getContent()));
+                    if (StringUtils.hasLength(chatMessageDTO.getContent())) {
+                        memory.add(new UserMessage(chatMessageDTO.getContent()));
+                    }
                     break;
                 case ASSISTANT:
                     memory.add(AssistantMessage.builder()
                             .content(chatMessageDTO.getContent())
-                            .toolCalls(chatMessageDTO.getMetadata()
-                                    .getToolCalls())
+                            .toolCalls(chatMessageDTO.getMetadata().getToolCalls())
                             .build());
                     break;
                 case TOOL:
                     memory.add(ToolResponseMessage.builder()
-                            .responses(List.of(chatMessageDTO
-                                    .getMetadata()
-                                    .getToolResponse()))
+                            .responses(List.of(chatMessageDTO.getMetadata().getToolResponse()))
                             .build());
                     break;
                 default:
-                    log.error("不支持的 Message 类型: {}, content = {}",
-                            chatMessageDTO.getRole().getRole(),
-                            chatMessageDTO.getContent()
-                    );
-                    throw new IllegalStateException("不支持的 Message 类型");
+                    log.error("Unsupported message type: {}, content={}",
+                            chatMessageDTO.getRole().getRole(), chatMessageDTO.getContent());
+                    throw new IllegalStateException("Unsupported message type");
             }
         }
         return memory;
@@ -124,7 +133,7 @@ public class JChatMindFactory {
             agentConfig = agentConverter.toDTO(agent);
             return agentConfig;
         } catch (JsonProcessingException e) {
-            throw new IllegalStateException("解析 Agent 配置失败", e);
+            throw new IllegalStateException("Failed to parse agent config", e);
         }
     }
 
@@ -141,8 +150,7 @@ public class JChatMindFactory {
         List<KnowledgeBaseDTO> kbDTOs = new ArrayList<>();
         try {
             for (KnowledgeBase knowledgeBase : knowledgeBases) {
-                KnowledgeBaseDTO kbDTO = knowledgeBaseConverter.toDTO(knowledgeBase);
-                kbDTOs.add(kbDTO);
+                kbDTOs.add(knowledgeBaseConverter.toDTO(knowledgeBase));
             }
         } catch (JsonProcessingException e) {
             throw new RuntimeException(e);
@@ -151,24 +159,24 @@ public class JChatMindFactory {
     }
 
     private List<Tool> resolveRuntimeTools(AgentDTO agentConfig) {
-        // 固定工具（系统强制）
-        List<Tool> runtimeTools = new ArrayList<>(toolFacadeService.getFixedTools());
+        List<Tool> runtimeTools = toolFacadeService.getFixedTools()
+                .stream()
+                .filter(tool -> toolRegistry.canExposeToAgent(tool.getName()))
+                .collect(Collectors.toCollection(ArrayList::new));
 
-        // 可选工具（按 Agent 配置）
         List<String> allowedToolNames = agentConfig.getAllowedTools();
         if (allowedToolNames == null || allowedToolNames.isEmpty()) {
             return runtimeTools;
         }
 
-        Map<String, Tool> optionalToolMap = toolFacadeService.getOptionalTools()
-                .stream()
-                .collect(Collectors.toMap(Tool::getName, Function.identity()));
-
         for (String toolName : allowedToolNames) {
-            Tool tool = optionalToolMap.get(toolName);
-            if (tool != null) {
-                runtimeTools.add(tool);
-            }
+            String requestedCanonical = toolRegistry.canonicalName(toolName);
+            toolFacadeService.getOptionalTools()
+                    .stream()
+                    .filter(tool -> toolRegistry.canExposeToAgent(tool.getName()))
+                    .filter(tool -> toolRegistry.canonicalName(tool.getName()).equals(requestedCanonical))
+                    .findFirst()
+                    .ifPresent(runtimeTools::add);
         }
         return runtimeTools;
     }
@@ -188,12 +196,9 @@ public class JChatMindFactory {
 
     private Object resolveToolTarget(Tool tool) {
         try {
-            return AopUtils.isAopProxy(tool)
-                    ? AopUtils.getTargetClass(tool)
-                    : tool;
+            return AopUtils.isAopProxy(tool) ? AopUtils.getTargetClass(tool) : tool;
         } catch (Exception e) {
-            throw new IllegalStateException(
-                    "解析工具目标对象失败: " + tool.getName(), e);
+            throw new IllegalStateException("Failed to resolve tool target: " + tool.getName(), e);
         }
     }
 
@@ -202,12 +207,13 @@ public class JChatMindFactory {
             List<Message> memory,
             List<KnowledgeBaseDTO> knowledgeBases,
             List<ToolCallback> toolCallbacks,
+            List<String> runtimeToolNames,
             String chatSessionId,
             String userMessageId
     ) {
         ChatClient chatClient = chatClientRegistry.get(agent.getModel());
         if (Objects.isNull(chatClient)) {
-            throw new IllegalStateException("未找到对应的 ChatClient: " + agent.getModel());
+            throw new IllegalStateException("ChatClient not found for model: " + agent.getModel());
         }
         return new JChatMind(
                 agent.getId(),
@@ -221,16 +227,15 @@ public class JChatMindFactory {
                 knowledgeBases,
                 chatSessionId,
                 sseService,
+                toolExecutionService,
                 chatMessageFacadeService,
                 chatMessageConverter,
                 agentTaskLogService,
-                userMessageId
+                userMessageId,
+                runtimeToolNames
         );
     }
 
-    /**
-     * 创建一个 JChatMind 实例
-     */
     public JChatMind create(String agentId, String chatSessionId) {
         return create(agentId, chatSessionId, null);
     }
@@ -240,18 +245,21 @@ public class JChatMindFactory {
         AgentDTO agentConfig = toAgentConfig(agent);
         List<Message> memory = loadMemory(chatSessionId);
 
-        // 解析 agent 的支持的知识库
         List<KnowledgeBaseDTO> knowledgeBases = resolveRuntimeKnowledgeBases(agentConfig);
-        // 解析 agent 支持的工具调用
         List<Tool> runtimeTools = resolveRuntimeTools(agentConfig);
-        // 将工具调用转换成 ToolCallback 的形式
         List<ToolCallback> toolCallbacks = buildToolCallbacks(runtimeTools);
+        List<String> runtimeToolNames = runtimeTools.stream()
+                .map(Tool::getName)
+                .map(toolRegistry::canonicalName)
+                .distinct()
+                .toList();
 
         return buildAgentRuntime(
                 agent,
                 memory,
                 knowledgeBases,
                 toolCallbacks,
+                runtimeToolNames,
                 chatSessionId,
                 userMessageId
         );

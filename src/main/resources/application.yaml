@@ -48,3 +48,9 @@ jchatmind:
       - D:/workspace
     max-file-size-bytes: 1048576
     max-files-per-import: 2000
+  tool-gateway:
+    default-timeout-ms: 10000
+    default-max-result-length: 4000
+    max-code-search-top-k: 10
+    database-query-timeout-seconds: 5
+    database-max-rows: 50

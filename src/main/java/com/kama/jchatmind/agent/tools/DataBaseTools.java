@@ -8,15 +8,26 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.regex.Pattern;
 
-@Component
 @Slf4j
+@Component
 public class DataBaseTools implements Tool {
+    private static final int QUERY_TIMEOUT_SECONDS = 5;
+    private static final int MAX_ROWS = 50;
+    private static final int MAX_RESULT_LENGTH = 4000;
+    private static final Pattern FORBIDDEN_KEYWORDS = Pattern.compile(
+            "\\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|copy|call|do)\\b",
+            Pattern.CASE_INSENSITIVE
+    );
+    private static final Pattern LIMIT_PATTERN = Pattern.compile("\\blimit\\b", Pattern.CASE_INSENSITIVE);
 
     private final JdbcTemplate jdbcTemplate;
 
     public DataBaseTools(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
+        this.jdbcTemplate.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
     }
 
     @Override
@@ -26,7 +37,7 @@ public class DataBaseTools implements Tool {
 
     @Override
     public String getDescription() {
-        return "一个用于执行数据库查询操作的工具，主要用于从 PostgreSQL 中读取数据。";
+        return "Read-only PostgreSQL query tool. Allows SELECT and EXPLAIN SELECT only.";
     }
 
     @Override
@@ -34,113 +45,122 @@ public class DataBaseTools implements Tool {
         return ToolType.OPTIONAL;
     }
 
-    /**
-     * 执行一条 SQL 查询，从数据库中进行查询数据
-     *
-     * @param sql SQL 查询语句（仅支持 SELECT 查询）
-     * @return 格式化的查询结果字符串
-     */
-    @org.springframework.ai.tool.annotation.Tool(name = "databaseQuery", description = "用于在 PostgreSQL 中执行只读查询（SELECT）。接收由模型生成的查询语句，并返回结构化数据结果。该工具仅用于检索数据，严禁任何写入或修改数据库的语句。")
+    @org.springframework.ai.tool.annotation.Tool(
+            name = "databaseQuery",
+            description = "Execute a safe PostgreSQL read query. Only SELECT and EXPLAIN SELECT are allowed. Dangerous SQL is rejected by policy."
+    )
     public String query(String sql) {
+        SqlPolicyResult policy = validateSql(sql);
+        if (!policy.allowed()) {
+            log.warn("Rejected unsafe SQL by policy: {}", policy.reason());
+            return "[REJECTED_BY_POLICY] rejected=true reason=" + policy.reason();
+        }
+
         try {
-            // 验证 SQL 语句安全性（只允许 SELECT 查询）
-            String trimmedSql = sql.trim().toUpperCase();
-            if (!trimmedSql.startsWith("SELECT")) {
-                log.warn("拒绝执行非 SELECT 查询: {}", sql);
-                return "错误：仅支持 SELECT 查询语句。提供的 SQL: " + sql;
-            }
-
-            // 执行查询
-            List<String> rows = jdbcTemplate.query(sql, (ResultSet rs) -> {
-                List<String> resultRows = new ArrayList<>();
-                ResultSetMetaData metaData = rs.getMetaData();
-                int columnCount = metaData.getColumnCount();
-
-                if (columnCount == 0) {
-                    resultRows.add("查询结果为空（无列）");
-                    return resultRows;
-                }
-
-                // 获取列名和计算每列的最大宽度
-                List<String> columnNames = new ArrayList<>();
-                List<Integer> columnWidths = new ArrayList<>();
-                for (int i = 1; i <= columnCount; i++) {
-                    String columnName = metaData.getColumnName(i);
-                    columnNames.add(columnName);
-                    columnWidths.add(columnName.length());
-                }
-
-                // 收集所有行数据并计算列宽
-                List<List<String>> dataRows = new ArrayList<>();
-                while (rs.next()) {
-                    List<String> rowData = new ArrayList<>();
-                    for (int i = 1; i <= columnCount; i++) {
-                        Object value = rs.getObject(i);
-                        String valueStr = value == null ? "NULL" : value.toString();
-                        rowData.add(valueStr);
-                        // 更新列宽
-                        int currentWidth = columnWidths.get(i - 1);
-                        if (valueStr.length() > currentWidth) {
-                            columnWidths.set(i - 1, valueStr.length());
-                        }
-                    }
-                    dataRows.add(rowData);
-                }
-
-                // 格式化表头
-                StringBuilder header = new StringBuilder();
-                header.append("| ");
-                for (int i = 0; i < columnCount; i++) {
-                    String columnName = columnNames.get(i);
-                    int width = columnWidths.get(i);
-                    header.append(String.format("%-" + width + "s", columnName)).append(" | ");
-                }
-                resultRows.add(header.toString());
-
-                // 添加分隔线
-                StringBuilder separator = new StringBuilder();
-                separator.append("|");
-                for (int i = 0; i < columnCount; i++) {
-                    int width = columnWidths.get(i);
-                    separator.append("-".repeat(width + 2)).append("|");
-                }
-                resultRows.add(separator.toString());
-
-                // 格式化数据行
-                if (dataRows.isEmpty()) {
-                    StringBuilder emptyRow = new StringBuilder();
-                    emptyRow.append("| ");
-                    int totalWidth = columnWidths.stream().mapToInt(w -> w + 3).sum() - 1;
-                    emptyRow.append(String.format("%-" + (totalWidth - 2) + "s", "(无数据)"));
-                    emptyRow.append(" |");
-                    resultRows.add(emptyRow.toString());
-                } else {
-                    for (List<String> rowData : dataRows) {
-                        StringBuilder row = new StringBuilder();
-                        row.append("| ");
-                        for (int i = 0; i < columnCount; i++) {
-                            String value = rowData.get(i);
-                            int width = columnWidths.get(i);
-                            row.append(String.format("%-" + width + "s", value)).append(" | ");
-                        }
-                        resultRows.add(row.toString());
-                    }
-                }
-
-                return resultRows;
-            });
-
-            int dataRowCount = rows.size() - 2; // 减去表头和分隔线
-            if (rows.size() > 2 && rows.get(rows.size() - 1).contains("(无数据)")) {
-                dataRowCount = 0;
-            }
-
-            log.info("成功执行 SQL 查询，返回 {} 行数据", dataRowCount);
-            // 将结果格式化为字符串
-            return "查询结果:\n" + String.join("\n", rows);
+            List<String> rows = jdbcTemplate.query(policy.executableSql(), (ResultSet rs) -> formatRows(rs));
+            String result = "Query result:\n" + String.join("\n", rows);
+            return truncate(result);
         } catch (Exception e) {
-            log.error("未知错误: {}", e.getMessage(), e);
-            return "错误：操作失败 - " + e.getMessage() + "\nSQL: " + sql;
+            log.error("Database query execution failed: {}", e.getMessage(), e);
+            throw new IllegalStateException("Database query execution failed: " + e.getMessage(), e);
+        }
+    }
+
+    private SqlPolicyResult validateSql(String sql) {
+        if (sql == null) {
+            return SqlPolicyResult.rejected("sql is empty");
+        }
+        String trimmed = sql.trim();
+        if (trimmed.isEmpty()) {
+            return SqlPolicyResult.rejected("sql is empty");
+        }
+        if (trimmed.contains("--") || trimmed.contains("/*") || trimmed.contains("*/")) {
+            return SqlPolicyResult.rejected("sql comments are not allowed");
+        }
+
+        String withoutTrailingSemicolon = stripSingleTrailingSemicolon(trimmed);
+        if (withoutTrailingSemicolon.contains(";")) {
+            return SqlPolicyResult.rejected("multiple SQL statements are not allowed");
+        }
+
+        String normalized = withoutTrailingSemicolon
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (FORBIDDEN_KEYWORDS.matcher(normalized).find()) {
+            return SqlPolicyResult.rejected("write, ddl, procedure and privileged statements are not allowed");
+        }
+        if (normalized.startsWith("explain analyze") || normalized.contains(" explain analyze ")) {
+            return SqlPolicyResult.rejected("EXPLAIN ANALYZE is not allowed");
+        }
+        if (normalized.startsWith("explain select")) {
+            return SqlPolicyResult.allowed(withoutTrailingSemicolon);
+        }
+        if (!normalized.startsWith("select")) {
+            return SqlPolicyResult.rejected("only SELECT or EXPLAIN SELECT is allowed");
+        }
+
+        if (LIMIT_PATTERN.matcher(normalized).find()) {
+            return SqlPolicyResult.allowed(withoutTrailingSemicolon);
+        }
+        String limitedSql = "SELECT * FROM (" + withoutTrailingSemicolon + ") agent_limited_query LIMIT " + MAX_ROWS;
+        return SqlPolicyResult.allowed(limitedSql);
+    }
+
+    private String stripSingleTrailingSemicolon(String sql) {
+        String stripped = sql.trim();
+        if (stripped.endsWith(";")) {
+            return stripped.substring(0, stripped.length() - 1).trim();
+        }
+        return stripped;
+    }
+
+    private List<String> formatRows(ResultSet rs) throws java.sql.SQLException {
+        List<String> resultRows = new ArrayList<>();
+        ResultSetMetaData metaData = rs.getMetaData();
+        int columnCount = metaData.getColumnCount();
+        if (columnCount == 0) {
+            resultRows.add("(no columns)");
+            return resultRows;
+        }
+
+        List<String> columnNames = new ArrayList<>();
+        for (int i = 1; i <= columnCount; i++) {
+            columnNames.add(metaData.getColumnName(i));
+        }
+        resultRows.add(String.join(" | ", columnNames));
+        resultRows.add("-".repeat(Math.max(3, resultRows.get(0).length())));
+
+        int rowCount = 0;
+        while (rs.next() && rowCount < MAX_ROWS) {
+            List<String> values = new ArrayList<>();
+            for (int i = 1; i <= columnCount; i++) {
+                Object value = rs.getObject(i);
+                values.add(value == null ? "NULL" : String.valueOf(value));
+            }
+            resultRows.add(String.join(" | ", values));
+            rowCount++;
+        }
+        if (rowCount == 0) {
+            resultRows.add("(no rows)");
+        }
+        return resultRows;
+    }
+
+    private String truncate(String value) {
+        if (value == null || value.length() <= MAX_RESULT_LENGTH) {
+            return value;
+        }
+        return value.substring(0, MAX_RESULT_LENGTH - 32) + "\n...[truncated]";
+    }
+
+    private record SqlPolicyResult(boolean allowed, String executableSql, String reason) {
+        static SqlPolicyResult allowed(String executableSql) {
+            return new SqlPolicyResult(true, executableSql, null);
+        }
+
+        static SqlPolicyResult rejected(String reason) {
+            return new SqlPolicyResult(false, null, reason);
         }
     }
 }

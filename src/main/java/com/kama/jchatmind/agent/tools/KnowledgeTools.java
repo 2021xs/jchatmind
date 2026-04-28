@@ -5,6 +5,7 @@ import com.kama.jchatmind.message.AgentSseEvent;
 import com.kama.jchatmind.model.dto.RagSearchResult;
 import com.kama.jchatmind.service.RagService;
 import com.kama.jchatmind.service.SseService;
+import com.kama.jchatmind.tool.ToolRegistry;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -17,10 +18,12 @@ public class KnowledgeTools implements Tool {
 
     private final RagService ragService;
     private final SseService sseService;
+    private final ToolRegistry toolRegistry;
 
-    public KnowledgeTools(RagService ragService, SseService sseService) {
+    public KnowledgeTools(RagService ragService, SseService sseService, ToolRegistry toolRegistry) {
         this.ragService = ragService;
         this.sseService = sseService;
+        this.toolRegistry = toolRegistry;
     }
 
     @Override
@@ -48,9 +51,10 @@ public class KnowledgeTools implements Tool {
         if (results.isEmpty()) {
             return "未检索到相关知识片段。";
         }
-        return results.stream()
+        String formatted = results.stream()
                 .map(this::formatResult)
                 .collect(Collectors.joining("\n\n"));
+        return toolRegistry.truncateResult(getName(), formatted);
     }
 
     private void sendRetrievalEvent(String kbId, String query, List<RagSearchResult> results) {
