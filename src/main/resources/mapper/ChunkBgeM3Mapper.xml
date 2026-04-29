@@ -42,6 +42,7 @@
     </insert>
 
     <select id="selectById" resultMap="BaseResultMap">
+        <![CDATA[
         SELECT id,
                kb_id,
                doc_id,
@@ -53,6 +54,7 @@
                updated_at
         FROM chunk_bge_m3
         WHERE id = CAST(#{id} AS uuid)
+        ]]>
     </select>
 
     <delete id="deleteById">

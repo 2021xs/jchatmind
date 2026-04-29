@@ -33,3 +33,15 @@ build/
 .vscode/
 
 src/main/resources/application-dev.yaml
+
+### Local runtime and secrets ###
+.env
+.env.*
+!.env.example
+*.log
+*.tmp
+output.txt
+data/documents/
+.run/
+*_secret*
+*_local*

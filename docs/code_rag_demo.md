@@ -28,9 +28,16 @@ Start PostgreSQL and make sure the configured database exists:
 ```yaml
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/jchatmind
-    username: postgres
-    password: 123
+    url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/jchatmind}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:postgres}
+  ai:
+    deepseek:
+      api-key: ${DEEPSEEK_API_KEY}
+      base-url: ${DEEPSEEK_BASE_URL:https://rapi.asia/v1}
+      chat:
+        options:
+          model: ${DEEPSEEK_MODEL:deepseek-v4-pro}
 ```
 
 Start Ollama and prepare the embedding model:
@@ -51,6 +58,7 @@ $env:Path="$env:JAVA_HOME\bin;$env:Path"
 Start the application:
 
 ```powershell
+$env:DEEPSEEK_API_KEY='your-local-key'
 .\mvnw.cmd spring-boot:run
 ```
 
@@ -128,6 +136,8 @@ jchatmind:
     max-file-size-bytes: 1048576
     max-files-per-import: 2000
 ```
+
+The first version keeps `allowed-roots` as a YAML list to avoid breaking Spring binding. Adjust these demo paths to match your local machine.
 
 Security behavior:
 
@@ -405,4 +415,3 @@ Check:
 - Agent `allowedTools` contains `"searchProjectCode"`.
 - The prompt includes the `repoId`.
 - The user question clearly asks to search/imported project code.
-

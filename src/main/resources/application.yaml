@@ -2,9 +2,9 @@ spring:
   application:
     name: jchatmind
   datasource:
-    url: jdbc:postgresql://localhost:5432/jchatmind
-    username: postgres
-    password: 123
+    url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/jchatmind}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
   mail:
     host: smtp.qq.com
@@ -21,11 +21,11 @@ spring:
             required: true
   ai:
     deepseek:
-      api-key: your-api-key
-      base-url: https://api.deepseek.com
+      api-key: ${DEEPSEEK_API_KEY}
+      base-url: ${DEEPSEEK_BASE_URL:https://rapi.asia/v1}
       chat:
         options:
-          model: deepseek-chat
+          model: ${DEEPSEEK_MODEL:deepseek-v4-pro}
     zhipuai:
       api-key: your-api-key
       base-url: https://open.bigmodel.cn/api/paas
