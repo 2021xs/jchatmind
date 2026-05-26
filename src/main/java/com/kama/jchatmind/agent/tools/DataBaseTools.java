@@ -2,6 +2,8 @@ package com.kama.jchatmind.agent.tools;
 
 import com.kama.jchatmind.config.DatabaseToolProperties;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -17,12 +19,14 @@ public class DataBaseTools implements Tool {
     private final SqlSafetyValidator sqlSafetyValidator;
     private final DatabaseToolProperties properties;
 
-    public DataBaseTools(JdbcTemplate jdbcTemplate,
+    @Autowired
+    public DataBaseTools(@Qualifier("databaseToolJdbcTemplate") JdbcTemplate jdbcTemplate,
                          SqlSafetyValidator sqlSafetyValidator,
                          DatabaseToolProperties properties) {
         this.jdbcTemplate = jdbcTemplate;
         this.sqlSafetyValidator = sqlSafetyValidator;
         this.properties = properties;
+        log.info("DataBaseTools initialized with databaseToolJdbcTemplate; configure it with a read-only database account");
         this.jdbcTemplate.setQueryTimeout(properties.getQueryTimeoutSeconds());
         this.jdbcTemplate.setMaxRows(properties.getMaxRows());
         this.jdbcTemplate.setFetchSize(properties.getFetchSize());

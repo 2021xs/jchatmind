@@ -29,6 +29,12 @@ document:
     base-path: ./data/documents
 
 jchatmind:
+  database-tool:
+    datasource:
+      url: ${JCHATMIND_DB_READONLY_URL:jdbc:postgresql://localhost:5432/jchatmind}
+      username: ${JCHATMIND_DB_READONLY_USERNAME:jchatmind_readonly}
+      password: ${JCHATMIND_DB_READONLY_PASSWORD:}
+      driver-class-name: org.postgresql.Driver
   ai:
     deepseek:
       official:
