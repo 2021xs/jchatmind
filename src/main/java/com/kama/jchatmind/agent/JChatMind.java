@@ -556,59 +556,39 @@ public class JChatMind {
 
         boolean hasToolCalls;
         long thinkStartedAt = System.currentTimeMillis();
-        try {
-            hasToolCalls = think();
-            long llmLatencyMs = System.currentTimeMillis() - thinkStartedAt;
-            List<AssistantMessage.ToolCall> toolCalls = lastChatResponse.getResult().getOutput().getToolCalls();
-            String thinkFinishReason = hasToolCalls
-                    ? AgentTaskLogService.STEP_FINISH_REASON_TOOL_CALLS_REQUESTED
-                    : AgentTaskLogService.FINISH_REASON_NO_TOOL_CALLS;
-            agentTaskLogService.finishStep(thinkStep.getId(), summarizeToolCalls(toolCalls), thinkFinishReason, llmLatencyMs);
-            sendAgentEvent(AgentSseEvent.Type.STEP_DONE, payload(
-                    "stepId", thinkStep.getId(),
-                    "stepNo", thinkStep.getStepNo(),
-                    "stepType", thinkStep.getStepType(),
-                    "status", AgentTaskLogService.STATUS_SUCCESS
-            ));
-        } catch (Exception e) {
-            agentTaskLogService.failStep(thinkStep.getId(), e.getMessage());
-            sendAgentEvent(AgentSseEvent.Type.ERROR, payload(
-                    "stepId", thinkStep.getId(),
-                    "stepNo", thinkStep.getStepNo(),
-                    "errorMessage", truncate(e.getMessage())
-            ));
-            throw e;
-        }
+        hasToolCalls = think();
+        long llmLatencyMs = System.currentTimeMillis() - thinkStartedAt;
+        List<AssistantMessage.ToolCall> toolCalls = lastChatResponse.getResult().getOutput().getToolCalls();
+        String thinkFinishReason = hasToolCalls
+                ? AgentTaskLogService.STEP_FINISH_REASON_TOOL_CALLS_REQUESTED
+                : AgentTaskLogService.FINISH_REASON_NO_TOOL_CALLS;
+        agentTaskLogService.finishStep(thinkStep.getId(), summarizeToolCalls(toolCalls), thinkFinishReason, llmLatencyMs);
+        sendAgentEvent(AgentSseEvent.Type.STEP_DONE, payload(
+                "stepId", thinkStep.getId(),
+                "stepNo", thinkStep.getStepNo(),
+                "stepType", thinkStep.getStepType(),
+                "status", AgentTaskLogService.STATUS_SUCCESS
+        ));
 
         if (hasToolCalls) {
             AgentStep toolStep = startStep("TOOL_CALL",
                     summarizeToolCalls(lastChatResponse.getResult().getOutput().getToolCalls()));
-            try {
-                boolean correctionRequested = execute();
-                String toolFinishReason = correctionRequested
-                        ? AgentTaskLogService.STEP_FINISH_REASON_TOOL_CORRECTION_REQUESTED
-                        : finishReason == null
-                        ? AgentTaskLogService.STEP_FINISH_REASON_TOOLS_EXECUTED
-                        : finishReason;
-                agentTaskLogService.finishStep(toolStep.getId(),
-                        correctionRequested ? "tool failure fed back for self-correction" : "tool calls executed",
-                        toolFinishReason,
-                        null);
-                sendAgentEvent(AgentSseEvent.Type.STEP_DONE, payload(
-                        "stepId", toolStep.getId(),
-                        "stepNo", toolStep.getStepNo(),
-                        "stepType", toolStep.getStepType(),
-                        "status", AgentTaskLogService.STATUS_SUCCESS
-                ));
-            } catch (Exception e) {
-                agentTaskLogService.failStep(toolStep.getId(), e.getMessage());
-                sendAgentEvent(AgentSseEvent.Type.ERROR, payload(
-                        "stepId", toolStep.getId(),
-                        "stepNo", toolStep.getStepNo(),
-                        "errorMessage", truncate(e.getMessage())
-                ));
-                throw e;
-            }
+            boolean correctionRequested = execute();
+            String toolFinishReason = correctionRequested
+                    ? AgentTaskLogService.STEP_FINISH_REASON_TOOL_CORRECTION_REQUESTED
+                    : finishReason == null
+                    ? AgentTaskLogService.STEP_FINISH_REASON_TOOLS_EXECUTED
+                    : finishReason;
+            agentTaskLogService.finishStep(toolStep.getId(),
+                    correctionRequested ? "tool failure fed back for self-correction" : "tool calls executed",
+                    toolFinishReason,
+                    null);
+            sendAgentEvent(AgentSseEvent.Type.STEP_DONE, payload(
+                    "stepId", toolStep.getId(),
+                    "stepNo", toolStep.getStepNo(),
+                    "stepType", toolStep.getStepType(),
+                    "status", AgentTaskLogService.STATUS_SUCCESS
+            ));
         } else {
             agentState = AgentState.FINISHED;
             finishReason = AgentTaskLogService.FINISH_REASON_NO_TOOL_CALLS;
@@ -651,12 +631,7 @@ public class JChatMind {
             }
 
             agentState = AgentState.FINISHED;
-            AgentStep finishStep = agentTaskLogService.startStep(
-                    currentTaskId,
-                    nextStepNo++,
-                    "FINISH",
-                    "finish agent run"
-            );
+            AgentStep finishStep = startStep("FINISH", "finish agent run");
             String finalFinishReason = finishReason == null
                     ? AgentTaskLogService.FINISH_REASON_NO_TOOL_CALLS
                     : finishReason;
@@ -679,7 +654,10 @@ public class JChatMind {
             }
             agentTaskLogService.failTask(currentTaskId, e.getMessage(), nextStepNo - 1, toolCallCount);
             sendAgentEvent(AgentSseEvent.Type.ERROR, payload(
-                "status", AgentTaskLogService.STATUS_FAILED,
+                    "status", AgentTaskLogService.STATUS_FAILED,
+                    "stepId", currentStep == null ? null : currentStep.getId(),
+                    "stepNo", currentStep == null ? null : currentStep.getStepNo(),
+                    "stepType", currentStep == null ? null : currentStep.getStepType(),
                     "finishReason", AgentTaskLogService.FINISH_REASON_ERROR,
                     "errorMessage", truncate(e.getMessage())
             ));
