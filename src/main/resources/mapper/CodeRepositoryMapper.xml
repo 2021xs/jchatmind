@@ -28,10 +28,14 @@
     <select id="selectExisting" resultMap="BaseResultMap">
         SELECT id, name, root_path, language, status, created_at, updated_at
         FROM code_repository
-        WHERE name = #{name} OR root_path = #{rootPath}
+        WHERE name = #{name} AND root_path = #{rootPath}
         ORDER BY updated_at DESC
         LIMIT 1
     </select>
+
+    <delete id="deleteById">
+        DELETE FROM code_repository WHERE id = CAST(#{id} AS uuid)
+    </delete>
 
     <select id="selectAll" resultMap="BaseResultMap">
         SELECT id, name, root_path, language, status, created_at, updated_at

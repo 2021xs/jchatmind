@@ -11,6 +11,7 @@ import com.kama.jchatmind.model.response.CreateChatMessageResponse;
 import com.kama.jchatmind.model.vo.ChatMessageVO;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
+import com.kama.jchatmind.service.ConversationContextCompressor;
 import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.tool.ToolExecutionContext;
@@ -37,6 +38,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -46,6 +48,7 @@ public class JChatMind {
     private static final Integer DEFAULT_MAX_MESSAGES = 20;
 
     private String agentId;
+    private String model;
     private String name;
     private String description;
     private String systemPrompt;
@@ -63,10 +66,15 @@ public class JChatMind {
     private ChatMessageFacadeService chatMessageFacadeService;
     private ChatResponse lastChatResponse;
     private AgentTaskLogService agentTaskLogService;
+    private ConversationContextCompressor conversationContextCompressor;
     private String userMessageId;
     private String currentTaskId;
     private AgentStep currentStep;
+    private AgentExecutionContext agentExecutionContext;
     private List<String> runtimeToolNames;
+    private int nextStepNo = 1;
+    private int toolCallCount = 0;
+    private String finishReason;
 
     private final List<ChatMessageDTO> pendingChatMessages = new ArrayList<>();
 
@@ -74,6 +82,7 @@ public class JChatMind {
     }
 
     public JChatMind(String agentId,
+                     String model,
                      String name,
                      String description,
                      String systemPrompt,
@@ -88,9 +97,11 @@ public class JChatMind {
                      ChatMessageFacadeService chatMessageFacadeService,
                      ChatMessageConverter chatMessageConverter,
                      AgentTaskLogService agentTaskLogService,
+                     ConversationContextCompressor conversationContextCompressor,
                      String userMessageId,
                      List<String> runtimeToolNames) {
         this.agentId = agentId;
+        this.model = model;
         this.name = name;
         this.description = description;
         this.systemPrompt = systemPrompt;
@@ -103,6 +114,7 @@ public class JChatMind {
         this.chatMessageFacadeService = chatMessageFacadeService;
         this.chatMessageConverter = chatMessageConverter;
         this.agentTaskLogService = agentTaskLogService;
+        this.conversationContextCompressor = conversationContextCompressor;
         this.userMessageId = userMessageId;
         this.runtimeToolNames = runtimeToolNames == null ? List.of() : runtimeToolNames;
         this.agentState = AgentState.IDLE;
@@ -110,11 +122,11 @@ public class JChatMind {
         this.chatMemory = MessageWindowChatMemory.builder()
                 .maxMessages(maxMessages == null ? DEFAULT_MAX_MESSAGES : maxMessages)
                 .build();
-        this.chatMemory.add(chatSessionId, memory);
 
         if (StringUtils.hasLength(systemPrompt)) {
             this.chatMemory.add(chatSessionId, new SystemMessage(systemPrompt));
         }
+        this.chatMemory.add(chatSessionId, memory);
 
         this.chatOptions = DefaultToolCallingChatOptions.builder()
                 .internalToolExecutionEnabled(false)
@@ -172,6 +184,9 @@ public class JChatMind {
 
     private void refreshPendingMessages() {
         for (ChatMessageDTO message : pendingChatMessages) {
+            if (!isUserVisibleMessage(message)) {
+                continue;
+            }
             ChatMessageVO vo = chatMessageConverter.toVO(message);
             SseMessage sseMessage = SseMessage.builder()
                     .type(SseMessage.Type.AI_GENERATED_CONTENT)
@@ -181,6 +196,15 @@ public class JChatMind {
             sseService.send(this.chatSessionId, sseMessage);
         }
         pendingChatMessages.clear();
+    }
+
+    private boolean isUserVisibleMessage(ChatMessageDTO message) {
+        if (message == null || message.getRole() != ChatMessageDTO.RoleType.ASSISTANT) {
+            return false;
+        }
+        return message.getMetadata() == null
+                || message.getMetadata().getToolCalls() == null
+                || message.getMetadata().getToolCalls().isEmpty();
     }
 
     private void sendAgentEvent(AgentSseEvent.Type type, Map<String, Object> payload) {
@@ -216,6 +240,107 @@ public class JChatMind {
             payload.put(String.valueOf(keyValues[i]), keyValues[i + 1]);
         }
         return payload;
+    }
+
+    private AgentStep startStep(String stepType, String inputSummary) {
+        AgentStep step = agentTaskLogService.startStep(currentTaskId, nextStepNo++, stepType, inputSummary, model);
+        currentStep = step;
+        if (agentExecutionContext != null) {
+            agentExecutionContext.setCurrentStepId(step.getId());
+            agentExecutionContext.setStepNo(step.getStepNo());
+        }
+        return step;
+    }
+
+    private List<Message> toMemoryMessages(ConversationContextCompressor.CompressedContext compressedContext) {
+        List<Message> memory = new ArrayList<>();
+        if (StringUtils.hasLength(systemPrompt)) {
+            memory.add(new SystemMessage(systemPrompt));
+        }
+        if (StringUtils.hasLength(compressedContext.summary())) {
+            memory.add(new SystemMessage("[历史摘要]\n" + compressedContext.summary()
+                    + "\n\n说明：历史摘要只是辅助上下文。如果摘要与最近用户输入或检索结果冲突，以最近用户输入和检索结果为准。"));
+        }
+        for (ChatMessageDTO chatMessageDTO : compressedContext.recentMessages()) {
+            switch (chatMessageDTO.getRole()) {
+                case SYSTEM:
+                    if (StringUtils.hasLength(chatMessageDTO.getContent())) {
+                        memory.add(0, new SystemMessage(chatMessageDTO.getContent()));
+                    }
+                    break;
+                case USER:
+                    if (StringUtils.hasLength(chatMessageDTO.getContent())) {
+                        memory.add(new org.springframework.ai.chat.messages.UserMessage(chatMessageDTO.getContent()));
+                    }
+                    break;
+                case ASSISTANT:
+                    memory.add(AssistantMessage.builder()
+                            .content(chatMessageDTO.getContent())
+                            .toolCalls(chatMessageDTO.getMetadata() == null || chatMessageDTO.getMetadata().getToolCalls() == null
+                                    ? List.of()
+                                    : chatMessageDTO.getMetadata().getToolCalls())
+                            .build());
+                    break;
+                case TOOL:
+                    if (chatMessageDTO.getMetadata() == null || chatMessageDTO.getMetadata().getToolResponse() == null) {
+                        log.warn("Skip tool message without tool response metadata during runtime compression: messageId={}", chatMessageDTO.getId());
+                        break;
+                    }
+                    memory.add(ToolResponseMessage.builder()
+                            .responses(List.of(chatMessageDTO.getMetadata().getToolResponse()))
+                            .build());
+                    break;
+                default:
+                    throw new IllegalStateException("Unsupported message type: " + chatMessageDTO.getRole());
+            }
+        }
+        return memory;
+    }
+
+    private void compressContextBeforeThinkIfNeeded() {
+        if (conversationContextCompressor == null || currentTaskId == null) {
+            return;
+        }
+        List<ChatMessageDTO> allMessages = chatMessageFacadeService.getChatMessageDTOsBySessionId(chatSessionId);
+        ConversationContextCompressor.CompressionCheck check =
+                conversationContextCompressor.check(chatSessionId, allMessages);
+        if (!check.needed()) {
+            return;
+        }
+
+        AgentStep compressionStep = startStep("CONTEXT_COMPRESSION",
+                "reason=" + check.reason()
+                        + ", messages=" + check.messageCount()
+                        + ", contextChars=" + check.contextChars()
+                        + ", maxToolResultChars=" + check.maxSingleToolResultChars()
+                        + ", newCompressibleMessages=" + check.newCompressibleMessages());
+        try {
+            ConversationContextCompressor.CompressedContext compressedContext =
+                    conversationContextCompressor.compressIfNeeded(chatSessionId, model, allMessages);
+            if (compressedContext.compressed()) {
+                this.chatMemory.clear(this.chatSessionId);
+                this.chatMemory.add(this.chatSessionId, toMemoryMessages(compressedContext));
+            }
+            agentTaskLogService.finishStep(compressionStep.getId(),
+                    "compressed=" + compressedContext.compressed()
+                            + ", summaryChars=" + (compressedContext.summary() == null ? 0 : compressedContext.summary().length())
+                            + ", recentMessages=" + compressedContext.recentMessages().size());
+            sendAgentEvent(AgentSseEvent.Type.STEP_DONE, payload(
+                    "stepId", compressionStep.getId(),
+                    "stepNo", compressionStep.getStepNo(),
+                    "stepType", compressionStep.getStepType(),
+                    "status", AgentTaskLogService.STATUS_SUCCESS
+            ));
+        } catch (Exception e) {
+            agentTaskLogService.failStep(compressionStep.getId(), e.getMessage());
+            sendAgentEvent(AgentSseEvent.Type.ERROR, payload(
+                    "stepId", compressionStep.getId(),
+                    "stepNo", compressionStep.getStepNo(),
+                    "errorMessage", truncate(e.getMessage())
+            ));
+            log.warn("Runtime context compression failed, continuing with current memory: taskId={}, error={}",
+                    currentTaskId, e.getMessage(), e);
+        }
     }
 
     private boolean think() {
@@ -265,14 +390,25 @@ public class JChatMind {
         ToolExecutionContext executionContext = ToolExecutionContext.builder()
                 .taskId(currentTaskId)
                 .stepId(currentStep == null ? null : currentStep.getId())
+                .traceId(agentExecutionContext == null ? null : agentExecutionContext.getTraceId())
                 .sessionId(chatSessionId)
+                .agentId(agentId)
+                .modelName(model)
                 .runtimeToolNames(runtimeToolNames)
                 .build();
 
         List<ToolExecutionRecord> records = new ArrayList<>();
-        for (AssistantMessage.ToolCall toolCall : toolCalls) {
-            records.add(toolExecutionService.beforeToolCall(executionContext, toolCall));
+        try {
+            for (AssistantMessage.ToolCall toolCall : toolCalls) {
+                records.add(toolExecutionService.beforeToolCall(executionContext, toolCall));
+            }
+        } catch (Exception e) {
+            for (ToolExecutionRecord record : records) {
+                toolExecutionService.afterToolFailure(executionContext, record, e);
+            }
+            throw e;
         }
+        toolCallCount += records.size();
 
         ToolExecutionResult toolExecutionResult;
         try {
@@ -316,26 +452,26 @@ public class JChatMind {
 
         if (toolResponseMessage.getResponses().stream().anyMatch(resp -> resp.name().equals("terminate"))) {
             this.agentState = AgentState.FINISHED;
+            this.finishReason = AgentTaskLogService.FINISH_REASON_TERMINATE_TOOL;
             log.info("Agent task terminated by terminate tool");
         }
     }
 
     private void step(int loopStep) {
-        AgentStep thinkStep = agentTaskLogService.startStep(
-                currentTaskId,
-                loopStep * 2 - 1,
-                "THINK",
-                "think with current conversation memory"
-        );
-        currentStep = thinkStep;
-        AgentExecutionContext.setCurrentStepId(thinkStep.getId());
-        AgentExecutionContext.setStepNo(thinkStep.getStepNo());
+        compressContextBeforeThinkIfNeeded();
+
+        AgentStep thinkStep = startStep("THINK", "think with current conversation memory");
 
         boolean hasToolCalls;
+        long thinkStartedAt = System.currentTimeMillis();
         try {
             hasToolCalls = think();
+            long llmLatencyMs = System.currentTimeMillis() - thinkStartedAt;
             List<AssistantMessage.ToolCall> toolCalls = lastChatResponse.getResult().getOutput().getToolCalls();
-            agentTaskLogService.finishStep(thinkStep.getId(), summarizeToolCalls(toolCalls));
+            String thinkFinishReason = hasToolCalls
+                    ? AgentTaskLogService.STEP_FINISH_REASON_TOOL_CALLS_REQUESTED
+                    : AgentTaskLogService.FINISH_REASON_NO_TOOL_CALLS;
+            agentTaskLogService.finishStep(thinkStep.getId(), summarizeToolCalls(toolCalls), thinkFinishReason, llmLatencyMs);
             sendAgentEvent(AgentSseEvent.Type.STEP_DONE, payload(
                     "stepId", thinkStep.getId(),
                     "stepNo", thinkStep.getStepNo(),
@@ -353,18 +489,14 @@ public class JChatMind {
         }
 
         if (hasToolCalls) {
-            AgentStep toolStep = agentTaskLogService.startStep(
-                    currentTaskId,
-                    loopStep * 2,
-                    "TOOL_CALL",
-                    summarizeToolCalls(lastChatResponse.getResult().getOutput().getToolCalls())
-            );
-            currentStep = toolStep;
-            AgentExecutionContext.setCurrentStepId(toolStep.getId());
-            AgentExecutionContext.setStepNo(toolStep.getStepNo());
+            AgentStep toolStep = startStep("TOOL_CALL",
+                    summarizeToolCalls(lastChatResponse.getResult().getOutput().getToolCalls()));
             try {
                 execute();
-                agentTaskLogService.finishStep(toolStep.getId(), "tool calls executed");
+                String toolFinishReason = finishReason == null
+                        ? AgentTaskLogService.STEP_FINISH_REASON_TOOLS_EXECUTED
+                        : finishReason;
+                agentTaskLogService.finishStep(toolStep.getId(), "tool calls executed", toolFinishReason, null);
                 sendAgentEvent(AgentSseEvent.Type.STEP_DONE, payload(
                         "stepId", toolStep.getId(),
                         "stepNo", toolStep.getStepNo(),
@@ -382,6 +514,7 @@ public class JChatMind {
             }
         } else {
             agentState = AgentState.FINISHED;
+            finishReason = AgentTaskLogService.FINISH_REASON_NO_TOOL_CALLS;
         }
     }
 
@@ -390,10 +523,21 @@ public class JChatMind {
             throw new IllegalStateException("Agent is not idle");
         }
 
-        AgentTask task = agentTaskLogService.startTask(this.chatSessionId, this.agentId, this.userMessageId, "chat session agent run");
+        String traceId = UUID.randomUUID().toString();
+        AgentTask task = agentTaskLogService.startTask(this.chatSessionId, this.agentId, this.userMessageId,
+                "chat session agent run", this.model, MAX_STEPS, traceId);
         this.currentTaskId = task.getId();
-        AgentExecutionContext.set(new AgentExecutionContext.Context(currentTaskId, chatSessionId));
+        this.agentExecutionContext = AgentExecutionContext.builder()
+                .taskId(currentTaskId)
+                .traceId(traceId)
+                .sessionId(chatSessionId)
+                .agentId(agentId)
+                .modelName(model)
+                .maxSteps(MAX_STEPS)
+                .build();
         sendAgentEvent(AgentSseEvent.Type.MESSAGE_START, payload(
+                "taskId", currentTaskId,
+                "traceId", traceId,
                 "agentId", this.agentId,
                 "userMessageId", this.userMessageId
         ));
@@ -402,8 +546,9 @@ public class JChatMind {
             for (int i = 0; i < MAX_STEPS && agentState != AgentState.FINISHED; i++) {
                 int loopStep = i + 1;
                 step(loopStep);
-                if (loopStep >= MAX_STEPS) {
+                if (loopStep >= MAX_STEPS && agentState != AgentState.FINISHED) {
                     agentState = AgentState.FINISHED;
+                    finishReason = AgentTaskLogService.FINISH_REASON_MAX_STEPS_REACHED;
                     log.warn("Max steps reached, stopping agent");
                 }
             }
@@ -411,33 +556,40 @@ public class JChatMind {
             agentState = AgentState.FINISHED;
             AgentStep finishStep = agentTaskLogService.startStep(
                     currentTaskId,
-                    MAX_STEPS * 2 + 1,
+                    nextStepNo++,
                     "FINISH",
                     "finish agent run"
             );
-            agentTaskLogService.finishStep(finishStep.getId(), "agent finished");
+            String finalFinishReason = finishReason == null
+                    ? AgentTaskLogService.FINISH_REASON_NO_TOOL_CALLS
+                    : finishReason;
+            agentTaskLogService.finishStep(finishStep.getId(), "agent finished", finalFinishReason, null);
             sendAgentEvent(AgentSseEvent.Type.STEP_DONE, payload(
                     "stepId", finishStep.getId(),
                     "stepNo", finishStep.getStepNo(),
                     "stepType", finishStep.getStepType(),
                     "status", AgentTaskLogService.STATUS_SUCCESS
             ));
-            agentTaskLogService.finishTask(currentTaskId);
-            sendAgentEvent(AgentSseEvent.Type.DONE, payload("status", AgentTaskLogService.STATUS_SUCCESS));
+            agentTaskLogService.finishTask(currentTaskId, finalFinishReason, nextStepNo - 1, toolCallCount);
+            sendAgentEvent(AgentSseEvent.Type.DONE, payload(
+                    "status", AgentTaskLogService.STATUS_SUCCESS,
+                    "finishReason", finalFinishReason
+            ));
         } catch (Exception e) {
             agentState = AgentState.ERROR;
             if (currentStep != null) {
                 agentTaskLogService.failStep(currentStep.getId(), e.getMessage());
             }
-            agentTaskLogService.failTask(currentTaskId, e.getMessage());
+            agentTaskLogService.failTask(currentTaskId, e.getMessage(), nextStepNo - 1, toolCallCount);
             sendAgentEvent(AgentSseEvent.Type.ERROR, payload(
-                    "status", AgentTaskLogService.STATUS_FAILED,
+                "status", AgentTaskLogService.STATUS_FAILED,
+                    "finishReason", AgentTaskLogService.FINISH_REASON_ERROR,
                     "errorMessage", truncate(e.getMessage())
             ));
             log.error("Error running agent", e);
             throw new RuntimeException("Error running agent", e);
         } finally {
-            AgentExecutionContext.clear();
+            agentExecutionContext = null;
         }
     }
 

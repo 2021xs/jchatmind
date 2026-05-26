@@ -19,7 +19,14 @@ public class AgentStep {
     private String status;
     private String inputSummary;
     private String outputSummary;
+    private Long latencyMs;
+    private String modelName;
+    private Long llmLatencyMs;
+    private Integer inputTokens;
+    private Integer outputTokens;
+    private String finishReason;
     private LocalDateTime startedAt;
     private LocalDateTime finishedAt;
+    private LocalDateTime updatedAt;
     private String errorMessage;
 }

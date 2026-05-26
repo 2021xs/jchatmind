@@ -11,23 +11,43 @@
         <result property="userMessageId" column="user_message_id" jdbcType="VARCHAR"/>
         <result property="status" column="status" jdbcType="VARCHAR"/>
         <result property="goal" column="goal" jdbcType="VARCHAR"/>
+        <result property="finishReason" column="finish_reason" jdbcType="VARCHAR"/>
+        <result property="modelName" column="model_name" jdbcType="VARCHAR"/>
+        <result property="maxSteps" column="max_steps" jdbcType="INTEGER"/>
+        <result property="actualSteps" column="actual_steps" jdbcType="INTEGER"/>
+        <result property="toolCallCount" column="tool_call_count" jdbcType="INTEGER"/>
+        <result property="latencyMs" column="latency_ms" jdbcType="BIGINT"/>
+        <result property="traceId" column="trace_id" jdbcType="VARCHAR"/>
+        <result property="heartbeatAt" column="heartbeat_at" jdbcType="TIMESTAMP"/>
         <result property="startedAt" column="started_at" jdbcType="TIMESTAMP"/>
         <result property="finishedAt" column="finished_at" jdbcType="TIMESTAMP"/>
+        <result property="updatedAt" column="updated_at" jdbcType="TIMESTAMP"/>
         <result property="errorMessage" column="error_message" jdbcType="VARCHAR"/>
     </resultMap>
 
     <insert id="insert" parameterType="com.kama.jchatmind.model.entity.AgentTask"
             keyColumn="id" keyProperty="id" useGeneratedKeys="true">
         INSERT INTO agent_task
-        (session_id, agent_id, user_message_id, status, goal, started_at, finished_at, error_message)
+        (session_id, agent_id, user_message_id, status, goal, finish_reason, model_name, max_steps,
+         actual_steps, tool_call_count, latency_ms, trace_id, heartbeat_at, started_at, finished_at,
+         updated_at, error_message)
         VALUES
         (CAST(#{sessionId} AS uuid),
          CAST(#{agentId} AS uuid),
          CAST(#{userMessageId} AS uuid),
          #{status},
          #{goal},
+         #{finishReason},
+         #{modelName},
+         #{maxSteps},
+         #{actualSteps},
+         #{toolCallCount},
+         #{latencyMs},
+         #{traceId},
+         #{heartbeatAt},
          #{startedAt},
          #{finishedAt},
+         #{updatedAt},
          #{errorMessage})
     </insert>
 
@@ -38,8 +58,17 @@
                user_message_id,
                status,
                goal,
+               finish_reason,
+               model_name,
+               max_steps,
+               actual_steps,
+               tool_call_count,
+               latency_ms,
+               trace_id,
+               heartbeat_at,
                started_at,
                finished_at,
+               updated_at,
                error_message
         FROM agent_task
         WHERE id = CAST(#{id} AS uuid)
@@ -50,9 +79,42 @@
         <set>
             <if test="status != null">status = #{status},</if>
             <if test="goal != null">goal = #{goal},</if>
+            <if test="finishReason != null">finish_reason = #{finishReason},</if>
+            <if test="modelName != null">model_name = #{modelName},</if>
+            <if test="maxSteps != null">max_steps = #{maxSteps},</if>
+            <if test="actualSteps != null">actual_steps = #{actualSteps},</if>
+            <if test="toolCallCount != null">tool_call_count = #{toolCallCount},</if>
+            <if test="latencyMs != null">latency_ms = #{latencyMs},</if>
+            <if test="traceId != null">trace_id = #{traceId},</if>
+            <if test="heartbeatAt != null">heartbeat_at = #{heartbeatAt},</if>
             <if test="finishedAt != null">finished_at = #{finishedAt},</if>
+            <if test="updatedAt != null">updated_at = #{updatedAt},</if>
             <if test="errorMessage != null">error_message = #{errorMessage},</if>
         </set>
         WHERE id = CAST(#{id} AS uuid)
     </update>
+
+    <select id="selectStaleRunningBefore" resultMap="BaseResultMap">
+        SELECT id,
+               session_id,
+               agent_id,
+               user_message_id,
+               status,
+               goal,
+               finish_reason,
+               model_name,
+               max_steps,
+               actual_steps,
+               tool_call_count,
+               latency_ms,
+               trace_id,
+               heartbeat_at,
+               started_at,
+               finished_at,
+               updated_at,
+               error_message
+        FROM agent_task
+        WHERE status = 'RUNNING'
+          AND COALESCE(heartbeat_at, updated_at, started_at) &lt; #{staleBefore}
+    </select>
 </mapper>

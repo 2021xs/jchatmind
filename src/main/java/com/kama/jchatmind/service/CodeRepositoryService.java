@@ -8,4 +8,6 @@ public interface CodeRepositoryService {
     ImportCodeRepositoryResponse importRepository(ImportCodeRepositoryRequest request);
 
     GetCodeRepositoriesResponse getRepositories();
+
+    void deleteRepository(String repoId);
 }

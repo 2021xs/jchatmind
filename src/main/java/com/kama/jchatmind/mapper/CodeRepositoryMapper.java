@@ -17,4 +17,6 @@ public interface CodeRepositoryMapper {
     List<CodeRepository> selectAll();
 
     int updateById(CodeRepository codeRepository);
+
+    int deleteById(String id);
 }

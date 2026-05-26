@@ -9,28 +9,50 @@
         <result property="taskId" column="task_id" jdbcType="VARCHAR"/>
         <result property="stepId" column="step_id" jdbcType="VARCHAR"/>
         <result property="toolName" column="tool_name" jdbcType="VARCHAR"/>
+        <result property="actualToolName" column="actual_tool_name" jdbcType="VARCHAR"/>
+        <result property="toolCallId" column="tool_call_id" jdbcType="VARCHAR"/>
         <result property="argumentsJson" column="arguments_json" jdbcType="VARCHAR"/>
         <result property="resultSummary" column="result_summary" jdbcType="VARCHAR"/>
         <result property="status" column="status" jdbcType="VARCHAR"/>
         <result property="latencyMs" column="latency_ms" jdbcType="BIGINT"/>
         <result property="errorMessage" column="error_message" jdbcType="VARCHAR"/>
+        <result property="errorType" column="error_type" jdbcType="VARCHAR"/>
+        <result property="blockedByPolicy" column="blocked_by_policy" jdbcType="BOOLEAN"/>
+        <result property="argumentTruncated" column="argument_truncated" jdbcType="BOOLEAN"/>
+        <result property="resultTruncated" column="result_truncated" jdbcType="BOOLEAN"/>
+        <result property="retryCount" column="retry_count" jdbcType="INTEGER"/>
+        <result property="startedAt" column="started_at" jdbcType="TIMESTAMP"/>
+        <result property="finishedAt" column="finished_at" jdbcType="TIMESTAMP"/>
         <result property="createdAt" column="created_at" jdbcType="TIMESTAMP"/>
+        <result property="updatedAt" column="updated_at" jdbcType="TIMESTAMP"/>
     </resultMap>
 
     <insert id="insert" parameterType="com.kama.jchatmind.model.entity.ToolCallLog"
             keyColumn="id" keyProperty="id" useGeneratedKeys="true">
         INSERT INTO tool_call_log
-        (task_id, step_id, tool_name, arguments_json, result_summary, status, latency_ms, error_message, created_at)
+        (task_id, step_id, tool_name, actual_tool_name, tool_call_id, arguments_json, result_summary,
+         status, latency_ms, error_message, error_type, blocked_by_policy, argument_truncated,
+         result_truncated, retry_count, started_at, finished_at, created_at, updated_at)
         VALUES
         (CAST(#{taskId} AS uuid),
          CAST(#{stepId} AS uuid),
          #{toolName},
+         #{actualToolName},
+         #{toolCallId},
          CAST(#{argumentsJson} AS jsonb),
          #{resultSummary},
          #{status},
          #{latencyMs},
          #{errorMessage},
-         #{createdAt})
+         #{errorType},
+         #{blockedByPolicy},
+         #{argumentTruncated},
+         #{resultTruncated},
+         #{retryCount},
+         #{startedAt},
+         #{finishedAt},
+         #{createdAt},
+         #{updatedAt})
     </insert>
 
     <select id="selectById" resultMap="BaseResultMap">
@@ -38,12 +60,22 @@
                task_id,
                step_id,
                tool_name,
+               actual_tool_name,
+               tool_call_id,
                arguments_json::text AS arguments_json,
                result_summary,
                status,
                latency_ms,
                error_message,
-               created_at
+               error_type,
+               blocked_by_policy,
+               argument_truncated,
+               result_truncated,
+               retry_count,
+               started_at,
+               finished_at,
+               created_at,
+               updated_at
         FROM tool_call_log
         WHERE id = CAST(#{id} AS uuid)
     </select>
@@ -55,7 +87,40 @@
             <if test="status != null">status = #{status},</if>
             <if test="latencyMs != null">latency_ms = #{latencyMs},</if>
             <if test="errorMessage != null">error_message = #{errorMessage},</if>
+            <if test="errorType != null">error_type = #{errorType},</if>
+            <if test="blockedByPolicy != null">blocked_by_policy = #{blockedByPolicy},</if>
+            <if test="argumentTruncated != null">argument_truncated = #{argumentTruncated},</if>
+            <if test="resultTruncated != null">result_truncated = #{resultTruncated},</if>
+            <if test="retryCount != null">retry_count = #{retryCount},</if>
+            <if test="finishedAt != null">finished_at = #{finishedAt},</if>
+            <if test="updatedAt != null">updated_at = #{updatedAt},</if>
         </set>
         WHERE id = CAST(#{id} AS uuid)
     </update>
+
+    <select id="selectRunningByTaskId" resultMap="BaseResultMap">
+        SELECT id,
+               task_id,
+               step_id,
+               tool_name,
+               actual_tool_name,
+               tool_call_id,
+               arguments_json::text AS arguments_json,
+               result_summary,
+               status,
+               latency_ms,
+               error_message,
+               error_type,
+               blocked_by_policy,
+               argument_truncated,
+               result_truncated,
+               retry_count,
+               started_at,
+               finished_at,
+               created_at,
+               updated_at
+        FROM tool_call_log
+        WHERE task_id = CAST(#{taskId} AS uuid)
+          AND status = 'RUNNING'
+    </select>
 </mapper>

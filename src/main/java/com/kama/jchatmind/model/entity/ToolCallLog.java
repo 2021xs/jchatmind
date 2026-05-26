@@ -16,10 +16,20 @@ public class ToolCallLog {
     private String taskId;
     private String stepId;
     private String toolName;
+    private String actualToolName;
+    private String toolCallId;
     private String argumentsJson;
     private String resultSummary;
     private String status;
     private Long latencyMs;
     private String errorMessage;
+    private String errorType;
+    private Boolean blockedByPolicy;
+    private Boolean argumentTruncated;
+    private Boolean resultTruncated;
+    private Integer retryCount;
+    private LocalDateTime startedAt;
+    private LocalDateTime finishedAt;
     private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
 }

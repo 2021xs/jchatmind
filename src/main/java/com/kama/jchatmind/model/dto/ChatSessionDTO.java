@@ -22,5 +22,8 @@ public class ChatSessionDTO {
 
     @Data
     public static class MetaData {
+        private String contextSummary;
+        private String contextSummaryLastMessageId;
+        private LocalDateTime contextSummaryUpdatedAt;
     }
 }

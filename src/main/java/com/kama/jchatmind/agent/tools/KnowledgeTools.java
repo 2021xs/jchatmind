@@ -1,7 +1,5 @@
 package com.kama.jchatmind.agent.tools;
 
-import com.kama.jchatmind.agent.AgentExecutionContext;
-import com.kama.jchatmind.message.AgentSseEvent;
 import com.kama.jchatmind.model.dto.RagSearchResult;
 import com.kama.jchatmind.service.RagService;
 import com.kama.jchatmind.service.SseService;
@@ -9,8 +7,6 @@ import com.kama.jchatmind.tool.ToolRegistry;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.stream.Collectors;
 
 @Component
@@ -28,7 +24,7 @@ public class KnowledgeTools implements Tool {
 
     @Override
     public String getName() {
-        return "KnowledgeTool";
+        return "knowledgeQuery";
     }
 
     @Override
@@ -42,12 +38,11 @@ public class KnowledgeTools implements Tool {
     }
 
     @org.springframework.ai.tool.annotation.Tool(
-            name = "KnowledgeTool",
+            name = "knowledgeQuery",
             description = "从指定知识库中执行相似性检索（RAG）。参数为知识库 ID（kbsId）和查询文本（query），返回与查询最相关的知识片段。"
     )
     public String knowledgeQuery(String kbsId, String query) {
         List<RagSearchResult> results = ragService.similaritySearchWithMetadata(kbsId, query);
-        sendRetrievalEvent(kbsId, query, results);
         if (results.isEmpty()) {
             return "未检索到相关知识片段。";
         }
@@ -55,25 +50,6 @@ public class KnowledgeTools implements Tool {
                 .map(this::formatResult)
                 .collect(Collectors.joining("\n\n"));
         return toolRegistry.truncateResult(getName(), formatted);
-    }
-
-    private void sendRetrievalEvent(String kbId, String query, List<RagSearchResult> results) {
-        AgentExecutionContext.Context context = AgentExecutionContext.get();
-        if (context == null) {
-            return;
-        }
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("stepNo", context.getStepNo());
-        payload.put("stepId", context.getCurrentStepId());
-        payload.put("kbId", kbId);
-        payload.put("query", query);
-        payload.put("results", results);
-        sseService.sendEvent(context.getSessionId(), AgentSseEvent.of(
-                context.getTaskId(),
-                context.getSessionId(),
-                AgentSseEvent.Type.RETRIEVAL_RESULT,
-                payload
-        ));
     }
 
     private String formatResult(RagSearchResult result) {

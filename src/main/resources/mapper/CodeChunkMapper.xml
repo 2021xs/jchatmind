@@ -28,7 +28,8 @@
 
     <select id="similaritySearch" resultType="com.kama.jchatmind.model.dto.CodeSearchResult">
         <![CDATA[
-        SELECT cc.repo_id AS "repoId",
+        SELECT cc.id AS "chunkId",
+               cc.repo_id AS "repoId",
                cf.file_path AS "filePath",
                cf.file_type AS "fileType",
                cc.chunk_type AS "chunkType",
@@ -50,4 +51,5 @@
         LIMIT #{limit}
         ]]>
     </select>
+
 </mapper>

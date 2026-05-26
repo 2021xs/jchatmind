@@ -1,0 +1,722 @@
+[
+  {
+    "id": "basic_api_001",
+    "query": "Where is the seckill order API implemented?",
+    "expectedFileKeywords": ["VoucherOrderController"],
+    "expectedSymbolKeywords": ["seckillVoucher", "/voucher-order/seckill"],
+    "expectedChunkTypes": ["CONTROLLER_API"],
+    "category": "API",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_api_002",
+    "query": "Where is the add seckill voucher API?",
+    "expectedFileKeywords": ["VoucherController"],
+    "expectedSymbolKeywords": ["addSeckillVoucher", "/voucher/seckill"],
+    "expectedChunkTypes": ["CONTROLLER_API"],
+    "category": "API",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_api_003",
+    "query": "Find shop detail API by shop id.",
+    "expectedFileKeywords": ["ShopController"],
+    "expectedSymbolKeywords": ["queryShopById", "/shop"],
+    "expectedChunkTypes": ["CONTROLLER_API"],
+    "category": "API",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_api_004",
+    "query": "Where is user login API implemented?",
+    "expectedFileKeywords": ["UserController"],
+    "expectedSymbolKeywords": ["login", "/user/login"],
+    "expectedChunkTypes": ["CONTROLLER_API"],
+    "category": "API",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_api_005",
+    "query": "Where is blog like API?",
+    "expectedFileKeywords": ["BlogController"],
+    "expectedSymbolKeywords": ["likeBlog", "/blog/like"],
+    "expectedChunkTypes": ["CONTROLLER_API"],
+    "category": "API",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_service_001",
+    "query": "Find VoucherOrderServiceImpl seckillVoucher async order logic.",
+    "expectedFileKeywords": ["VoucherOrderServiceImpl"],
+    "expectedSymbolKeywords": ["seckillVoucher", "SECKILL_SCRIPT", "sendSeckillOrder"],
+    "expectedChunkTypes": ["SERVICE_METHOD"],
+    "category": "SERVICE",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_service_002",
+    "query": "Find createVoucherOrder one user one voucher logic.",
+    "expectedFileKeywords": ["VoucherOrderServiceImpl"],
+    "expectedSymbolKeywords": ["createVoucherOrder", "redissonClient", "DuplicateKeyException"],
+    "expectedChunkTypes": ["SERVICE_METHOD"],
+    "category": "SERVICE",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_service_003",
+    "query": "Where is seckill voucher creation service?",
+    "expectedFileKeywords": ["VoucherServiceImpl"],
+    "expectedSymbolKeywords": ["addSeckillVoucher", "seckillVoucherService.save", "SECKILL_STOCK_KEY"],
+    "expectedChunkTypes": ["SERVICE_METHOD"],
+    "category": "SERVICE",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_service_004",
+    "query": "Where is user verification code login service?",
+    "expectedFileKeywords": ["UserServiceImpl"],
+    "expectedSymbolKeywords": ["sendCode", "login", "LOGIN_CODE_KEY", "LOGIN_USER_KEY"],
+    "expectedChunkTypes": ["SERVICE_METHOD"],
+    "category": "SERVICE",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_service_005",
+    "query": "Where is blog like and feed service?",
+    "expectedFileKeywords": ["BlogServiceImpl"],
+    "expectedSymbolKeywords": ["likeBlog", "saveBlog", "queryBlogOfFollow", "FEED_KEY"],
+    "expectedChunkTypes": ["SERVICE_METHOD"],
+    "category": "SERVICE",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_service_006",
+    "query": "Find RedisIdWorker order id generation.",
+    "expectedFileKeywords": ["RedisIdWorker"],
+    "expectedSymbolKeywords": ["nextId", "BEGIN_TIMESTAMP", "COUNT_BITS", "icr:"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "SERVICE",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_redis_001",
+    "query": "Find Lua script checking stock and duplicate orders.",
+    "expectedFileKeywords": ["seckill.lua"],
+    "expectedSymbolKeywords": ["seckill:stock", "seckill:order", "sismember", "incrby"],
+    "expectedChunkTypes": ["SQL_FILE", "OTHER"],
+    "category": "REDIS",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_redis_002",
+    "query": "Where is seckill stock Redis key defined?",
+    "expectedFileKeywords": ["RedisConstants"],
+    "expectedSymbolKeywords": ["SECKILL_STOCK_KEY", "seckill:stock"],
+    "expectedChunkTypes": ["CLASS_SUMMARY"],
+    "category": "REDIS",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_redis_003",
+    "query": "Find login token Redis key logic.",
+    "expectedFileKeywords": ["RedisConstants", "UserServiceImpl"],
+    "expectedSymbolKeywords": ["LOGIN_USER_KEY", "LOGIN_USER_TTL", "login:token"],
+    "expectedChunkTypes": ["CLASS_SUMMARY", "SERVICE_METHOD"],
+    "category": "REDIS",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_redis_004",
+    "query": "Where is user sign bitmap stored?",
+    "expectedFileKeywords": ["UserServiceImpl", "RedisConstants"],
+    "expectedSymbolKeywords": ["USER_SIGN_KEY", "setBit", "bitField"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "CLASS_SUMMARY"],
+    "category": "REDIS",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_mq_001",
+    "query": "Where is seckill order message produced?",
+    "expectedFileKeywords": ["VoucherOrderProducer"],
+    "expectedSymbolKeywords": ["sendSeckillOrder", "convertAndSend", "SECKILL_ORDER_EXCHANGE"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "MQ",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_mq_002",
+    "query": "Where is seckill order message consumed?",
+    "expectedFileKeywords": ["VoucherOrderConsumer"],
+    "expectedSymbolKeywords": ["handleSeckillOrder", "RabbitListener", "SECKILL_ORDER_QUEUE"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "MQ",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_mq_003",
+    "query": "Where is RabbitMQ queue exchange configured?",
+    "expectedFileKeywords": ["RabbitMqConfig"],
+    "expectedSymbolKeywords": ["seckillOrderExchange", "seckillOrderQueue", "seckillOrderBinding"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "MQ",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_mq_004",
+    "query": "Where are RabbitMQ constants defined?",
+    "expectedFileKeywords": ["RabbitConstants"],
+    "expectedSymbolKeywords": ["SECKILL_ORDER_QUEUE", "SECKILL_ORDER_EXCHANGE", "ORDER_TIMEOUT_EXCHANGE"],
+    "expectedChunkTypes": ["CLASS_SUMMARY"],
+    "category": "MQ",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_sql_001",
+    "query": "Find SQL decrementing seckill voucher stock.",
+    "expectedFileKeywords": ["SeckillVoucherMapper.xml", "SeckillVoucherMapper"],
+    "expectedSymbolKeywords": ["decrementStockBatch", "tb_seckill_voucher", "stock >="],
+    "expectedChunkTypes": ["MYBATIS_SQL", "MAPPER_METHOD"],
+    "category": "MAPPER_SQL",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_sql_002",
+    "query": "Find SQL selecting existing voucher orders.",
+    "expectedFileKeywords": ["VoucherOrderMapper.xml", "VoucherOrderMapper"],
+    "expectedSymbolKeywords": ["selectExistingUserVoucherPairs", "tb_voucher_order", "user_id"],
+    "expectedChunkTypes": ["MYBATIS_SQL", "MAPPER_METHOD"],
+    "category": "MAPPER_SQL",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_sql_003",
+    "query": "Find SQL batch inserting voucher orders.",
+    "expectedFileKeywords": ["VoucherOrderMapper.xml", "VoucherOrderMapper"],
+    "expectedSymbolKeywords": ["insertBatch", "tb_voucher_order", "foreach"],
+    "expectedChunkTypes": ["MYBATIS_SQL", "MAPPER_METHOD"],
+    "category": "MAPPER_SQL",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_sql_004",
+    "query": "Where is voucher list SQL joined with seckill table?",
+    "expectedFileKeywords": ["VoucherMapper.xml", "VoucherMapper"],
+    "expectedSymbolKeywords": ["queryVoucherOfShop", "tb_voucher", "tb_seckill_voucher"],
+    "expectedChunkTypes": ["MYBATIS_SQL", "MAPPER_METHOD"],
+    "category": "MAPPER_SQL",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_config_001",
+    "query": "Where are application Redis and RabbitMQ settings?",
+    "expectedFileKeywords": ["application.yaml", "application-dev.yaml"],
+    "expectedSymbolKeywords": ["spring.redis", "spring.rabbitmq", "seckill.order.mode"],
+    "expectedChunkTypes": ["CONFIG", "CONFIG_FILE"],
+    "category": "CONFIG",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_config_002",
+    "query": "Where is Rabbit listener container configured?",
+    "expectedFileKeywords": ["RabbitMqConfig"],
+    "expectedSymbolKeywords": ["rabbitListenerContainerFactory", "AcknowledgeMode.MANUAL", "setPrefetchCount"],
+    "expectedChunkTypes": ["JAVA_METHOD"],
+    "category": "CONFIG",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_config_003",
+    "query": "Where is Redisson client configured?",
+    "expectedFileKeywords": ["RedissonConfig"],
+    "expectedSymbolKeywords": ["redissonClient", "useSingleServer", "redis://"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "CONFIG",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_config_004",
+    "query": "Where are MVC interceptors registered?",
+    "expectedFileKeywords": ["MvcConfig"],
+    "expectedSymbolKeywords": ["addInterceptors", "excludePathPatterns", "RefreshTokenInterceptor"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "CONFIG",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_cache_001",
+    "query": "Where is shop Redis cache handled?",
+    "expectedFileKeywords": ["ShopServiceImpl", "RedisConstants"],
+    "expectedSymbolKeywords": ["CACHE_SHOP_KEY", "CACHE_SHOP_TTL", "queryByIdWithCache"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "CLASS_SUMMARY"],
+    "category": "CACHE",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_cache_002",
+    "query": "Where is Caffeine local shop cache configured?",
+    "expectedFileKeywords": ["CaffeineConfig", "LocalCacheConstants"],
+    "expectedSymbolKeywords": ["shopLocalCache", "SHOP_LOCAL_CACHE_MAX_SIZE", "expireAfterWrite"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "CACHE",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_cache_003",
+    "query": "Where is shop cache invalidation sent?",
+    "expectedFileKeywords": ["ShopServiceImpl", "ShopCacheInvalidationProducer"],
+    "expectedSymbolKeywords": ["sendShopCacheInvalidation", "SHOP_CACHE_INVALIDATE_EXCHANGE", "shopLocalCache.invalidate"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "JAVA_METHOD"],
+    "category": "CACHE",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_util_001",
+    "query": "Where is login interceptor implemented?",
+    "expectedFileKeywords": ["LoginInterceptor"],
+    "expectedSymbolKeywords": ["preHandle", "UserHolder.getUser", "401"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "UTIL",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_util_002",
+    "query": "Where is token refresh interceptor implemented?",
+    "expectedFileKeywords": ["RefreshTokenInterceptor"],
+    "expectedSymbolKeywords": ["preHandle", "LOGIN_USER_KEY", "saveUser", "afterCompletion"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "UTIL",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_util_003",
+    "query": "Where is current user ThreadLocal stored?",
+    "expectedFileKeywords": ["UserHolder"],
+    "expectedSymbolKeywords": ["saveUser", "getUser", "removeUser", "ThreadLocal"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "UTIL",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_util_004",
+    "query": "Where are phone and code validators?",
+    "expectedFileKeywords": ["RegexUtils", "RegexPatterns"],
+    "expectedSymbolKeywords": ["isPhoneInvalid", "isCodeInvalid", "PHONE_REGEX", "VERIFY_CODE_REGEX"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "UTIL",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_class_001",
+    "query": "What is the responsibility of VoucherOrderServiceImpl class?",
+    "expectedFileKeywords": ["VoucherOrderServiceImpl"],
+    "expectedSymbolKeywords": ["VoucherOrderServiceImpl", "seckillVoucher", "createVoucherOrder"],
+    "expectedChunkTypes": ["CLASS_SUMMARY"],
+    "category": "CLASS",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_class_002",
+    "query": "What is the responsibility of RabbitMqConfig class?",
+    "expectedFileKeywords": ["RabbitMqConfig"],
+    "expectedSymbolKeywords": ["RabbitMqConfig", "seckillOrderExchange", "orderTimeoutDelayQueue"],
+    "expectedChunkTypes": ["CLASS_SUMMARY"],
+    "category": "CLASS",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_class_003",
+    "query": "What is the responsibility of RedisConstants class?",
+    "expectedFileKeywords": ["RedisConstants"],
+    "expectedSymbolKeywords": ["RedisConstants", "LOGIN_USER_KEY", "CACHE_SHOP_KEY", "SECKILL_STOCK_KEY"],
+    "expectedChunkTypes": ["CLASS_SUMMARY"],
+    "category": "CLASS",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_class_004",
+    "query": "What is the responsibility of CacheClient class?",
+    "expectedFileKeywords": ["CacheClient"],
+    "expectedSymbolKeywords": ["CacheClient", "setWithLogicalExpire", "queryWithMutex", "queryWithLogicalExpire"],
+    "expectedChunkTypes": ["CLASS_SUMMARY"],
+    "category": "CLASS",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_service_007",
+    "query": "Where is Redisson lock used for orders?",
+    "expectedFileKeywords": ["VoucherOrderServiceImpl"],
+    "expectedSymbolKeywords": ["redissonClient", "getLock", "tryLock", "lock:order"],
+    "expectedChunkTypes": ["SERVICE_METHOD"],
+    "category": "SERVICE",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "basic_cache_004",
+    "query": "Where is logical expire cache utility implemented?",
+    "expectedFileKeywords": ["CacheClient"],
+    "expectedSymbolKeywords": ["queryWithLogicalExpire", "setWithLogicalExpire", "RedisData"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "CACHE",
+    "difficulty": "BASIC"
+  },
+  {
+    "id": "medium_cross_001",
+    "query": "After a user passes the seckill check, how is the async order message sent and then consumed for persistence?",
+    "expectedFileKeywords": ["VoucherOrderServiceImpl", "VoucherOrderProducer", "VoucherOrderConsumer"],
+    "expectedSymbolKeywords": ["seckillVoucher", "sendSeckillOrder", "handleSeckillOrder", "createVoucherOrder"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "JAVA_METHOD"],
+    "category": "CROSS_LAYER",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_cross_002",
+    "query": "How does one-user-one-voucher protection combine Redis precheck and database persistence checks?",
+    "expectedFileKeywords": ["seckill.lua", "VoucherOrderServiceImpl", "VoucherOrderMapper.xml"],
+    "expectedSymbolKeywords": ["sismember", "createVoucherOrder", "selectExistingUserVoucherPairs", "DuplicateKeyException"],
+    "expectedChunkTypes": ["SQL_FILE", "SERVICE_METHOD", "MYBATIS_SQL"],
+    "category": "CROSS_LAYER",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_cache_001",
+    "query": "When querying shop detail, how does the code choose between Caffeine, Redis cache and database fallback?",
+    "expectedFileKeywords": ["ShopServiceImpl", "CaffeineConfig", "RedisConstants"],
+    "expectedSymbolKeywords": ["queryShopWithTwoLevelCache", "shopLocalCache", "CACHE_SHOP_KEY", "getById"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "MULTI_EVIDENCE",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_cache_002",
+    "query": "After shop data is updated, how does the code invalidate local and remote cache?",
+    "expectedFileKeywords": ["ShopServiceImpl", "ShopCacheInvalidationProducer", "ShopCacheInvalidationConsumer"],
+    "expectedSymbolKeywords": ["update", "delete", "sendShopCacheInvalidation", "handleShopCacheInvalidation"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "JAVA_METHOD"],
+    "category": "MULTI_EVIDENCE",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_mq_001",
+    "query": "Which code declares the seckill order queue, exchange, routing key and binding?",
+    "expectedFileKeywords": ["RabbitMqConfig", "RabbitConstants"],
+    "expectedSymbolKeywords": ["SECKILL_ORDER_QUEUE", "SECKILL_ORDER_EXCHANGE", "SECKILL_ORDER_ROUTING_KEY", "seckillOrderBinding"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "MULTI_EVIDENCE",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_mq_002",
+    "query": "How is the shop cache invalidation message published and handled by the consumer?",
+    "expectedFileKeywords": ["ShopCacheInvalidationProducer", "ShopCacheInvalidationConsumer", "RabbitConstants"],
+    "expectedSymbolKeywords": ["sendShopCacheInvalidation", "handleShopCacheInvalidation", "SHOP_CACHE_INVALIDATE_EXCHANGE", "SHOP_CACHE_TYPE"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "MULTI_EVIDENCE",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_state_001",
+    "query": "How does timeout order closing use delayed queue configuration and order status update logic?",
+    "expectedFileKeywords": ["RabbitMqConfig", "VoucherOrderServiceImpl", "RabbitConstants"],
+    "expectedSymbolKeywords": ["orderTimeoutDelayQueue", "closeTimeoutOrder", "cancelUnpaidOrder", "ORDER_TIMEOUT_DELAY_QUEUE"],
+    "expectedChunkTypes": ["JAVA_METHOD", "SERVICE_METHOD", "CLASS_SUMMARY"],
+    "category": "STATE_FLOW",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_state_002",
+    "query": "Where is stock restored when an unpaid voucher order is closed?",
+    "expectedFileKeywords": ["VoucherOrderServiceImpl", "RedisConstants"],
+    "expectedSymbolKeywords": ["recoverRedisStockAfterClose", "closeUnpaidOrderIfNecessary", "SECKILL_STOCK_KEY", "increment"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "CLASS_SUMMARY"],
+    "category": "STATE_FLOW",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_sql_001",
+    "query": "Which Service method calls batch insert and batch stock decrement SQL for voucher orders?",
+    "expectedFileKeywords": ["VoucherOrderServiceImpl", "VoucherOrderMapper.xml", "SeckillVoucherMapper.xml"],
+    "expectedSymbolKeywords": ["createVoucherOrdersBatchInTransaction", "insertBatch", "decrementStockBatch", "countByVoucherId"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "MYBATIS_SQL", "MAPPER_METHOD"],
+    "category": "CROSS_LAYER",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_sql_002",
+    "query": "How does voucher shop listing combine controller/service behavior with a mapper SQL join?",
+    "expectedFileKeywords": ["VoucherController", "VoucherServiceImpl", "VoucherMapper.xml"],
+    "expectedSymbolKeywords": ["queryVoucherOfShop", "tb_voucher", "tb_seckill_voucher", "shopId"],
+    "expectedChunkTypes": ["CONTROLLER_API", "SERVICE_METHOD", "MYBATIS_SQL"],
+    "category": "CROSS_LAYER",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_redis_001",
+    "query": "How does user sign-in use Redis bitmap and compute consecutive sign days?",
+    "expectedFileKeywords": ["UserServiceImpl", "RedisConstants"],
+    "expectedSymbolKeywords": ["sign", "signCount", "USER_SIGN_KEY", "bitField"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "CLASS_SUMMARY"],
+    "category": "STATE_FLOW",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_redis_002",
+    "query": "How are nearby shops queried using Redis GEO rather than a normal database page?",
+    "expectedFileKeywords": ["ShopServiceImpl", "RedisConstants"],
+    "expectedSymbolKeywords": ["queryShopByType", "SHOP_GEO_KEY", "search", "includeDistance"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "CLASS_SUMMARY"],
+    "category": "MULTI_EVIDENCE",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_config_001",
+    "query": "Which configuration and service code control local shop cache size and expiration?",
+    "expectedFileKeywords": ["CaffeineConfig", "LocalCacheConstants", "ShopServiceImpl"],
+    "expectedSymbolKeywords": ["shopLocalCache", "SHOP_LOCAL_CACHE_MAX_SIZE", "SHOP_LOCAL_CACHE_EXPIRE_SECONDS", "queryShopWithTwoLevelCache"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY", "SERVICE_METHOD"],
+    "category": "MULTI_EVIDENCE",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_config_002",
+    "query": "How are login and refresh-token interceptors ordered and excluded from login paths?",
+    "expectedFileKeywords": ["MvcConfig", "LoginInterceptor", "RefreshTokenInterceptor"],
+    "expectedSymbolKeywords": ["addInterceptors", "excludePathPatterns", "order", "preHandle"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "CROSS_LAYER",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_safety_001",
+    "query": "How does request rate limiting build a Redis key and reject excessive requests?",
+    "expectedFileKeywords": ["RateLimitAspect", "RateLimit"],
+    "expectedSymbolKeywords": ["around", "buildRedisKey", "windowSeconds", "limit"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "SAFETY",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_util_001",
+    "query": "How does login flow validate phone/code and then write token data into Redis?",
+    "expectedFileKeywords": ["UserServiceImpl", "RegexUtils", "RedisConstants"],
+    "expectedSymbolKeywords": ["isPhoneInvalid", "isCodeInvalid", "LOGIN_USER_KEY", "BeanUtil.beanToMap"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "CROSS_LAYER",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_util_002",
+    "query": "How is the current login user loaded from Redis and later cleared from ThreadLocal?",
+    "expectedFileKeywords": ["RefreshTokenInterceptor", "UserHolder", "RedisConstants"],
+    "expectedSymbolKeywords": ["preHandle", "saveUser", "removeUser", "LOGIN_USER_KEY"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "CROSS_LAYER",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_class_001",
+    "query": "Which classes cooperate to make voucher ordering asynchronous instead of writing directly in the controller?",
+    "expectedFileKeywords": ["VoucherOrderController", "VoucherOrderServiceImpl", "VoucherOrderProducer"],
+    "expectedSymbolKeywords": ["seckillVoucher", "sendSeckillOrder", "querySeckillResult", "SECKILL_ORDER_EXCHANGE"],
+    "expectedChunkTypes": ["CONTROLLER_API", "SERVICE_METHOD", "JAVA_METHOD"],
+    "category": "CROSS_LAYER",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_class_002",
+    "query": "Which classes cooperate for shop cache invalidation across instances?",
+    "expectedFileKeywords": ["ShopServiceImpl", "ShopCacheInvalidationProducer", "ShopCacheInvalidationConsumer", "RabbitMqConfig"],
+    "expectedSymbolKeywords": ["shopLocalCache.invalidate", "sendShopCacheInvalidation", "handleShopCacheInvalidation", "SHOP_CACHE_INVALIDATE_QUEUE"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "MULTI_EVIDENCE",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "medium_distractor_001",
+    "query": "For the shop type list endpoint, which service method returns sorted shop types instead of nearby shop search?",
+    "expectedFileKeywords": ["ShopTypeServiceImpl", "ShopTypeController"],
+    "expectedSymbolKeywords": ["queryTypeList", "orderByAsc", "sort", "/shop-type/list"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "CONTROLLER_API"],
+    "category": "DISTRACTOR",
+    "difficulty": "MEDIUM"
+  },
+  {
+    "id": "hard_cross_001",
+    "query": "If a seckill request passes Redis pre-deduction but the consumer receives the same message twice, which code prevents duplicate orders?",
+    "expectedFileKeywords": ["seckill.lua", "VoucherOrderServiceImpl", "VoucherOrderMapper.xml"],
+    "expectedSymbolKeywords": ["sismember", "createVoucherOrder", "selectExistingUserVoucherPairs", "DuplicateKeyException"],
+    "expectedChunkTypes": ["SQL_FILE", "SERVICE_METHOD", "MYBATIS_SQL"],
+    "category": "CROSS_LAYER",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_cross_002",
+    "query": "Where are Redis stock precheck, MQ async handoff, and conditional database stock decrement expressed in the seckill flow?",
+    "expectedFileKeywords": ["seckill.lua", "VoucherOrderServiceImpl", "SeckillVoucherMapper.xml", "VoucherOrderProducer"],
+    "expectedSymbolKeywords": ["SECKILL_SCRIPT", "sendSeckillOrder", "decrementStockBatch", "stock >="],
+    "expectedChunkTypes": ["SQL_FILE", "SERVICE_METHOD", "MYBATIS_SQL", "JAVA_METHOD"],
+    "category": "CROSS_LAYER",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_state_001",
+    "query": "If an unpaid order times out, where are the delayed queue, status transition and Redis stock recovery handled?",
+    "expectedFileKeywords": ["RabbitMqConfig", "VoucherOrderConsumer", "VoucherOrderServiceImpl"],
+    "expectedSymbolKeywords": ["orderTimeoutDelayQueue", "handleOrderTimeout", "closeUnpaidOrderIfNecessary", "recoverRedisStockAfterClose"],
+    "expectedChunkTypes": ["JAVA_METHOD", "SERVICE_METHOD", "CLASS_SUMMARY"],
+    "category": "STATE_FLOW",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_state_002",
+    "query": "When batch-consuming seckill orders, where does the code combine duplicate filtering, batch insert and stock decrement?",
+    "expectedFileKeywords": ["VoucherOrderBatchProcessor", "VoucherOrderServiceImpl", "VoucherOrderMapper.xml", "SeckillVoucherMapper.xml"],
+    "expectedSymbolKeywords": ["processBatch", "createVoucherOrdersBatchInTransaction", "insertBatch", "decrementStockBatch"],
+    "expectedChunkTypes": ["JAVA_METHOD", "SERVICE_METHOD", "MYBATIS_SQL"],
+    "category": "STATE_FLOW",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_mq_001",
+    "query": "If MQ consumption fails, where are retry, dead-letter routing and manual ack related code configured or handled?",
+    "expectedFileKeywords": ["RabbitMqConfig", "VoucherOrderConsumer", "RabbitConstants"],
+    "expectedSymbolKeywords": ["rabbitRetryInterceptor", "AcknowledgeMode.MANUAL", "SECKILL_ORDER_DLX", "basicAck"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "MULTI_EVIDENCE",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_mq_002",
+    "query": "Which evidence distinguishes the normal seckill queue from timeout close queues and dead-letter queues?",
+    "expectedFileKeywords": ["RabbitMqConfig", "RabbitConstants"],
+    "expectedSymbolKeywords": ["SECKILL_ORDER_QUEUE", "ORDER_TIMEOUT_DELAY_QUEUE", "ORDER_CLOSE_QUEUE", "DLQ"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "DISTRACTOR",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_cache_001",
+    "query": "If shop data is updated but only Redis is deleted, what code shows how local Caffeine cache is also invalidated across instances?",
+    "expectedFileKeywords": ["ShopServiceImpl", "ShopCacheInvalidationProducer", "ShopCacheInvalidationConsumer", "RabbitConstants"],
+    "expectedSymbolKeywords": ["shopLocalCache.invalidate", "delete", "sendShopCacheInvalidation", "handleShopCacheInvalidation"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "MULTI_EVIDENCE",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_cache_002",
+    "query": "Where does the shop detail query avoid cache penetration or breakdown while still using two-level cache?",
+    "expectedFileKeywords": ["ShopServiceImpl", "CacheClient", "RedisConstants"],
+    "expectedSymbolKeywords": ["queryShopWithTwoLevelCache", "queryWithMutex", "queryWithLogicalExpire", "CACHE_NULL_TTL"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "MULTI_EVIDENCE",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_redis_001",
+    "query": "Which Redis structures are used for seckill duplicate check, sign bitmap, blog likes and feed timeline?",
+    "expectedFileKeywords": ["seckill.lua", "UserServiceImpl", "BlogServiceImpl", "RedisConstants"],
+    "expectedSymbolKeywords": ["sismember", "setBit", "BLOG_LIKED_KEY", "FEED_KEY"],
+    "expectedChunkTypes": ["SQL_FILE", "SERVICE_METHOD", "CLASS_SUMMARY"],
+    "category": "MULTI_EVIDENCE",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_sql_001",
+    "query": "For batch order creation, where can I verify the SQL writes orders and the SQL reduces stock only when enough stock exists?",
+    "expectedFileKeywords": ["VoucherOrderMapper.xml", "SeckillVoucherMapper.xml", "VoucherOrderServiceImpl"],
+    "expectedSymbolKeywords": ["insertBatch", "decrementStockBatch", "tb_voucher_order", "stock >="],
+    "expectedChunkTypes": ["MYBATIS_SQL", "SERVICE_METHOD"],
+    "category": "CROSS_LAYER",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_sql_002",
+    "query": "How can I trace voucher list data from the shop API to the SQL join with seckill voucher records?",
+    "expectedFileKeywords": ["VoucherController", "VoucherMapper.xml", "VoucherServiceImpl"],
+    "expectedSymbolKeywords": ["queryVoucherOfShop", "shopId", "LEFT JOIN", "tb_seckill_voucher"],
+    "expectedChunkTypes": ["CONTROLLER_API", "MYBATIS_SQL", "SERVICE_METHOD"],
+    "category": "CROSS_LAYER",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_safety_001",
+    "query": "Where does the code enforce per-interface rate limiting and what Redis cleanup prevents the sorted set from growing forever?",
+    "expectedFileKeywords": ["RateLimitAspect", "RateLimit"],
+    "expectedSymbolKeywords": ["removeRangeByScore", "opsForZSet", "windowSeconds", "buildRedisKey"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "SAFETY",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_safety_002",
+    "query": "How does the login flow reject invalid phone or code before storing user session data?",
+    "expectedFileKeywords": ["UserServiceImpl", "RegexUtils", "RedisConstants"],
+    "expectedSymbolKeywords": ["isPhoneInvalid", "isCodeInvalid", "LOGIN_CODE_KEY", "LOGIN_USER_KEY"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "SAFETY",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_distractor_001",
+    "query": "Do not pick the shop-by-type geo search; find the shop type list endpoint and service that order by sort.",
+    "expectedFileKeywords": ["ShopTypeController", "ShopTypeServiceImpl"],
+    "expectedSymbolKeywords": ["queryTypeList", "/shop-type/list", "orderByAsc", "sort"],
+    "expectedChunkTypes": ["CONTROLLER_API", "SERVICE_METHOD"],
+    "category": "DISTRACTOR",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_distractor_002",
+    "query": "Do not pick cache invalidation; find the code that publishes seckill order messages to the order exchange.",
+    "expectedFileKeywords": ["VoucherOrderProducer", "VoucherOrderServiceImpl", "RabbitConstants"],
+    "expectedSymbolKeywords": ["sendSeckillOrder", "SECKILL_ORDER_EXCHANGE", "SECKILL_ORDER_ROUTING_KEY", "convertAndSend"],
+    "expectedChunkTypes": ["JAVA_METHOD", "SERVICE_METHOD", "CLASS_SUMMARY"],
+    "category": "DISTRACTOR",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_distractor_003",
+    "query": "Do not confuse login token refresh with login code sending; find the interceptor that loads the user from token Redis hash.",
+    "expectedFileKeywords": ["RefreshTokenInterceptor", "RedisConstants", "UserHolder"],
+    "expectedSymbolKeywords": ["LOGIN_USER_KEY", "entries", "BeanUtil.fillBeanWithMap", "saveUser"],
+    "expectedChunkTypes": ["JAVA_METHOD", "CLASS_SUMMARY"],
+    "category": "DISTRACTOR",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_class_001",
+    "query": "Which class coordinates most seckill order state transitions, including async create, result query and timeout close?",
+    "expectedFileKeywords": ["VoucherOrderServiceImpl"],
+    "expectedSymbolKeywords": ["seckillVoucher", "querySeckillResult", "createVoucherOrder", "closeTimeoutOrder"],
+    "expectedChunkTypes": ["CLASS_SUMMARY", "SERVICE_METHOD"],
+    "category": "STATE_FLOW",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_class_002",
+    "query": "Which constants class defines order queue exchange routing key and close queue names?",
+    "expectedFileKeywords": ["RabbitConstants"],
+    "expectedSymbolKeywords": ["SECKILL_ORDER_QUEUE", "SECKILL_ORDER_EXCHANGE", "ORDER_CLOSE_QUEUE", "ORDER_TIMEOUT_DELAY_QUEUE"],
+    "expectedChunkTypes": ["CLASS_SUMMARY"],
+    "category": "MULTI_EVIDENCE",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_state_003",
+    "query": "When a user asks for seckill result later, where does code distinguish pending, success and failed order states?",
+    "expectedFileKeywords": ["VoucherOrderServiceImpl", "SeckillOrderResultDTO"],
+    "expectedSymbolKeywords": ["querySeckillResult", "buildSeckillResult", "VoucherOrderStatus", "PENDING"],
+    "expectedChunkTypes": ["SERVICE_METHOD", "CLASS_SUMMARY"],
+    "category": "STATE_FLOW",
+    "difficulty": "HARD"
+  },
+  {
+    "id": "hard_cross_003",
+    "query": "Which code shows the API layer, service layer and Redis Lua script participating in the seckill request path?",
+    "expectedFileKeywords": ["VoucherOrderController", "VoucherOrderServiceImpl", "seckill.lua"],
+    "expectedSymbolKeywords": ["seckillVoucher", "/voucher-order/seckill", "SECKILL_SCRIPT", "sismember"],
+    "expectedChunkTypes": ["CONTROLLER_API", "SERVICE_METHOD", "SQL_FILE"],
+    "category": "CROSS_LAYER",
+    "difficulty": "HARD"
+  }
+]

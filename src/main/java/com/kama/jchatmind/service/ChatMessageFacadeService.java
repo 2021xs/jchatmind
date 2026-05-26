@@ -11,6 +11,8 @@ import java.util.List;
 public interface ChatMessageFacadeService {
     GetChatMessagesResponse getChatMessagesBySessionId(String sessionId);
 
+    List<ChatMessageDTO> getChatMessageDTOsBySessionId(String sessionId);
+
     List<ChatMessageDTO> getChatMessagesBySessionIdRecently(String sessionId, int limit);
 
     CreateChatMessageResponse createChatMessage(CreateChatMessageRequest request);

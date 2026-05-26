@@ -10,6 +10,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class CodeSearchResult {
+    private String chunkId;
     private String repoId;
     private String filePath;
     private String fileType;
@@ -20,6 +21,12 @@ public class CodeSearchResult {
     private Integer startLine;
     private Integer endLine;
     private Double score;
+    private Double originalScore;
+    private Double boostScore;
+    private Double rerankerScore;
+    private Double finalScore;
+    private String rerankSource;
+    private String rerankReasons;
     private String contentPreview;
     private String metadata;
 }

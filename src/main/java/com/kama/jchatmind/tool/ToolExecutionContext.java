@@ -10,6 +10,9 @@ import java.util.List;
 public class ToolExecutionContext {
     private String taskId;
     private String stepId;
+    private String traceId;
     private String sessionId;
+    private String agentId;
+    private String modelName;
     private List<String> runtimeToolNames;
 }

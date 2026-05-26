@@ -49,6 +49,20 @@ public class ChatMessageFacadeServiceImpl implements ChatMessageFacadeService {
     }
 
     @Override
+    public List<ChatMessageDTO> getChatMessageDTOsBySessionId(String sessionId) {
+        List<ChatMessage> chatMessages = chatMessageMapper.selectBySessionId(sessionId);
+        List<ChatMessageDTO> result = new ArrayList<>();
+        for (ChatMessage chatMessage : chatMessages) {
+            try {
+                result.add(chatMessageConverter.toDTO(chatMessage));
+            } catch (JsonProcessingException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        return result;
+    }
+
+    @Override
     public List<ChatMessageDTO> getChatMessagesBySessionIdRecently(String sessionId, int limit) {
         List<ChatMessage> chatMessages = chatMessageMapper.selectBySessionIdRecently(sessionId, limit);
         List<ChatMessageDTO> result = new ArrayList<>();

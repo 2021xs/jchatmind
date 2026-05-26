@@ -77,6 +77,16 @@
             <artifactId>flexmark-all</artifactId>
             <version>0.64.8</version>
         </dependency>
+        <dependency>
+            <groupId>com.github.javaparser</groupId>
+            <artifactId>javaparser-core</artifactId>
+            <version>3.26.3</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.jsqlparser</groupId>
+            <artifactId>jsqlparser</artifactId>
+            <version>4.9</version>
+        </dependency>
 
         <!-- 数据访问 -->
         <dependency>
@@ -103,11 +113,6 @@
             <artifactId>spring-ai-starter-model-zhipuai</artifactId>
         </dependency>
 
-        <!-- 邮件发送 -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-mail</artifactId>
-        </dependency>
     </dependencies>
     <build>
         <plugins>

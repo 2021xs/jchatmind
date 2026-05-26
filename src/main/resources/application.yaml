@@ -3,29 +3,16 @@ spring:
     name: jchatmind
   datasource:
     url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/jchatmind}
-    username: ${POSTGRES_USER:postgres}
-    password: ${POSTGRES_PASSWORD:postgres}
+    username: ${POSTGRES_USER:your-db-user}
+    password: ${POSTGRES_PASSWORD:your-db-password}
     driver-class-name: org.postgresql.Driver
-  mail:
-    host: smtp.qq.com
-    port: 587
-    username: your-email
-    password: your-password # 邮箱授权码
-    default-encoding: UTF-8
-    properties:
-      mail:
-        smtp:
-          auth: true
-          starttls:
-            enable: true
-            required: true
   ai:
     deepseek:
-      api-key: ${DEEPSEEK_API_KEY}
-      base-url: ${DEEPSEEK_BASE_URL:https://rapi.asia/v1}
+      api-key: ${DEEPSEEK_RELAY_API_KEY:your-api-key}
+      base-url: ${DEEPSEEK_RELAY_BASE_URL:https://rapi.asia/v1}
       chat:
         options:
-          model: ${DEEPSEEK_MODEL:deepseek-v4-pro}
+          model: ${DEEPSEEK_RELAY_MODEL:deepseek-v4-pro}
     zhipuai:
       api-key: your-api-key
       base-url: https://open.bigmodel.cn/api/paas
@@ -42,15 +29,61 @@ document:
     base-path: ./data/documents
 
 jchatmind:
+  ai:
+    deepseek:
+      official:
+        api-key: ${DEEPSEEK_OFFICIAL_API_KEY:your-api-key}
+        base-url: ${DEEPSEEK_OFFICIAL_BASE_URL:https://api.deepseek.com}
+        model: ${DEEPSEEK_OFFICIAL_MODEL:deepseek-chat}
   code-rag:
+    # Final answer-time Code RAG path:
+    # RAW_VECTOR candidates + LLM evidence selector.
     allowed-roots:
       - D:/Project
       - D:/workspace
     max-file-size-bytes: 1048576
     max-files-per-import: 2000
-  tool-gateway:
-    default-timeout-ms: 10000
-    default-max-result-length: 4000
-    max-code-search-top-k: 10
-    database-query-timeout-seconds: 5
-    database-max-rows: 50
+    embedding-base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+    embedding-model: ${OLLAMA_EMBEDDING_MODEL:bge-m3}
+    embedding-warmup:
+      enabled: true
+      prompt: warmup code rag embedding
+    embedding-cache:
+      enabled: true
+      max-size: 512
+      ttl-minutes: 30
+    embedding-metadata:
+      enabled: true
+    contextual-prefix:
+      # Embedding-time structured context prefix. Requires repository re-import to affect vectors.
+      enabled: true
+    llm-selector:
+      # Tests may disable this to verify fallback; normal Agent flow keeps selector on.
+      enabled: true
+      model: deepseek-official-chat
+      max-candidate-chars: 600
+      max-selected: 5
+      timeout-ms: 30000
+    answer-evidence:
+      # Agent tool answer-time evidence path. REST /search keeps the raw candidate endpoint.
+      raw-top-k: 20
+      final-top-k: 5
+      include-selector-debug: true
+  agent:
+    database-tool:
+      max-rows: ${AGENT_DB_TOOL_MAX_ROWS:50}
+      query-timeout-seconds: ${AGENT_DB_TOOL_QUERY_TIMEOUT_SECONDS:5}
+      fetch-size: ${AGENT_DB_TOOL_FETCH_SIZE:50}
+      max-cell-chars: ${AGENT_DB_TOOL_MAX_CELL_CHARS:500}
+      max-result-length: ${AGENT_DB_TOOL_MAX_RESULT_LENGTH:4000}
+    observability:
+      stale-running-threshold-minutes: 10
+      recovery-enabled: true
+  context-compression:
+    enabled: true
+    keep-recent-rounds: 8
+    max-history-messages: 20
+    max-summary-chars: 1200
+    trigger-message-count: 30
+    max-context-chars: 16000
+    max-single-tool-result-chars: 4000

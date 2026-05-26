@@ -5,7 +5,6 @@ import lombok.Data;
 import lombok.Singular;
 
 import java.util.Collections;
-import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
 
@@ -13,15 +12,9 @@ import java.util.Set;
 @Builder
 public class ToolDefinition {
     private String toolName;
-    private String displayName;
-    private String description;
-    private ToolCategory category;
-    private ToolPermissionLevel permissionLevel;
     private boolean enabled;
-    private long timeoutMs;
     private int maxResultLength;
     private boolean allowInAgent;
-    private String riskDescription;
     @Singular
     private Set<String> aliases;
 
@@ -33,16 +26,8 @@ public class ToolDefinition {
         if (normalize(toolName).equals(normalized)) {
             return true;
         }
+        // 兼容旧名：历史配置或模型输出可能仍使用旧工具名。
         return safeAliases().stream().map(this::normalize).anyMatch(normalized::equals);
-    }
-
-    public Set<String> allNames() {
-        Set<String> names = new LinkedHashSet<>();
-        if (toolName != null) {
-            names.add(toolName);
-        }
-        names.addAll(safeAliases());
-        return names;
     }
 
     private Set<String> safeAliases() {

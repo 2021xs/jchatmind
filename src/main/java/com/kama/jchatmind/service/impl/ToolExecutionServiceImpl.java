@@ -29,12 +29,70 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
 
     @Override
     public ToolExecutionRecord beforeToolCall(ToolExecutionContext context, AssistantMessage.ToolCall toolCall) {
-        ToolDefinition definition = toolRegistry.find(toolCall.name())
-                .orElseThrow(() -> new IllegalStateException("Unknown tool: " + toolCall.name()));
-        if (!definition.isEnabled() || !definition.isAllowInAgent()) {
-            throw new IllegalStateException("Tool is disabled for agent: " + toolCall.name());
+        String toolCallId = resolveToolCallId(toolCall);
+        boolean argumentTruncated = toolCall.arguments() != null && toolCall.arguments().length() > MAX_ARGUMENT_PREVIEW;
+        ToolDefinition definition = toolRegistry.find(toolCall.name()).orElse(null);
+        if (definition == null) {
+            ToolCallLog failedLog = agentTaskLogService.startToolCall(
+                    context.getTaskId(),
+                    context.getStepId(),
+                    toolCall.name(),
+                    toolCall.name(),
+                    toolCallId,
+                    toolCall.arguments(),
+                    argumentTruncated
+            );
+            agentTaskLogService.failToolCall(
+                    failedLog.getId(),
+                    "Unknown tool: " + toolCall.name(),
+                    0,
+                    AgentTaskLogService.ERROR_TYPE_UNKNOWN_TOOL,
+                    false
+            );
+            sendEvent(context, AgentSseEvent.Type.TOOL_CALL_RESULT, payload(
+                    "taskId", context.getTaskId(),
+                    "stepId", context.getStepId(),
+                    "toolCallLogId", failedLog.getId(),
+                    "toolCallId", toolCallId,
+                    "toolName", toolCall.name(),
+                    "actualToolName", toolCall.name(),
+                    "status", AgentTaskLogService.STATUS_FAILED,
+                    "errorType", AgentTaskLogService.ERROR_TYPE_UNKNOWN_TOOL,
+                    "errorMessage", "Unknown tool: " + toolCall.name(),
+                    "latencyMs", 0
+            ));
+            throw new IllegalStateException("Unknown tool: " + toolCall.name());
         }
         if (!toolRegistry.isAllowedForRuntime(toolCall.name(), context.getRuntimeToolNames())) {
+            ToolCallLog blockedLog = agentTaskLogService.startToolCall(
+                    context.getTaskId(),
+                    context.getStepId(),
+                    definition.getToolName(),
+                    toolCall.name(),
+                    toolCallId,
+                    toolCall.arguments(),
+                    argumentTruncated
+            );
+            agentTaskLogService.failToolCall(
+                    blockedLog.getId(),
+                    "Tool is not allowed in current agent runtime: " + toolCall.name(),
+                    0,
+                    AgentTaskLogService.ERROR_TYPE_POLICY_REJECTED,
+                    true
+            );
+            sendEvent(context, AgentSseEvent.Type.TOOL_CALL_RESULT, payload(
+                    "taskId", context.getTaskId(),
+                    "stepId", context.getStepId(),
+                    "toolCallLogId", blockedLog.getId(),
+                    "toolCallId", toolCallId,
+                    "toolName", definition.getToolName(),
+                    "actualToolName", toolCall.name(),
+                    "status", AgentTaskLogService.STATUS_FAILED,
+                    "errorType", AgentTaskLogService.ERROR_TYPE_POLICY_REJECTED,
+                    "blockedByPolicy", true,
+                    "errorMessage", "Tool is not allowed in current agent runtime: " + toolCall.name(),
+                    "latencyMs", 0
+            ));
             throw new IllegalStateException("Tool is not allowed in current agent runtime: " + toolCall.name());
         }
 
@@ -42,21 +100,28 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
                 context.getTaskId(),
                 context.getStepId(),
                 definition.getToolName(),
-                toolCall.arguments()
+                toolCall.name(),
+                toolCallId,
+                toolCall.arguments(),
+                argumentTruncated
         );
         ToolExecutionRecord record = ToolExecutionRecord.builder()
-                .toolCallId(resolveToolCallId(toolCall))
+                .toolCallId(toolCallId)
                 .actualToolName(toolCall.name())
                 .canonicalToolName(definition.getToolName())
                 .toolCallLogId(toolCallLog.getId())
                 .startedAtMillis(System.currentTimeMillis())
+                .argumentTruncated(argumentTruncated)
                 .build();
         sendEvent(context, AgentSseEvent.Type.TOOL_CALL_START, payload(
+                "taskId", context.getTaskId(),
                 "stepId", context.getStepId(),
                 "toolCallLogId", toolCallLog.getId(),
                 "toolCallId", record.getToolCallId(),
                 "toolName", definition.getToolName(),
                 "actualToolName", toolCall.name(),
+                "status", AgentTaskLogService.STATUS_RUNNING,
+                "argumentTruncated", argumentTruncated,
                 "argumentsPreview", truncate(toolCall.arguments(), MAX_ARGUMENT_PREVIEW)
         ));
         return record;
@@ -66,13 +131,17 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
     public void afterToolSuccess(ToolExecutionContext context, ToolExecutionRecord record, String result) {
         long latencyMs = System.currentTimeMillis() - record.getStartedAtMillis();
         String resultSummary = toolRegistry.truncateResult(record.getCanonicalToolName(), result);
-        agentTaskLogService.finishToolCall(record.getToolCallLogId(), resultSummary, latencyMs);
+        boolean resultTruncated = result != null && resultSummary != null && resultSummary.length() < result.length();
+        agentTaskLogService.finishToolCall(record.getToolCallLogId(), resultSummary, latencyMs, resultTruncated);
         sendEvent(context, AgentSseEvent.Type.TOOL_CALL_RESULT, payload(
+                "taskId", context.getTaskId(),
+                "stepId", context.getStepId(),
                 "toolCallLogId", record.getToolCallLogId(),
                 "toolCallId", record.getToolCallId(),
                 "toolName", record.getCanonicalToolName(),
                 "actualToolName", record.getActualToolName(),
                 "status", AgentTaskLogService.STATUS_SUCCESS,
+                "resultTruncated", resultTruncated,
                 "resultSummary", resultSummary,
                 "latencyMs", latencyMs
         ));
@@ -82,13 +151,17 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
     public void afterToolFailure(ToolExecutionContext context, ToolExecutionRecord record, Throwable error) {
         long latencyMs = System.currentTimeMillis() - record.getStartedAtMillis();
         String errorMessage = error == null ? "Unknown tool execution error" : error.getMessage();
-        agentTaskLogService.failToolCall(record.getToolCallLogId(), errorMessage, latencyMs);
+        String errorType = classifyError(error);
+        agentTaskLogService.failToolCall(record.getToolCallLogId(), errorMessage, latencyMs, errorType, false);
         sendEvent(context, AgentSseEvent.Type.TOOL_CALL_RESULT, payload(
+                "taskId", context.getTaskId(),
+                "stepId", context.getStepId(),
                 "toolCallLogId", record.getToolCallLogId(),
                 "toolCallId", record.getToolCallId(),
                 "toolName", record.getCanonicalToolName(),
                 "actualToolName", record.getActualToolName(),
                 "status", AgentTaskLogService.STATUS_FAILED,
+                "errorType", errorType,
                 "errorMessage", truncate(errorMessage, MAX_ARGUMENT_PREVIEW),
                 "latencyMs", latencyMs
         ));
@@ -126,6 +199,20 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
             payload.put(String.valueOf(keyValues[i]), keyValues[i + 1]);
         }
         return payload;
+    }
+
+    private String classifyError(Throwable error) {
+        if (error == null) {
+            return AgentTaskLogService.ERROR_TYPE_UNKNOWN_ERROR;
+        }
+        String message = error.getMessage() == null ? "" : error.getMessage().toLowerCase();
+        if (message.contains("parse") || message.contains("argument")) {
+            return AgentTaskLogService.ERROR_TYPE_ARGUMENT_PARSE_ERROR;
+        }
+        if (message.contains("timeout") || message.contains("timed out")) {
+            return AgentTaskLogService.ERROR_TYPE_TOOL_TIMEOUT;
+        }
+        return AgentTaskLogService.ERROR_TYPE_TOOL_EXCEPTION;
     }
 
     private String truncate(String value, int maxLength) {

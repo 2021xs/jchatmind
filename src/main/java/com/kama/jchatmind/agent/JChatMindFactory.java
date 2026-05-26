@@ -15,6 +15,7 @@ import com.kama.jchatmind.model.entity.Agent;
 import com.kama.jchatmind.model.entity.KnowledgeBase;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
+import com.kama.jchatmind.service.ConversationContextCompressor;
 import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.service.ToolFacadeService;
@@ -57,6 +58,7 @@ public class JChatMindFactory {
     private final AgentTaskLogService agentTaskLogService;
     private final ToolExecutionService toolExecutionService;
     private final ToolRegistry toolRegistry;
+    private final ConversationContextCompressor conversationContextCompressor;
 
     private AgentDTO agentConfig;
 
@@ -72,7 +74,8 @@ public class JChatMindFactory {
             ChatMessageConverter chatMessageConverter,
             AgentTaskLogService agentTaskLogService,
             ToolExecutionService toolExecutionService,
-            ToolRegistry toolRegistry
+            ToolRegistry toolRegistry,
+            ConversationContextCompressor conversationContextCompressor
     ) {
         this.chatClientRegistry = chatClientRegistry;
         this.sseService = sseService;
@@ -86,16 +89,23 @@ public class JChatMindFactory {
         this.agentTaskLogService = agentTaskLogService;
         this.toolExecutionService = toolExecutionService;
         this.toolRegistry = toolRegistry;
+        this.conversationContextCompressor = conversationContextCompressor;
     }
 
     private Agent loadAgent(String agentId) {
         return agentMapper.selectById(agentId);
     }
 
-    private List<Message> loadMemory(String chatSessionId) {
-        int messageLength = agentConfig.getChatOptions().getMessageLength();
-        List<ChatMessageDTO> chatMessages = chatMessageFacadeService.getChatMessagesBySessionIdRecently(chatSessionId, messageLength);
+    private List<Message> loadMemory(String chatSessionId, String model) {
+        List<ChatMessageDTO> allMessages = chatMessageFacadeService.getChatMessageDTOsBySessionId(chatSessionId);
+        ConversationContextCompressor.CompressedContext compressedContext =
+                conversationContextCompressor.compressIfNeeded(chatSessionId, model, allMessages);
+        List<ChatMessageDTO> chatMessages = compressedContext.recentMessages();
         List<Message> memory = new ArrayList<>();
+        if (StringUtils.hasLength(compressedContext.summary())) {
+            memory.add(new SystemMessage("[历史摘要]\n" + compressedContext.summary()
+                    + "\n\n说明：历史摘要只是辅助上下文。如果摘要与最近用户输入或检索结果冲突，以最近用户输入和检索结果为准。"));
+        }
         for (ChatMessageDTO chatMessageDTO : chatMessages) {
             switch (chatMessageDTO.getRole()) {
                 case SYSTEM:
@@ -111,10 +121,16 @@ public class JChatMindFactory {
                 case ASSISTANT:
                     memory.add(AssistantMessage.builder()
                             .content(chatMessageDTO.getContent())
-                            .toolCalls(chatMessageDTO.getMetadata().getToolCalls())
+                            .toolCalls(chatMessageDTO.getMetadata() == null || chatMessageDTO.getMetadata().getToolCalls() == null
+                                    ? List.of()
+                                    : chatMessageDTO.getMetadata().getToolCalls())
                             .build());
                     break;
                 case TOOL:
+                    if (chatMessageDTO.getMetadata() == null || chatMessageDTO.getMetadata().getToolResponse() == null) {
+                        log.warn("Skip tool message without tool response metadata: messageId={}", chatMessageDTO.getId());
+                        break;
+                    }
                     memory.add(ToolResponseMessage.builder()
                             .responses(List.of(chatMessageDTO.getMetadata().getToolResponse()))
                             .build());
@@ -217,6 +233,7 @@ public class JChatMindFactory {
         }
         return new JChatMind(
                 agent.getId(),
+                agent.getModel(),
                 agent.getName(),
                 agent.getDescription(),
                 agent.getSystemPrompt(),
@@ -231,6 +248,7 @@ public class JChatMindFactory {
                 chatMessageFacadeService,
                 chatMessageConverter,
                 agentTaskLogService,
+                conversationContextCompressor,
                 userMessageId,
                 runtimeToolNames
         );
@@ -243,7 +261,7 @@ public class JChatMindFactory {
     public JChatMind create(String agentId, String chatSessionId, String userMessageId) {
         Agent agent = loadAgent(agentId);
         AgentDTO agentConfig = toAgentConfig(agent);
-        List<Message> memory = loadMemory(chatSessionId);
+        List<Message> memory = loadMemory(chatSessionId, agent.getModel());
 
         List<KnowledgeBaseDTO> knowledgeBases = resolveRuntimeKnowledgeBases(agentConfig);
         List<Tool> runtimeTools = resolveRuntimeTools(agentConfig);

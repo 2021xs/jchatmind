@@ -9,6 +9,7 @@ import com.kama.jchatmind.model.response.SearchCodeRepositoryResponse;
 import com.kama.jchatmind.service.CodeRepositoryService;
 import com.kama.jchatmind.service.CodeSearchService;
 import lombok.AllArgsConstructor;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -34,6 +35,12 @@ public class CodeRepositoryController {
     @GetMapping("/code-repositories")
     public ApiResponse<GetCodeRepositoriesResponse> getRepositories() {
         return ApiResponse.success(codeRepositoryService.getRepositories());
+    }
+
+    @DeleteMapping("/code-repositories/{repoId}")
+    public ApiResponse<Void> deleteRepository(@PathVariable String repoId) {
+        codeRepositoryService.deleteRepository(repoId);
+        return ApiResponse.success(null);
     }
 
     @GetMapping("/code-repositories/{repoId}/search")

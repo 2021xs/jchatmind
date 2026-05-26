@@ -11,4 +11,5 @@ public class ToolExecutionRecord {
     private String canonicalToolName;
     private String toolCallLogId;
     private long startedAtMillis;
+    private boolean argumentTruncated;
 }

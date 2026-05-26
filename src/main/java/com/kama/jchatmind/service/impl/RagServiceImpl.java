@@ -1,6 +1,7 @@
 package com.kama.jchatmind.service.impl;
 
 import com.kama.jchatmind.mapper.ChunkBgeM3Mapper;
+import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.model.dto.RagSearchResult;
 import com.kama.jchatmind.model.entity.ChunkBgeM3;
 import com.kama.jchatmind.service.RagService;
@@ -18,10 +19,12 @@ public class RagServiceImpl implements RagService {
     // 封装本地的模型调用
     private final WebClient webClient;
     private final ChunkBgeM3Mapper chunkBgeM3Mapper;
+    private final CodeRagProperties codeRagProperties;
 
-    public RagServiceImpl(WebClient.Builder builder, ChunkBgeM3Mapper chunkBgeM3Mapper) {
-        this.webClient = builder.baseUrl("http://localhost:11434").build();
+    public RagServiceImpl(WebClient.Builder builder, ChunkBgeM3Mapper chunkBgeM3Mapper, CodeRagProperties codeRagProperties) {
+        this.webClient = builder.baseUrl(codeRagProperties.getEmbeddingBaseUrl()).build();
         this.chunkBgeM3Mapper = chunkBgeM3Mapper;
+        this.codeRagProperties = codeRagProperties;
     }
 
     @Data
@@ -33,7 +36,7 @@ public class RagServiceImpl implements RagService {
         EmbeddingResponse resp = webClient.post()
                 .uri("/api/embeddings")
                 .bodyValue(Map.of(
-                        "model", "bge-m3",
+                        "model", codeRagProperties.getEmbeddingModel(),
                         "prompt", text
                 ))
                 .retrieve()
