@@ -22,7 +22,10 @@ public class SseServiceImpl implements SseService {
     @Override
     public SseEmitter connect(String chatSessionId) {
         SseEmitter emitter = new SseEmitter(30 * 60 * 1000L);
-        clients.put(chatSessionId, emitter);
+        SseEmitter previous = clients.put(chatSessionId, emitter);
+        if (previous != null) {
+            previous.complete();
+        }
 
         try {
             emitter.send(SseEmitter.event()
@@ -30,14 +33,14 @@ public class SseServiceImpl implements SseService {
                     .data("connected")
             );
         } catch (IOException e) {
+            clients.remove(chatSessionId, emitter);
+            emitter.completeWithError(e);
             throw new RuntimeException(e);
         }
 
-        emitter.onCompletion(() -> {
-            clients.remove(chatSessionId);
-        });
-        emitter.onTimeout(() -> clients.remove(chatSessionId));
-        emitter.onError((error) -> clients.remove(chatSessionId));
+        emitter.onCompletion(() -> clients.remove(chatSessionId, emitter));
+        emitter.onTimeout(() -> clients.remove(chatSessionId, emitter));
+        emitter.onError((error) -> clients.remove(chatSessionId, emitter));
 
         return emitter;
     }
@@ -55,6 +58,7 @@ public class SseServiceImpl implements SseService {
                         .data(sseMessageStr)
                 );
             } catch (IOException e) {
+                completeWithError(chatSessionId, e);
                 throw new RuntimeException(e);
             }
         } else {
@@ -75,8 +79,25 @@ public class SseServiceImpl implements SseService {
                         .data(eventStr)
                 );
             } catch (IOException e) {
+                completeWithError(chatSessionId, e);
                 throw new RuntimeException(e);
             }
+        }
+    }
+
+    @Override
+    public void complete(String chatSessionId) {
+        SseEmitter emitter = clients.remove(chatSessionId);
+        if (emitter != null) {
+            emitter.complete();
+        }
+    }
+
+    @Override
+    public void completeWithError(String chatSessionId, Throwable error) {
+        SseEmitter emitter = clients.remove(chatSessionId);
+        if (emitter != null) {
+            emitter.completeWithError(error);
         }
     }
 }
