@@ -11,4 +11,8 @@ public interface SseService {
     void send(String chatSessionId, SseMessage message);
 
     void sendEvent(String chatSessionId, AgentSseEvent event);
+
+    void complete(String chatSessionId);
+
+    void completeWithError(String chatSessionId, Throwable error);
 }

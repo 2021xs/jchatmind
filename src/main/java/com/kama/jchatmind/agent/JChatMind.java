@@ -683,6 +683,12 @@ public class JChatMind {
                     "finishReason", AgentTaskLogService.FINISH_REASON_ERROR,
                     "errorMessage", truncate(e.getMessage())
             ));
+            try {
+                sseService.complete(this.chatSessionId);
+            } catch (Exception completeError) {
+                log.warn("Failed to complete SSE after Agent error: taskId={}, error={}",
+                        currentTaskId, completeError.getMessage());
+            }
             log.error("Error running agent", e);
             throw new RuntimeException("Error running agent", e);
         } finally {
