@@ -3,6 +3,7 @@ package com.kama.jchatmind.agent;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.kama.jchatmind.agent.tools.Tool;
 import com.kama.jchatmind.config.ChatClientRegistry;
+import com.kama.jchatmind.config.ToolCorrectionProperties;
 import com.kama.jchatmind.converter.AgentConverter;
 import com.kama.jchatmind.converter.ChatMessageConverter;
 import com.kama.jchatmind.converter.KnowledgeBaseConverter;
@@ -20,6 +21,7 @@ import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.service.ToolFacadeService;
 import com.kama.jchatmind.tool.ToolRegistry;
+import com.kama.jchatmind.tool.ToolFailureClassifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -59,6 +61,8 @@ public class JChatMindFactory {
     private final ToolExecutionService toolExecutionService;
     private final ToolRegistry toolRegistry;
     private final ConversationContextCompressor conversationContextCompressor;
+    private final ToolCorrectionProperties toolCorrectionProperties;
+    private final ToolFailureClassifier toolFailureClassifier;
 
     private AgentDTO agentConfig;
 
@@ -75,7 +79,9 @@ public class JChatMindFactory {
             AgentTaskLogService agentTaskLogService,
             ToolExecutionService toolExecutionService,
             ToolRegistry toolRegistry,
-            ConversationContextCompressor conversationContextCompressor
+            ConversationContextCompressor conversationContextCompressor,
+            ToolCorrectionProperties toolCorrectionProperties,
+            ToolFailureClassifier toolFailureClassifier
     ) {
         this.chatClientRegistry = chatClientRegistry;
         this.sseService = sseService;
@@ -90,6 +96,8 @@ public class JChatMindFactory {
         this.toolExecutionService = toolExecutionService;
         this.toolRegistry = toolRegistry;
         this.conversationContextCompressor = conversationContextCompressor;
+        this.toolCorrectionProperties = toolCorrectionProperties;
+        this.toolFailureClassifier = toolFailureClassifier;
     }
 
     private Agent loadAgent(String agentId) {
@@ -250,7 +258,9 @@ public class JChatMindFactory {
                 agentTaskLogService,
                 conversationContextCompressor,
                 userMessageId,
-                runtimeToolNames
+                runtimeToolNames,
+                toolCorrectionProperties,
+                toolFailureClassifier
         );
     }
 

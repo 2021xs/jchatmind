@@ -10,4 +10,9 @@ public interface ToolExecutionService {
     void afterToolSuccess(ToolExecutionContext context, ToolExecutionRecord record, String result);
 
     void afterToolFailure(ToolExecutionContext context, ToolExecutionRecord record, Throwable error);
+
+    default void afterToolFailure(ToolExecutionContext context, ToolExecutionRecord record, Throwable error,
+                                  boolean correctionRequested) {
+        afterToolFailure(context, record, error);
+    }
 }

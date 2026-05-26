@@ -8,6 +8,8 @@ import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.tool.ToolDefinition;
 import com.kama.jchatmind.tool.ToolExecutionContext;
 import com.kama.jchatmind.tool.ToolExecutionRecord;
+import com.kama.jchatmind.tool.ToolFailureClassifier;
+import com.kama.jchatmind.tool.ToolFailureDecision;
 import com.kama.jchatmind.tool.ToolRegistry;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +28,7 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
     private final ToolRegistry toolRegistry;
     private final AgentTaskLogService agentTaskLogService;
     private final SseService sseService;
+    private final ToolFailureClassifier toolFailureClassifier;
 
     @Override
     public ToolExecutionRecord beforeToolCall(ToolExecutionContext context, AssistantMessage.ToolCall toolCall) {
@@ -149,9 +152,18 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
 
     @Override
     public void afterToolFailure(ToolExecutionContext context, ToolExecutionRecord record, Throwable error) {
+        afterToolFailure(context, record, error, false);
+    }
+
+    @Override
+    public void afterToolFailure(ToolExecutionContext context, ToolExecutionRecord record, Throwable error,
+                                 boolean correctionRequested) {
         long latencyMs = System.currentTimeMillis() - record.getStartedAtMillis();
-        String errorMessage = error == null ? "Unknown tool execution error" : error.getMessage();
-        String errorType = classifyError(error);
+        ToolFailureDecision decision = toolFailureClassifier.classify(error);
+        String errorMessage = correctionRequested
+                ? decision.sanitizedMessage() + " (fed back to model for self-correction)"
+                : decision.sanitizedMessage();
+        String errorType = decision.errorType();
         agentTaskLogService.failToolCall(record.getToolCallLogId(), errorMessage, latencyMs, errorType, false);
         sendEvent(context, AgentSseEvent.Type.TOOL_CALL_RESULT, payload(
                 "taskId", context.getTaskId(),
@@ -162,6 +174,7 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
                 "actualToolName", record.getActualToolName(),
                 "status", AgentTaskLogService.STATUS_FAILED,
                 "errorType", errorType,
+                "correctionRequested", correctionRequested,
                 "errorMessage", truncate(errorMessage, MAX_ARGUMENT_PREVIEW),
                 "latencyMs", latencyMs
         ));
@@ -199,20 +212,6 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
             payload.put(String.valueOf(keyValues[i]), keyValues[i + 1]);
         }
         return payload;
-    }
-
-    private String classifyError(Throwable error) {
-        if (error == null) {
-            return AgentTaskLogService.ERROR_TYPE_UNKNOWN_ERROR;
-        }
-        String message = error.getMessage() == null ? "" : error.getMessage().toLowerCase();
-        if (message.contains("parse") || message.contains("argument")) {
-            return AgentTaskLogService.ERROR_TYPE_ARGUMENT_PARSE_ERROR;
-        }
-        if (message.contains("timeout") || message.contains("timed out")) {
-            return AgentTaskLogService.ERROR_TYPE_TOOL_TIMEOUT;
-        }
-        return AgentTaskLogService.ERROR_TYPE_TOOL_EXCEPTION;
     }
 
     private String truncate(String value, int maxLength) {

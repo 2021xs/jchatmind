@@ -1,6 +1,7 @@
 package com.kama.jchatmind.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kama.jchatmind.config.ToolCorrectionProperties;
 import com.kama.jchatmind.converter.ChatMessageConverter;
 import com.kama.jchatmind.mapper.AgentStepMapper;
 import com.kama.jchatmind.mapper.AgentTaskMapper;
@@ -15,6 +16,7 @@ import com.kama.jchatmind.service.ConversationContextCompressor;
 import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.service.impl.AgentTaskLogServiceImpl;
+import com.kama.jchatmind.tool.ToolFailureClassifier;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.client.ChatClient;
@@ -109,7 +111,9 @@ class JChatMindRealRunObservabilityTest {
                 logService,
                 conversationContextCompressor,
                 "33333333-3333-3333-3333-333333333333",
-                List.of()
+                List.of(),
+                new ToolCorrectionProperties(),
+                new ToolFailureClassifier()
         );
 
         agent.run();

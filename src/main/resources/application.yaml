@@ -79,6 +79,9 @@ jchatmind:
     observability:
       stale-running-threshold-minutes: 10
       recovery-enabled: true
+    tool-correction:
+      enabled: true
+      max-attempts: 3
   context-compression:
     enabled: true
     keep-recent-rounds: 8
