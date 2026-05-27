@@ -44,6 +44,9 @@ public interface AgentTaskLogService {
 
     void failTask(String taskId, String errorMessage, Integer actualSteps, Integer toolCallCount);
 
+    void failStepAndTask(String stepId, String taskId, String errorMessage,
+                         Integer actualSteps, Integer toolCallCount);
+
     void heartbeatTask(String taskId);
 
     AgentStep startStep(String taskId, int stepNo, String stepType, String inputSummary);
@@ -62,6 +65,11 @@ public interface AgentTaskLogService {
 
     ToolCallLog startToolCall(String taskId, String stepId, String toolName, String actualToolName,
                               String toolCallId, String argumentsJson, boolean argumentTruncated);
+
+    ToolCallLog startAndFailToolCall(String taskId, String stepId, String toolName, String actualToolName,
+                                     String toolCallId, String argumentsJson, boolean argumentTruncated,
+                                     String errorMessage, long latencyMs, String errorType,
+                                     boolean blockedByPolicy);
 
     void finishToolCall(String toolCallLogId, String resultSummary, long latencyMs);
 

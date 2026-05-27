@@ -650,9 +650,11 @@ public class JChatMind {
         } catch (Exception e) {
             agentState = AgentState.ERROR;
             if (currentStep != null) {
-                agentTaskLogService.failStep(currentStep.getId(), e.getMessage());
+                agentTaskLogService.failStepAndTask(currentStep.getId(), currentTaskId,
+                        e.getMessage(), nextStepNo - 1, toolCallCount);
+            } else {
+                agentTaskLogService.failTask(currentTaskId, e.getMessage(), nextStepNo - 1, toolCallCount);
             }
-            agentTaskLogService.failTask(currentTaskId, e.getMessage(), nextStepNo - 1, toolCallCount);
             sendAgentEvent(AgentSseEvent.Type.ERROR, payload(
                     "status", AgentTaskLogService.STATUS_FAILED,
                     "stepId", currentStep == null ? null : currentStep.getId(),

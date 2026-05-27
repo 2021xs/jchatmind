@@ -36,17 +36,14 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
         boolean argumentTruncated = toolCall.arguments() != null && toolCall.arguments().length() > MAX_ARGUMENT_PREVIEW;
         ToolDefinition definition = toolRegistry.find(toolCall.name()).orElse(null);
         if (definition == null) {
-            ToolCallLog failedLog = agentTaskLogService.startToolCall(
+            ToolCallLog failedLog = agentTaskLogService.startAndFailToolCall(
                     context.getTaskId(),
                     context.getStepId(),
                     toolCall.name(),
                     toolCall.name(),
                     toolCallId,
                     toolCall.arguments(),
-                    argumentTruncated
-            );
-            agentTaskLogService.failToolCall(
-                    failedLog.getId(),
+                    argumentTruncated,
                     "Unknown tool: " + toolCall.name(),
                     0,
                     AgentTaskLogService.ERROR_TYPE_UNKNOWN_TOOL,
@@ -67,17 +64,14 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
             throw new IllegalStateException("Unknown tool: " + toolCall.name());
         }
         if (!toolRegistry.isAllowedForRuntime(toolCall.name(), context.getRuntimeToolNames())) {
-            ToolCallLog blockedLog = agentTaskLogService.startToolCall(
+            ToolCallLog blockedLog = agentTaskLogService.startAndFailToolCall(
                     context.getTaskId(),
                     context.getStepId(),
                     definition.getToolName(),
                     toolCall.name(),
                     toolCallId,
                     toolCall.arguments(),
-                    argumentTruncated
-            );
-            agentTaskLogService.failToolCall(
-                    blockedLog.getId(),
+                    argumentTruncated,
                     "Tool is not allowed in current agent runtime: " + toolCall.name(),
                     0,
                     AgentTaskLogService.ERROR_TYPE_POLICY_REJECTED,

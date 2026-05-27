@@ -91,19 +91,18 @@ public class AgentTaskLogServiceImpl implements AgentTaskLogService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void failTask(String taskId, String errorMessage, Integer actualSteps, Integer toolCallCount) {
         LocalDateTime now = LocalDateTime.now();
-        AgentTask existing = agentTaskMapper.selectById(taskId);
-        agentTaskMapper.updateById(AgentTask.builder()
-                .id(taskId)
-                .status(STATUS_FAILED)
-                .finishReason(FINISH_REASON_ERROR)
-                .actualSteps(actualSteps)
-                .toolCallCount(toolCallCount)
-                .latencyMs(latencyMs(existing == null ? null : existing.getStartedAt(), now))
-                .heartbeatAt(now)
-                .finishedAt(now)
-                .updatedAt(now)
-                .errorMessage(truncate(errorMessage))
-                .build());
+        failTask(taskId, errorMessage, actualSteps, toolCallCount, now);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void failStepAndTask(String stepId, String taskId, String errorMessage,
+                                Integer actualSteps, Integer toolCallCount) {
+        LocalDateTime now = LocalDateTime.now();
+        if (stepId != null) {
+            failStep(stepId, errorMessage, FINISH_REASON_ERROR, now, false);
+        }
+        failTask(taskId, errorMessage, actualSteps, toolCallCount, now);
     }
 
     @Override
@@ -178,6 +177,11 @@ public class AgentTaskLogServiceImpl implements AgentTaskLogService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void failStep(String stepId, String errorMessage, String finishReason) {
         LocalDateTime now = LocalDateTime.now();
+        failStep(stepId, errorMessage, finishReason, now, true);
+    }
+
+    private void failStep(String stepId, String errorMessage, String finishReason,
+                          LocalDateTime now, boolean heartbeatTask) {
         AgentStep existing = agentStepMapper.selectById(stepId);
         agentStepMapper.updateById(AgentStep.builder()
                 .id(stepId)
@@ -188,7 +192,7 @@ public class AgentTaskLogServiceImpl implements AgentTaskLogService {
                 .updatedAt(now)
                 .errorMessage(truncate(errorMessage))
                 .build());
-        if (existing != null) {
+        if (heartbeatTask && existing != null) {
             heartbeatTask(existing.getTaskId());
         }
     }
@@ -206,23 +210,34 @@ public class AgentTaskLogServiceImpl implements AgentTaskLogService {
                                      String toolCallId, String argumentsJson, boolean argumentTruncated) {
         validateStepBelongsToTask(taskId, stepId);
         LocalDateTime now = LocalDateTime.now();
-        ToolCallLog log = ToolCallLog.builder()
-                .taskId(taskId)
-                .stepId(stepId)
-                .toolName(toolName)
-                .actualToolName(actualToolName)
-                .toolCallId(toolCallId)
-                .argumentsJson(normalizeJson(argumentsJson))
-                .status(STATUS_RUNNING)
-                .blockedByPolicy(false)
-                .argumentTruncated(argumentTruncated)
-                .resultTruncated(false)
-                .retryCount(0)
-                .startedAt(now)
-                .createdAt(now)
-                .updatedAt(now)
-                .build();
+        ToolCallLog log = newRunningToolCall(taskId, stepId, toolName, actualToolName,
+                toolCallId, argumentsJson, argumentTruncated, now);
         toolCallLogMapper.insert(log);
+        heartbeatTask(taskId);
+        return log;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public ToolCallLog startAndFailToolCall(String taskId, String stepId, String toolName, String actualToolName,
+                                            String toolCallId, String argumentsJson, boolean argumentTruncated,
+                                            String errorMessage, long latencyMs, String errorType,
+                                            boolean blockedByPolicy) {
+        validateStepBelongsToTask(taskId, stepId);
+        LocalDateTime now = LocalDateTime.now();
+        ToolCallLog log = newRunningToolCall(taskId, stepId, toolName, actualToolName,
+                toolCallId, argumentsJson, argumentTruncated, now);
+        toolCallLogMapper.insert(log);
+        toolCallLogMapper.updateById(ToolCallLog.builder()
+                .id(log.getId())
+                .status(STATUS_FAILED)
+                .errorMessage(truncate(errorMessage))
+                .latencyMs(latencyMs)
+                .errorType(errorType)
+                .blockedByPolicy(blockedByPolicy)
+                .finishedAt(now)
+                .updatedAt(now)
+                .build());
         heartbeatTask(taskId);
         return log;
     }
@@ -270,6 +285,44 @@ public class AgentTaskLogServiceImpl implements AgentTaskLogService {
                 .finishedAt(now)
                 .updatedAt(now)
                 .build());
+    }
+
+    private void failTask(String taskId, String errorMessage, Integer actualSteps,
+                          Integer toolCallCount, LocalDateTime now) {
+        AgentTask existing = agentTaskMapper.selectById(taskId);
+        agentTaskMapper.updateById(AgentTask.builder()
+                .id(taskId)
+                .status(STATUS_FAILED)
+                .finishReason(FINISH_REASON_ERROR)
+                .actualSteps(actualSteps)
+                .toolCallCount(toolCallCount)
+                .latencyMs(latencyMs(existing == null ? null : existing.getStartedAt(), now))
+                .heartbeatAt(now)
+                .finishedAt(now)
+                .updatedAt(now)
+                .errorMessage(truncate(errorMessage))
+                .build());
+    }
+
+    private ToolCallLog newRunningToolCall(String taskId, String stepId, String toolName, String actualToolName,
+                                           String toolCallId, String argumentsJson, boolean argumentTruncated,
+                                           LocalDateTime now) {
+        return ToolCallLog.builder()
+                .taskId(taskId)
+                .stepId(stepId)
+                .toolName(toolName)
+                .actualToolName(actualToolName)
+                .toolCallId(toolCallId)
+                .argumentsJson(normalizeJson(argumentsJson))
+                .status(STATUS_RUNNING)
+                .blockedByPolicy(false)
+                .argumentTruncated(argumentTruncated)
+                .resultTruncated(false)
+                .retryCount(0)
+                .startedAt(now)
+                .createdAt(now)
+                .updatedAt(now)
+                .build();
     }
 
     @Override

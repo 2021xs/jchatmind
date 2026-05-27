@@ -237,6 +237,6 @@ class JChatMindToolCorrectionTest {
 
         verify(toolExecutionService).afterToolFailure(any(), eq(record), any(IllegalArgumentException.class), eq(true));
         verify(toolExecutionService).afterToolFailure(any(), eq(record), any(IllegalArgumentException.class), eq(false));
-        verify(logService).failTask(eq("task-1"), anyString(), anyInt(), anyInt());
+        verify(logService).failStepAndTask(anyString(), eq("task-1"), anyString(), anyInt(), anyInt());
     }
 }

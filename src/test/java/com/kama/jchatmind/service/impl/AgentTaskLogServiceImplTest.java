@@ -121,6 +121,56 @@ class AgentTaskLogServiceImplTest {
     }
 
     @Test
+    void startAndFailToolCallWritesOneFailedPreflightTransition() {
+        AgentTaskLogServiceImpl service = service();
+        when(agentStepMapper.selectById("step-1")).thenReturn(AgentStep.builder()
+                .id("step-1")
+                .taskId("task-1")
+                .build());
+
+        service.startAndFailToolCall("task-1", "step-1", "databaseQuery", "databaseQuery",
+                "call-1", "{\"sql\":\"drop table t\"}", false,
+                "Tool is not allowed", 0,
+                AgentTaskLogService.ERROR_TYPE_POLICY_REJECTED, true);
+
+        ArgumentCaptor<ToolCallLog> insertCaptor = ArgumentCaptor.forClass(ToolCallLog.class);
+        ArgumentCaptor<ToolCallLog> updateCaptor = ArgumentCaptor.forClass(ToolCallLog.class);
+        verify(toolCallLogMapper).insert(insertCaptor.capture());
+        verify(toolCallLogMapper).updateById(updateCaptor.capture());
+        assertEquals(AgentTaskLogService.STATUS_RUNNING, insertCaptor.getValue().getStatus());
+        assertEquals(AgentTaskLogService.STATUS_FAILED, updateCaptor.getValue().getStatus());
+        assertEquals(AgentTaskLogService.ERROR_TYPE_POLICY_REJECTED, updateCaptor.getValue().getErrorType());
+        assertEquals(true, updateCaptor.getValue().getBlockedByPolicy());
+    }
+
+    @Test
+    void failStepAndTaskWritesBothFailuresInOneServiceCall() {
+        AgentTaskLogServiceImpl service = service();
+        when(agentStepMapper.selectById("step-1")).thenReturn(AgentStep.builder()
+                .id("step-1")
+                .taskId("task-1")
+                .startedAt(LocalDateTime.now().minusSeconds(3))
+                .build());
+        when(agentTaskMapper.selectById("task-1")).thenReturn(AgentTask.builder()
+                .id("task-1")
+                .startedAt(LocalDateTime.now().minusSeconds(5))
+                .build());
+
+        service.failStepAndTask("step-1", "task-1", "boom", 4, 2);
+
+        ArgumentCaptor<AgentStep> stepUpdate = ArgumentCaptor.forClass(AgentStep.class);
+        ArgumentCaptor<AgentTask> taskUpdate = ArgumentCaptor.forClass(AgentTask.class);
+        verify(agentStepMapper).updateById(stepUpdate.capture());
+        verify(agentTaskMapper).updateById(taskUpdate.capture());
+        assertEquals(AgentTaskLogService.STATUS_FAILED, stepUpdate.getValue().getStatus());
+        assertEquals(AgentTaskLogService.STATUS_FAILED, taskUpdate.getValue().getStatus());
+        assertEquals(AgentTaskLogService.FINISH_REASON_ERROR, stepUpdate.getValue().getFinishReason());
+        assertEquals(AgentTaskLogService.FINISH_REASON_ERROR, taskUpdate.getValue().getFinishReason());
+        assertEquals(4, taskUpdate.getValue().getActualSteps());
+        assertEquals(2, taskUpdate.getValue().getToolCallCount());
+    }
+
+    @Test
     void startToolCallRejectsStepFromDifferentTask() {
         AgentTaskLogServiceImpl service = service();
         when(agentStepMapper.selectById("step-1")).thenReturn(AgentStep.builder()
