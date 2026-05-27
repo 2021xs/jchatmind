@@ -58,6 +58,8 @@ public class JChatMindFactory {
     private final ChatMessageFacadeService chatMessageFacadeService;
     private final ChatMessageConverter chatMessageConverter;
     private final AgentTaskLogService agentTaskLogService;
+    private final AgentEventPublisher agentEventPublisher;
+    private final AgentRunFailureHandler agentRunFailureHandler;
     private final ToolExecutionService toolExecutionService;
     private final ToolRegistry toolRegistry;
     private final ConversationContextCompressor conversationContextCompressor;
@@ -77,6 +79,8 @@ public class JChatMindFactory {
             ChatMessageFacadeService chatMessageFacadeService,
             ChatMessageConverter chatMessageConverter,
             AgentTaskLogService agentTaskLogService,
+            AgentEventPublisher agentEventPublisher,
+            AgentRunFailureHandler agentRunFailureHandler,
             ToolExecutionService toolExecutionService,
             ToolRegistry toolRegistry,
             ConversationContextCompressor conversationContextCompressor,
@@ -93,6 +97,8 @@ public class JChatMindFactory {
         this.chatMessageFacadeService = chatMessageFacadeService;
         this.chatMessageConverter = chatMessageConverter;
         this.agentTaskLogService = agentTaskLogService;
+        this.agentEventPublisher = agentEventPublisher;
+        this.agentRunFailureHandler = agentRunFailureHandler;
         this.toolExecutionService = toolExecutionService;
         this.toolRegistry = toolRegistry;
         this.conversationContextCompressor = conversationContextCompressor;
@@ -252,6 +258,7 @@ public class JChatMindFactory {
                 knowledgeBases,
                 chatSessionId,
                 sseService,
+                agentEventPublisher,
                 toolExecutionService,
                 chatMessageFacadeService,
                 chatMessageConverter,
@@ -260,7 +267,8 @@ public class JChatMindFactory {
                 userMessageId,
                 runtimeToolNames,
                 toolCorrectionProperties,
-                toolFailureClassifier
+                toolFailureClassifier,
+                agentRunFailureHandler
         );
     }
 

@@ -1,9 +1,9 @@
 package com.kama.jchatmind.service.impl;
 
+import com.kama.jchatmind.agent.AgentEventPublisher;
 import com.kama.jchatmind.message.AgentSseEvent;
 import com.kama.jchatmind.model.entity.ToolCallLog;
 import com.kama.jchatmind.service.AgentTaskLogService;
-import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.tool.ToolDefinition;
 import com.kama.jchatmind.tool.ToolExecutionContext;
@@ -27,7 +27,7 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
 
     private final ToolRegistry toolRegistry;
     private final AgentTaskLogService agentTaskLogService;
-    private final SseService sseService;
+    private final AgentEventPublisher agentEventPublisher;
     private final ToolFailureClassifier toolFailureClassifier;
 
     @Override
@@ -185,19 +185,7 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
     }
 
     private void sendEvent(ToolExecutionContext context, AgentSseEvent.Type type, Map<String, Object> payload) {
-        if (context.getTaskId() == null || context.getSessionId() == null) {
-            return;
-        }
-        try {
-            sseService.sendEvent(context.getSessionId(), AgentSseEvent.of(
-                    context.getTaskId(),
-                    context.getSessionId(),
-                    type,
-                    payload
-            ));
-        } catch (Exception e) {
-            log.warn("Failed to send tool execution event: type={}, error={}", type, e.getMessage());
-        }
+        agentEventPublisher.publish(context.getTaskId(), context.getSessionId(), type, payload);
     }
 
     private Map<String, Object> payload(Object... keyValues) {

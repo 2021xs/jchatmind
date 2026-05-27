@@ -63,7 +63,8 @@ public class JChatMind {
     private ChatMemory chatMemory;
     private String chatSessionId;
     private ChatOptions chatOptions;
-    private SseService sseService;
+    private AgentEventPublisher agentEventPublisher;
+    private AgentRunFailureHandler agentRunFailureHandler;
     private ToolExecutionService toolExecutionService;
     private ChatMessageConverter chatMessageConverter;
     private ChatMessageFacadeService chatMessageFacadeService;
@@ -108,6 +109,36 @@ public class JChatMind {
                      List<String> runtimeToolNames,
                      ToolCorrectionProperties toolCorrectionProperties,
                      ToolFailureClassifier toolFailureClassifier) {
+        this(agentId, model, name, description, systemPrompt, chatClient, maxMessages, memory,
+                availableTools, availableKbs, chatSessionId, sseService, new AgentEventPublisher(sseService),
+                toolExecutionService, chatMessageFacadeService, chatMessageConverter, agentTaskLogService,
+                conversationContextCompressor, userMessageId, runtimeToolNames, toolCorrectionProperties,
+                toolFailureClassifier, null);
+    }
+
+    public JChatMind(String agentId,
+                     String model,
+                     String name,
+                     String description,
+                     String systemPrompt,
+                     ChatClient chatClient,
+                     Integer maxMessages,
+                     List<Message> memory,
+                     List<ToolCallback> availableTools,
+                     List<KnowledgeBaseDTO> availableKbs,
+                     String chatSessionId,
+                     SseService sseService,
+                     AgentEventPublisher agentEventPublisher,
+                     ToolExecutionService toolExecutionService,
+                     ChatMessageFacadeService chatMessageFacadeService,
+                     ChatMessageConverter chatMessageConverter,
+                     AgentTaskLogService agentTaskLogService,
+                     ConversationContextCompressor conversationContextCompressor,
+                     String userMessageId,
+                     List<String> runtimeToolNames,
+                     ToolCorrectionProperties toolCorrectionProperties,
+                     ToolFailureClassifier toolFailureClassifier,
+                     AgentRunFailureHandler agentRunFailureHandler) {
         this.agentId = agentId;
         this.model = model;
         this.name = name;
@@ -117,11 +148,14 @@ public class JChatMind {
         this.availableTools = availableTools;
         this.availableKbs = availableKbs;
         this.chatSessionId = chatSessionId;
-        this.sseService = sseService;
+        this.agentEventPublisher = agentEventPublisher == null ? new AgentEventPublisher(sseService) : agentEventPublisher;
         this.toolExecutionService = toolExecutionService;
         this.chatMessageFacadeService = chatMessageFacadeService;
         this.chatMessageConverter = chatMessageConverter;
         this.agentTaskLogService = agentTaskLogService;
+        this.agentRunFailureHandler = agentRunFailureHandler == null
+                ? new AgentRunFailureHandler(agentTaskLogService, this.agentEventPublisher)
+                : agentRunFailureHandler;
         this.conversationContextCompressor = conversationContextCompressor;
         this.userMessageId = userMessageId;
         this.runtimeToolNames = runtimeToolNames == null ? List.of() : runtimeToolNames;
@@ -207,7 +241,7 @@ public class JChatMind {
                     .payload(SseMessage.Payload.builder().message(vo).build())
                     .metadata(SseMessage.Metadata.builder().chatMessageId(message.getId()).build())
                     .build();
-            sseService.send(this.chatSessionId, sseMessage);
+            agentEventPublisher.sendMessage(this.chatSessionId, sseMessage);
         }
         pendingChatMessages.clear();
     }
@@ -222,14 +256,7 @@ public class JChatMind {
     }
 
     private void sendAgentEvent(AgentSseEvent.Type type, Map<String, Object> payload) {
-        if (currentTaskId == null) {
-            return;
-        }
-        try {
-            sseService.sendEvent(this.chatSessionId, AgentSseEvent.of(currentTaskId, this.chatSessionId, type, payload));
-        } catch (Exception e) {
-            log.warn("Failed to send Agent SSE event: type={}, error={}", type, e.getMessage());
-        }
+        agentEventPublisher.publish(currentTaskId, this.chatSessionId, type, payload);
     }
 
     private String truncate(String value) {
@@ -649,27 +676,13 @@ public class JChatMind {
             ));
         } catch (Exception e) {
             agentState = AgentState.ERROR;
-            if (currentStep != null) {
-                agentTaskLogService.failStepAndTask(currentStep.getId(), currentTaskId,
-                        e.getMessage(), nextStepNo - 1, toolCallCount);
-            } else {
-                agentTaskLogService.failTask(currentTaskId, e.getMessage(), nextStepNo - 1, toolCallCount);
-            }
-            sendAgentEvent(AgentSseEvent.Type.ERROR, payload(
-                    "status", AgentTaskLogService.STATUS_FAILED,
-                    "stepId", currentStep == null ? null : currentStep.getId(),
-                    "stepNo", currentStep == null ? null : currentStep.getStepNo(),
-                    "stepType", currentStep == null ? null : currentStep.getStepType(),
-                    "finishReason", AgentTaskLogService.FINISH_REASON_ERROR,
-                    "errorMessage", truncate(e.getMessage())
-            ));
-            try {
-                sseService.complete(this.chatSessionId);
-            } catch (Exception completeError) {
-                log.warn("Failed to complete SSE after Agent error: taskId={}, error={}",
-                        currentTaskId, completeError.getMessage());
-            }
-            log.error("Error running agent", e);
+            agentRunFailureHandler.handle(AgentRunFailureContext.builder()
+                    .taskId(currentTaskId)
+                    .sessionId(chatSessionId)
+                    .currentStep(currentStep)
+                    .actualSteps(nextStepNo - 1)
+                    .toolCallCount(toolCallCount)
+                    .build(), e);
             throw new RuntimeException("Error running agent", e);
         } finally {
             agentExecutionContext = null;
