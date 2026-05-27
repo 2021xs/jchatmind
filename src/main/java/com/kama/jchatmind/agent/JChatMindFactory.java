@@ -60,6 +60,7 @@ public class JChatMindFactory {
     private final AgentTaskLogService agentTaskLogService;
     private final AgentEventPublisher agentEventPublisher;
     private final AgentRunFailureHandler agentRunFailureHandler;
+    private final AgentToolCallExecutor agentToolCallExecutor;
     private final ToolExecutionService toolExecutionService;
     private final ToolRegistry toolRegistry;
     private final ConversationContextCompressor conversationContextCompressor;
@@ -81,6 +82,7 @@ public class JChatMindFactory {
             AgentTaskLogService agentTaskLogService,
             AgentEventPublisher agentEventPublisher,
             AgentRunFailureHandler agentRunFailureHandler,
+            AgentToolCallExecutor agentToolCallExecutor,
             ToolExecutionService toolExecutionService,
             ToolRegistry toolRegistry,
             ConversationContextCompressor conversationContextCompressor,
@@ -99,6 +101,7 @@ public class JChatMindFactory {
         this.agentTaskLogService = agentTaskLogService;
         this.agentEventPublisher = agentEventPublisher;
         this.agentRunFailureHandler = agentRunFailureHandler;
+        this.agentToolCallExecutor = agentToolCallExecutor;
         this.toolExecutionService = toolExecutionService;
         this.toolRegistry = toolRegistry;
         this.conversationContextCompressor = conversationContextCompressor;
@@ -268,7 +271,8 @@ public class JChatMindFactory {
                 runtimeToolNames,
                 toolCorrectionProperties,
                 toolFailureClassifier,
-                agentRunFailureHandler
+                agentRunFailureHandler,
+                agentToolCallExecutor
         );
     }
 

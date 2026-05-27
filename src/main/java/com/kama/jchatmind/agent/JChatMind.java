@@ -32,7 +32,6 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.DefaultToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
-import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
@@ -65,7 +64,7 @@ public class JChatMind {
     private ChatOptions chatOptions;
     private AgentEventPublisher agentEventPublisher;
     private AgentRunFailureHandler agentRunFailureHandler;
-    private ToolExecutionService toolExecutionService;
+    private AgentToolCallExecutor agentToolCallExecutor;
     private ChatMessageConverter chatMessageConverter;
     private ChatMessageFacadeService chatMessageFacadeService;
     private ChatResponse lastChatResponse;
@@ -113,7 +112,7 @@ public class JChatMind {
                 availableTools, availableKbs, chatSessionId, sseService, new AgentEventPublisher(sseService),
                 toolExecutionService, chatMessageFacadeService, chatMessageConverter, agentTaskLogService,
                 conversationContextCompressor, userMessageId, runtimeToolNames, toolCorrectionProperties,
-                toolFailureClassifier, null);
+                toolFailureClassifier, null, null);
     }
 
     public JChatMind(String agentId,
@@ -138,7 +137,8 @@ public class JChatMind {
                      List<String> runtimeToolNames,
                      ToolCorrectionProperties toolCorrectionProperties,
                      ToolFailureClassifier toolFailureClassifier,
-                     AgentRunFailureHandler agentRunFailureHandler) {
+                     AgentRunFailureHandler agentRunFailureHandler,
+                     AgentToolCallExecutor agentToolCallExecutor) {
         this.agentId = agentId;
         this.model = model;
         this.name = name;
@@ -149,13 +149,15 @@ public class JChatMind {
         this.availableKbs = availableKbs;
         this.chatSessionId = chatSessionId;
         this.agentEventPublisher = agentEventPublisher == null ? new AgentEventPublisher(sseService) : agentEventPublisher;
-        this.toolExecutionService = toolExecutionService;
         this.chatMessageFacadeService = chatMessageFacadeService;
         this.chatMessageConverter = chatMessageConverter;
         this.agentTaskLogService = agentTaskLogService;
         this.agentRunFailureHandler = agentRunFailureHandler == null
                 ? new AgentRunFailureHandler(agentTaskLogService, this.agentEventPublisher)
                 : agentRunFailureHandler;
+        this.agentToolCallExecutor = agentToolCallExecutor == null
+                ? new AgentToolCallExecutor(toolExecutionService)
+                : agentToolCallExecutor;
         this.conversationContextCompressor = conversationContextCompressor;
         this.userMessageId = userMessageId;
         this.runtimeToolNames = runtimeToolNames == null ? List.of() : runtimeToolNames;
@@ -438,54 +440,28 @@ public class JChatMind {
                 .runtimeToolNames(runtimeToolNames)
                 .build();
 
-        List<ToolExecutionRecord> records = new ArrayList<>();
-        try {
-            for (AssistantMessage.ToolCall toolCall : toolCalls) {
-                records.add(toolExecutionService.beforeToolCall(executionContext, toolCall));
-            }
-        } catch (Exception e) {
-            for (ToolExecutionRecord record : records) {
-                toolExecutionService.afterToolFailure(executionContext, record, e, false);
-            }
-            throw e;
-        }
+        AgentToolCallExecutionRequest request = AgentToolCallExecutionRequest.builder()
+                .prompt(prompt)
+                .chatResponse(this.lastChatResponse)
+                .toolCallingManager(toolCallingManager)
+                .executionContext(executionContext)
+                .build();
+        AgentToolCallExecution execution = agentToolCallExecutor.execute(request);
+        List<ToolExecutionRecord> records = execution.getRecords();
         toolCallCount += records.size();
 
-        ToolExecutionResult toolExecutionResult;
-        try {
-            toolExecutionResult = toolCallingManager.executeToolCalls(prompt, this.lastChatResponse);
-        } catch (Exception e) {
-            if (tryRequestToolSelfCorrection(executionContext, records, e)) {
+        if (!execution.succeeded()) {
+            if (tryRequestToolSelfCorrection(request, records, execution.getError())) {
                 return true;
             }
-            for (ToolExecutionRecord record : records) {
-                toolExecutionService.afterToolFailure(executionContext, record, e, false);
-            }
-            throw e;
+            agentToolCallExecutor.recordFailure(request, records, execution.getError(), false);
+            throw execution.getError();
         }
 
         this.chatMemory.clear(this.chatSessionId);
-        this.chatMemory.add(this.chatSessionId, toolExecutionResult.conversationHistory());
+        this.chatMemory.add(this.chatSessionId, execution.getToolExecutionResult().conversationHistory());
 
-        ToolResponseMessage toolResponseMessage = (ToolResponseMessage) toolExecutionResult
-                .conversationHistory()
-                .get(toolExecutionResult.conversationHistory().size() - 1);
-
-        List<ToolResponseMessage.ToolResponse> responses = toolResponseMessage.getResponses();
-        for (int i = 0; i < responses.size() && i < records.size(); i++) {
-            // Spring AI's ToolResponse is matched to the preflight record by response order here.
-            // ToolCall.id is stored when present, but this response object is not relied on for id matching.
-            toolExecutionService.afterToolSuccess(executionContext, records.get(i), responses.get(i).responseData());
-        }
-        for (int i = responses.size(); i < records.size(); i++) {
-            toolExecutionService.afterToolFailure(
-                    executionContext,
-                    records.get(i),
-                    new IllegalStateException("Tool response missing for call index " + i),
-                    false
-            );
-        }
-
+        ToolResponseMessage toolResponseMessage = execution.getToolResponseMessage();
         String collect = toolResponseMessage.getResponses()
                 .stream()
                 .map(resp -> "Tool " + resp.name() + " result: " + truncate(resp.responseData()))
@@ -503,7 +479,7 @@ public class JChatMind {
         return false;
     }
 
-    private boolean tryRequestToolSelfCorrection(ToolExecutionContext executionContext,
+    private boolean tryRequestToolSelfCorrection(AgentToolCallExecutionRequest request,
                                                  List<ToolExecutionRecord> records,
                                                  Exception error) {
         if (!toolCorrectionProperties.isEnabled() || records.isEmpty()) {
@@ -517,9 +493,7 @@ public class JChatMind {
             return false;
         }
 
-        for (ToolExecutionRecord record : records) {
-            toolExecutionService.afterToolFailure(executionContext, record, error, true);
-        }
+        agentToolCallExecutor.recordFailure(request, records, error, true);
         ToolResponseMessage failureResponseMessage = buildFailureToolResponseMessage(records, decision);
         List<Message> correctedMemory = new ArrayList<>(this.chatMemory.get(this.chatSessionId));
         correctedMemory.add(this.lastChatResponse.getResult().getOutput());
