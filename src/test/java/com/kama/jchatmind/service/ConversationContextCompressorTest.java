@@ -52,8 +52,9 @@ class ConversationContextCompressorTest {
         properties.setMaxHistoryMessages(4);
         properties.setTriggerMessageCount(6);
         properties.setMaxSummaryChars(40);
-        properties.setMaxContextChars(16000);
-        properties.setMaxSingleToolResultChars(4000);
+        properties.setMaxContextTokens(5000);
+        properties.setMaxSingleToolResultTokens(1200);
+        properties.setCharsPerToken(3);
 
         summaryClient = new FakeSummaryClient();
         compressor = new ConversationContextCompressorImpl(properties, summaryClient, chatSessionMapper, objectMapper);
@@ -75,16 +76,16 @@ class ConversationContextCompressorTest {
     }
 
     @Test
-    void shouldReportCompressionNeededWhenContextCharsExceedThreshold() {
+    void shouldReportCompressionNeededWhenContextTokensExceedThreshold() {
         properties.setTriggerMessageCount(100);
-        properties.setMaxContextChars(40);
+        properties.setMaxContextTokens(40);
         List<ChatMessageDTO> messages = messages(8);
         when(chatSessionMapper.selectById(SESSION_ID)).thenReturn(chatSessionUnchecked(null));
 
         ConversationContextCompressor.CompressionCheck check = compressor.check(SESSION_ID, messages);
 
         assertTrue(check.needed());
-        assertTrue(check.reason().contains("context_chars"));
+        assertTrue(check.reason().contains("context_tokens"));
         assertEquals(8, check.messageCount());
         assertEquals(4, check.newCompressibleMessages());
     }
@@ -92,8 +93,8 @@ class ConversationContextCompressorTest {
     @Test
     void shouldCompressWhenSingleToolResultExceedsThresholdEvenBelowMessageTrigger() {
         properties.setTriggerMessageCount(100);
-        properties.setMaxContextChars(16000);
-        properties.setMaxSingleToolResultChars(20);
+        properties.setMaxContextTokens(5000);
+        properties.setMaxSingleToolResultTokens(10);
         List<ChatMessageDTO> messages = messages(8);
         messages.get(1).setRole(ChatMessageDTO.RoleType.TOOL);
         messages.get(1).setContent("tool result with many many characters");
