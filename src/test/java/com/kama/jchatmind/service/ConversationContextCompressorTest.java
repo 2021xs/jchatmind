@@ -52,8 +52,8 @@ class ConversationContextCompressorTest {
         properties.setMaxHistoryMessages(4);
         properties.setTriggerMessageCount(6);
         properties.setMaxSummaryChars(40);
-        properties.setMaxContextTokens(5000);
-        properties.setMaxSingleToolResultTokens(1200);
+        properties.setMaxContextTokens(12000);
+        properties.setMaxSingleToolResultTokens(2000);
         properties.setCharsPerToken(3);
 
         summaryClient = new FakeSummaryClient();
@@ -93,7 +93,7 @@ class ConversationContextCompressorTest {
     @Test
     void shouldCompressWhenSingleToolResultExceedsThresholdEvenBelowMessageTrigger() {
         properties.setTriggerMessageCount(100);
-        properties.setMaxContextTokens(5000);
+        properties.setMaxContextTokens(12000);
         properties.setMaxSingleToolResultTokens(10);
         List<ChatMessageDTO> messages = messages(8);
         messages.get(1).setRole(ChatMessageDTO.RoleType.TOOL);

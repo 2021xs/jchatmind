@@ -12,8 +12,8 @@ public class ContextCompressionProperties {
     private int keepRecentRounds = 6;
     private int maxHistoryMessages = 12;
     private int triggerMessageCount = 16;
-    private int maxContextTokens = 5000;
-    private int maxSingleToolResultTokens = 1200;
+    private int maxContextTokens = 12000;
+    private int maxSingleToolResultTokens = 2000;
     private int charsPerToken = 3;
     private int maxSummaryChars = 1200;
 }

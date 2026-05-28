@@ -94,6 +94,6 @@ jchatmind:
     max-history-messages: 20
     max-summary-chars: 1200
     trigger-message-count: 21
-    max-context-tokens: 5000
-    max-single-tool-result-tokens: 1200
+    max-context-tokens: 12000
+    max-single-tool-result-tokens: 2000
     chars-per-token: 3
