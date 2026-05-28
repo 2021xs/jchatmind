@@ -354,8 +354,8 @@ public class JChatMind {
         AgentStep compressionStep = startStep("CONTEXT_COMPRESSION",
                 "reason=" + check.reason()
                         + ", messages=" + check.messageCount()
-                        + ", contextChars=" + check.contextChars()
-                        + ", maxToolResultChars=" + check.maxSingleToolResultChars()
+                        + ", contextTokens=" + check.contextTokens()
+                        + ", maxToolResultTokens=" + check.maxSingleToolResultTokens()
                         + ", newCompressibleMessages=" + check.newCompressibleMessages());
         try {
             ConversationContextCompressor.CompressedContext compressedContext =

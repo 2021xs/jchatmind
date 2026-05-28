@@ -12,8 +12,8 @@ public interface ConversationContextCompressor {
     record CompressionCheck(boolean needed,
                             String reason,
                             int messageCount,
-                            int contextChars,
-                            int maxSingleToolResultChars,
+                            int contextTokens,
+                            int maxSingleToolResultTokens,
                             int newCompressibleMessages) {
     }
 

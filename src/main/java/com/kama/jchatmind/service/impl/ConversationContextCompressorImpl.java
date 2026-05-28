@@ -45,7 +45,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         List<ChatMessageDTO> sortedMessages = sortedMessages(allMessages);
         if (!properties.isEnabled()) {
             return new CompressionCheck(false, "disabled", sortedMessages.size(),
-                    totalContentChars(sortedMessages), maxSingleToolResultChars(sortedMessages), 0);
+                    totalContentTokens(sortedMessages), maxSingleToolResultTokens(sortedMessages), 0);
         }
 
         ChatSessionDTO.MetaData metadata = loadMetadata(sessionId);
@@ -53,16 +53,16 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         List<ChatMessageDTO> candidates = messagesBeforeRecentWindow(sortedMessages, recentMessages.size());
         List<ChatMessageDTO> messagesToCompress = filterAlreadySummarized(candidates,
                 metadata == null ? null : metadata.getContextSummaryLastMessageId());
-        int contextChars = totalContentChars(sortedMessages);
-        int maxToolResultChars = maxSingleToolResultChars(sortedMessages);
+        int contextTokens = totalContentTokens(sortedMessages);
+        int maxToolResultTokens = maxSingleToolResultTokens(sortedMessages);
         boolean overMessageCount = sortedMessages.size() >= properties.getTriggerMessageCount();
-        boolean overContextChars = contextChars >= properties.getMaxContextChars();
-        boolean overToolResultChars = maxToolResultChars >= properties.getMaxSingleToolResultChars();
+        boolean overContextTokens = contextTokens >= properties.getMaxContextTokens();
+        boolean overToolResultTokens = maxToolResultTokens >= properties.getMaxSingleToolResultTokens();
         boolean needed = !messagesToCompress.isEmpty()
-                && (overMessageCount || overContextChars || overToolResultChars);
-        String reason = reason(overMessageCount, overContextChars, overToolResultChars, messagesToCompress.isEmpty());
+                && (overMessageCount || overContextTokens || overToolResultTokens);
+        String reason = reason(overMessageCount, overContextTokens, overToolResultTokens, messagesToCompress.isEmpty());
         return new CompressionCheck(needed, reason, sortedMessages.size(),
-                contextChars, maxToolResultChars, messagesToCompress.size());
+                contextTokens, maxToolResultTokens, messagesToCompress.size());
     }
 
     @Override
@@ -76,10 +76,10 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         String existingSummary = metadata == null ? null : metadata.getContextSummary();
         CompressionCheck check = checkWithMetadata(sortedMessages, metadata);
         if (!check.needed()) {
-            log.info("Context compression skipped: sessionId={}, reason={}, historyMessages={}, contextChars={}, maxToolResultChars={}, triggerMessages={}, triggerChars={}, triggerToolResultChars={}",
-                    sessionId, check.reason(), sortedMessages.size(), check.contextChars(),
-                    check.maxSingleToolResultChars(), properties.getTriggerMessageCount(),
-                    properties.getMaxContextChars(), properties.getMaxSingleToolResultChars());
+            log.info("Context compression skipped: sessionId={}, reason={}, historyMessages={}, contextTokens={}, maxToolResultTokens={}, triggerMessages={}, triggerTokens={}, triggerToolResultTokens={}",
+                    sessionId, check.reason(), sortedMessages.size(), check.contextTokens(),
+                    check.maxSingleToolResultTokens(), properties.getTriggerMessageCount(),
+                    properties.getMaxContextTokens(), properties.getMaxSingleToolResultTokens());
             return new CompressedContext(existingSummary, keepRecentMessages(sortedMessages), false);
         }
 
@@ -126,16 +126,16 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         List<ChatMessageDTO> candidates = messagesBeforeRecentWindow(sortedMessages, recentMessages.size());
         List<ChatMessageDTO> messagesToCompress = filterAlreadySummarized(candidates,
                 metadata == null ? null : metadata.getContextSummaryLastMessageId());
-        int contextChars = totalContentChars(sortedMessages);
-        int maxToolResultChars = maxSingleToolResultChars(sortedMessages);
+        int contextTokens = totalContentTokens(sortedMessages);
+        int maxToolResultTokens = maxSingleToolResultTokens(sortedMessages);
         boolean overMessageCount = sortedMessages.size() >= properties.getTriggerMessageCount();
-        boolean overContextChars = contextChars >= properties.getMaxContextChars();
-        boolean overToolResultChars = maxToolResultChars >= properties.getMaxSingleToolResultChars();
+        boolean overContextTokens = contextTokens >= properties.getMaxContextTokens();
+        boolean overToolResultTokens = maxToolResultTokens >= properties.getMaxSingleToolResultTokens();
         boolean needed = !messagesToCompress.isEmpty()
-                && (overMessageCount || overContextChars || overToolResultChars);
-        String reason = reason(overMessageCount, overContextChars, overToolResultChars, messagesToCompress.isEmpty());
+                && (overMessageCount || overContextTokens || overToolResultTokens);
+        String reason = reason(overMessageCount, overContextTokens, overToolResultTokens, messagesToCompress.isEmpty());
         return new CompressionCheck(needed, reason, sortedMessages.size(),
-                contextChars, maxToolResultChars, messagesToCompress.size());
+                contextTokens, maxToolResultTokens, messagesToCompress.size());
     }
 
     private List<ChatMessageDTO> keepRecentMessages(List<ChatMessageDTO> messages) {
@@ -169,27 +169,35 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         return new ArrayList<>(candidates.subList(lastIndex + 1, candidates.size()));
     }
 
-    private int totalContentChars(List<ChatMessageDTO> messages) {
+    private int totalContentTokens(List<ChatMessageDTO> messages) {
         return messages.stream()
                 .map(ChatMessageDTO::getContent)
                 .filter(Objects::nonNull)
-                .mapToInt(String::length)
+                .mapToInt(this::estimateTokens)
                 .sum();
     }
 
-    private int maxSingleToolResultChars(List<ChatMessageDTO> messages) {
+    private int maxSingleToolResultTokens(List<ChatMessageDTO> messages) {
         return messages.stream()
                 .filter(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL)
                 .map(ChatMessageDTO::getContent)
                 .filter(Objects::nonNull)
-                .mapToInt(String::length)
+                .mapToInt(this::estimateTokens)
                 .max()
                 .orElse(0);
     }
 
+    private int estimateTokens(String content) {
+        if (!StringUtils.hasLength(content)) {
+            return 0;
+        }
+        int charsPerToken = Math.max(1, properties.getCharsPerToken());
+        return (content.length() + charsPerToken - 1) / charsPerToken;
+    }
+
     private String reason(boolean overMessageCount,
-                          boolean overContextChars,
-                          boolean overToolResultChars,
+                          boolean overContextTokens,
+                          boolean overToolResultTokens,
                           boolean noNewMessages) {
         if (noNewMessages) {
             return "no_new_messages";
@@ -198,11 +206,11 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         if (overMessageCount) {
             reasons.add("message_count");
         }
-        if (overContextChars) {
-            reasons.add("context_chars");
+        if (overContextTokens) {
+            reasons.add("context_tokens");
         }
-        if (overToolResultChars) {
-            reasons.add("tool_result_chars");
+        if (overToolResultTokens) {
+            reasons.add("tool_result_tokens");
         }
         return reasons.isEmpty() ? "below_threshold" : String.join("+", reasons);
     }
