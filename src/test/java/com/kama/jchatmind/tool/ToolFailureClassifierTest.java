@@ -39,15 +39,28 @@ class ToolFailureClassifierTest {
     }
 
     @Test
-    void doesNotCorrectPolicyOrSystemFailures() {
+    void treatsUnstructuredNonArgumentFailuresAsGenericToolException() {
         ToolFailureDecision policy = classifier.classify(
                 new IllegalStateException("Tool is not allowed in current agent runtime: databaseQuery"));
+        ToolFailureDecision timeout = classifier.classify(
+                new IllegalStateException("Tool execution timed out"));
         ToolFailureDecision database = classifier.classify(
                 new IllegalStateException("Database query execution failed: connection refused"));
 
         assertFalse(policy.correctable());
-        assertEquals(AgentTaskLogService.ERROR_TYPE_POLICY_REJECTED, policy.errorType());
+        assertEquals(AgentTaskLogService.ERROR_TYPE_TOOL_EXCEPTION, policy.errorType());
+        assertFalse(timeout.correctable());
+        assertEquals(AgentTaskLogService.ERROR_TYPE_TOOL_EXCEPTION, timeout.errorType());
         assertFalse(database.correctable());
         assertEquals(AgentTaskLogService.ERROR_TYPE_TOOL_EXCEPTION, database.errorType());
+    }
+
+    @Test
+    void doesNotClassifyUnstructuredMessagesByKeywords() {
+        ToolFailureDecision decision = classifier.classify(
+                new RuntimeException("Failed to parse JSON argument: missing required field query"));
+
+        assertFalse(decision.correctable());
+        assertEquals(AgentTaskLogService.ERROR_TYPE_TOOL_EXCEPTION, decision.errorType());
     }
 }
