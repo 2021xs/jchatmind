@@ -17,17 +17,16 @@ public class AgentRunFailureHandler {
     private final AgentTaskLogService agentTaskLogService;
     private final AgentEventPublisher eventPublisher;
 
-    public void handle(AgentRunFailureContext context, Exception error) {
+    public void handle(String taskId, String sessionId, AgentStep currentStep,
+                       int actualSteps, int toolCallCount, Exception error) {
         String errorMessage = error == null ? null : error.getMessage();
-        AgentStep currentStep = context.getCurrentStep();
         if (currentStep != null) {
-            agentTaskLogService.failStepAndTask(currentStep.getId(), context.getTaskId(),
-                    errorMessage, context.getActualSteps(), context.getToolCallCount());
+            agentTaskLogService.failStepAndTask(currentStep.getId(), taskId,
+                    errorMessage, actualSteps, toolCallCount);
         } else {
-            agentTaskLogService.failTask(context.getTaskId(),
-                    errorMessage, context.getActualSteps(), context.getToolCallCount());
+            agentTaskLogService.failTask(taskId, errorMessage, actualSteps, toolCallCount);
         }
-        eventPublisher.publish(context.getTaskId(), context.getSessionId(), AgentSseEvent.Type.ERROR, payload(
+        eventPublisher.publish(taskId, sessionId, AgentSseEvent.Type.ERROR, payload(
                 "status", AgentTaskLogService.STATUS_FAILED,
                 "stepId", currentStep == null ? null : currentStep.getId(),
                 "stepNo", currentStep == null ? null : currentStep.getStepNo(),
@@ -35,7 +34,7 @@ public class AgentRunFailureHandler {
                 "finishReason", AgentTaskLogService.FINISH_REASON_ERROR,
                 "errorMessage", truncate(errorMessage)
         ));
-        eventPublisher.complete(context.getSessionId(), context.getTaskId());
+        eventPublisher.complete(sessionId, taskId);
         log.error("Error running agent", error);
     }
 

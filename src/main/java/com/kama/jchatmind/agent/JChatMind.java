@@ -440,21 +440,20 @@ public class JChatMind {
                 .runtimeToolNames(runtimeToolNames)
                 .build();
 
-        AgentToolCallExecutionRequest request = AgentToolCallExecutionRequest.builder()
-                .prompt(prompt)
-                .chatResponse(this.lastChatResponse)
-                .toolCallingManager(toolCallingManager)
-                .executionContext(executionContext)
-                .build();
-        AgentToolCallExecution execution = agentToolCallExecutor.execute(request);
+        AgentToolCallExecution execution = agentToolCallExecutor.execute(
+                prompt,
+                this.lastChatResponse,
+                toolCallingManager,
+                executionContext
+        );
         List<ToolExecutionRecord> records = execution.getRecords();
         toolCallCount += records.size();
 
         if (!execution.succeeded()) {
-            if (tryRequestToolSelfCorrection(request, records, execution.getError())) {
+            if (tryRequestToolSelfCorrection(executionContext, records, execution.getError())) {
                 return true;
             }
-            agentToolCallExecutor.recordFailure(request, records, execution.getError(), false);
+            agentToolCallExecutor.recordFailure(executionContext, records, execution.getError(), false);
             throw execution.getError();
         }
 
@@ -479,7 +478,7 @@ public class JChatMind {
         return false;
     }
 
-    private boolean tryRequestToolSelfCorrection(AgentToolCallExecutionRequest request,
+    private boolean tryRequestToolSelfCorrection(ToolExecutionContext executionContext,
                                                  List<ToolExecutionRecord> records,
                                                  Exception error) {
         if (!toolCorrectionProperties.isEnabled() || records.isEmpty()) {
@@ -493,7 +492,7 @@ public class JChatMind {
             return false;
         }
 
-        agentToolCallExecutor.recordFailure(request, records, error, true);
+        agentToolCallExecutor.recordFailure(executionContext, records, error, true);
         ToolResponseMessage failureResponseMessage = buildFailureToolResponseMessage(records, decision);
         List<Message> correctedMemory = new ArrayList<>(this.chatMemory.get(this.chatSessionId));
         correctedMemory.add(this.lastChatResponse.getResult().getOutput());
@@ -650,13 +649,8 @@ public class JChatMind {
             ));
         } catch (Exception e) {
             agentState = AgentState.ERROR;
-            agentRunFailureHandler.handle(AgentRunFailureContext.builder()
-                    .taskId(currentTaskId)
-                    .sessionId(chatSessionId)
-                    .currentStep(currentStep)
-                    .actualSteps(nextStepNo - 1)
-                    .toolCallCount(toolCallCount)
-                    .build(), e);
+            agentRunFailureHandler.handle(currentTaskId, chatSessionId, currentStep,
+                    nextStepNo - 1, toolCallCount, e);
             throw new RuntimeException("Error running agent", e);
         } finally {
             agentExecutionContext = null;
