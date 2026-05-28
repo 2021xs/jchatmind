@@ -11,6 +11,14 @@ public class ToolFailureClassifier {
     private static final int MAX_SAFE_MESSAGE_LENGTH = 500;
 
     public ToolFailureDecision classify(Throwable error) {
+        if (error instanceof ToolFailureException toolFailureException) {
+            return new ToolFailureDecision(
+                    toolFailureException.getErrorType(),
+                    toolFailureException.isCorrectable(),
+                    safeMessage(toolFailureException.getSafeMessage(), error),
+                    toolFailureException.getCorrectionHint()
+            );
+        }
         String message = safeMessage(error);
         String normalized = message.toLowerCase(Locale.ROOT);
         String errorType = errorType(normalized);
@@ -91,6 +99,10 @@ public class ToolFailureClassifier {
 
     private String safeMessage(Throwable error) {
         String message = error == null ? "Unknown tool execution error" : error.getMessage();
+        return safeMessage(message, error);
+    }
+
+    private String safeMessage(String message, Throwable error) {
         if (!StringUtils.hasLength(message)) {
             message = error == null ? "Unknown tool execution error" : error.getClass().getSimpleName();
         }

@@ -22,6 +22,23 @@ class ToolFailureClassifierTest {
     }
 
     @Test
+    void classifiesStructuredToolFailuresBeforeMessageFallback() {
+        ToolFailureDecision argument = classifier.classify(
+                new ToolArgumentException("missing required field query", null));
+        ToolFailureDecision unknown = classifier.classify(
+                new ToolUnknownException("Unknown tool: imaginaryTool"));
+        ToolFailureDecision policy = classifier.classify(
+                new ToolPolicyRejectedException("SQL rejected by safety policy"));
+
+        assertTrue(argument.correctable());
+        assertEquals(AgentTaskLogService.ERROR_TYPE_ARGUMENT_PARSE_ERROR, argument.errorType());
+        assertFalse(unknown.correctable());
+        assertEquals(AgentTaskLogService.ERROR_TYPE_UNKNOWN_TOOL, unknown.errorType());
+        assertFalse(policy.correctable());
+        assertEquals(AgentTaskLogService.ERROR_TYPE_POLICY_REJECTED, policy.errorType());
+    }
+
+    @Test
     void doesNotCorrectPolicyOrSystemFailures() {
         ToolFailureDecision policy = classifier.classify(
                 new IllegalStateException("Tool is not allowed in current agent runtime: databaseQuery"));

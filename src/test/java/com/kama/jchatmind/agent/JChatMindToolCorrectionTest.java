@@ -13,6 +13,7 @@ import com.kama.jchatmind.service.ConversationContextCompressor;
 import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.tool.ToolExecutionRecord;
+import com.kama.jchatmind.tool.ToolArgumentException;
 import com.kama.jchatmind.tool.ToolFailureClassifier;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -137,7 +138,7 @@ class JChatMindToolCorrectionTest {
 
         agent.run();
 
-        verify(toolExecutionService).afterToolFailure(any(), eq(record), any(IllegalArgumentException.class), eq(true));
+        verify(toolExecutionService).afterToolFailure(any(), eq(record), any(ToolArgumentException.class), eq(true));
         verify(logService, never()).failTask(anyString(), anyString(), anyInt(), anyInt());
         verify(logService).finishTask(eq("task-1"), anyString(), anyInt(), anyInt());
         verify(sseService, never()).sendEvent(eq("session-1"),
@@ -235,8 +236,8 @@ class JChatMindToolCorrectionTest {
 
         assertThrows(RuntimeException.class, agent::run);
 
-        verify(toolExecutionService).afterToolFailure(any(), eq(record), any(IllegalArgumentException.class), eq(true));
-        verify(toolExecutionService).afterToolFailure(any(), eq(record), any(IllegalArgumentException.class), eq(false));
+        verify(toolExecutionService).afterToolFailure(any(), eq(record), any(ToolArgumentException.class), eq(true));
+        verify(toolExecutionService).afterToolFailure(any(), eq(record), any(ToolArgumentException.class), eq(false));
         verify(logService).failStepAndTask(anyString(), eq("task-1"), anyString(), anyInt(), anyInt());
     }
 }

@@ -10,7 +10,9 @@ import com.kama.jchatmind.tool.ToolExecutionContext;
 import com.kama.jchatmind.tool.ToolExecutionRecord;
 import com.kama.jchatmind.tool.ToolFailureClassifier;
 import com.kama.jchatmind.tool.ToolFailureDecision;
+import com.kama.jchatmind.tool.ToolPolicyRejectedException;
 import com.kama.jchatmind.tool.ToolRegistry;
+import com.kama.jchatmind.tool.ToolUnknownException;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -24,6 +26,7 @@ import java.util.Map;
 @AllArgsConstructor
 public class ToolExecutionServiceImpl implements ToolExecutionService {
     private static final int MAX_ARGUMENT_PREVIEW = 4000;
+    private static final String REJECTED_BY_POLICY_PREFIX = "[REJECTED_BY_POLICY]";
 
     private final ToolRegistry toolRegistry;
     private final AgentTaskLogService agentTaskLogService;
@@ -61,7 +64,7 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
                     "errorMessage", "Unknown tool: " + toolCall.name(),
                     "latencyMs", 0
             ));
-            throw new IllegalStateException("Unknown tool: " + toolCall.name());
+            throw new ToolUnknownException("Unknown tool: " + toolCall.name());
         }
         if (!toolRegistry.isAllowedForRuntime(toolCall.name(), context.getRuntimeToolNames())) {
             ToolCallLog blockedLog = agentTaskLogService.startAndFailToolCall(
@@ -90,7 +93,7 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
                     "errorMessage", "Tool is not allowed in current agent runtime: " + toolCall.name(),
                     "latencyMs", 0
             ));
-            throw new IllegalStateException("Tool is not allowed in current agent runtime: " + toolCall.name());
+            throw new ToolPolicyRejectedException("Tool is not allowed in current agent runtime: " + toolCall.name());
         }
 
         ToolCallLog toolCallLog = agentTaskLogService.startToolCall(
@@ -129,6 +132,30 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
         long latencyMs = System.currentTimeMillis() - record.getStartedAtMillis();
         String resultSummary = toolRegistry.truncateResult(record.getCanonicalToolName(), result);
         boolean resultTruncated = result != null && resultSummary != null && resultSummary.length() < result.length();
+        if (isRejectedByPolicy(resultSummary)) {
+            agentTaskLogService.failToolCall(
+                    record.getToolCallLogId(),
+                    resultSummary,
+                    latencyMs,
+                    AgentTaskLogService.ERROR_TYPE_POLICY_REJECTED,
+                    true
+            );
+            sendEvent(context, AgentSseEvent.Type.TOOL_CALL_RESULT, payload(
+                    "taskId", context.getTaskId(),
+                    "stepId", context.getStepId(),
+                    "toolCallLogId", record.getToolCallLogId(),
+                    "toolCallId", record.getToolCallId(),
+                    "toolName", record.getCanonicalToolName(),
+                    "actualToolName", record.getActualToolName(),
+                    "status", AgentTaskLogService.STATUS_FAILED,
+                    "errorType", AgentTaskLogService.ERROR_TYPE_POLICY_REJECTED,
+                    "blockedByPolicy", true,
+                    "correctionRequested", false,
+                    "errorMessage", truncate(resultSummary, MAX_ARGUMENT_PREVIEW),
+                    "latencyMs", latencyMs
+            ));
+            return;
+        }
         agentTaskLogService.finishToolCall(record.getToolCallLogId(), resultSummary, latencyMs, resultTruncated);
         sendEvent(context, AgentSseEvent.Type.TOOL_CALL_RESULT, payload(
                 "taskId", context.getTaskId(),
@@ -186,6 +213,10 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
 
     private void sendEvent(ToolExecutionContext context, AgentSseEvent.Type type, Map<String, Object> payload) {
         agentEventPublisher.publish(context.getTaskId(), context.getSessionId(), type, payload);
+    }
+
+    private boolean isRejectedByPolicy(String resultSummary) {
+        return resultSummary != null && resultSummary.startsWith(REJECTED_BY_POLICY_PREFIX);
     }
 
     private Map<String, Object> payload(Object... keyValues) {

@@ -3,6 +3,8 @@ package com.kama.jchatmind.agent;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.tool.ToolExecutionContext;
 import com.kama.jchatmind.tool.ToolExecutionRecord;
+import com.kama.jchatmind.tool.ToolArgumentException;
+import com.kama.jchatmind.tool.ToolExecutionException;
 import lombok.AllArgsConstructor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
@@ -29,10 +31,12 @@ public class ToolCallBatchExecutor {
         ToolExecutionResult toolExecutionResult;
         try {
             toolExecutionResult = toolCallingManager.executeToolCalls(prompt, chatResponse);
+        } catch (IllegalArgumentException e) {
+            return failed(records, new ToolArgumentException(e.getMessage(), e));
         } catch (RuntimeException e) {
             return failed(records, e);
         } catch (Exception e) {
-            return failed(records, new IllegalStateException(e.getMessage(), e));
+            return failed(records, new ToolExecutionException(e.getMessage(), e));
         }
 
         ToolResponseMessage toolResponseMessage = (ToolResponseMessage) toolExecutionResult
