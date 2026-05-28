@@ -1,6 +1,7 @@
 package com.kama.jchatmind.agent;
 
 import com.kama.jchatmind.service.ToolExecutionService;
+import com.kama.jchatmind.tool.ToolExecutionContext;
 import com.kama.jchatmind.tool.ToolExecutionRecord;
 import lombok.AllArgsConstructor;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -16,13 +17,13 @@ import java.util.List;
 
 @Component
 @AllArgsConstructor
-public class AgentToolCallExecutor {
+public class ToolCallBatchExecutor {
     private final ToolExecutionService toolExecutionService;
 
-    public AgentToolCallExecution execute(Prompt prompt,
-                                          ChatResponse chatResponse,
-                                          ToolCallingManager toolCallingManager,
-                                          com.kama.jchatmind.tool.ToolExecutionContext executionContext) {
+    public ToolCallBatchResult execute(Prompt prompt,
+                                       ChatResponse chatResponse,
+                                       ToolCallingManager toolCallingManager,
+                                       ToolExecutionContext executionContext) {
         List<ToolExecutionRecord> records = preflight(chatResponse, executionContext);
 
         ToolExecutionResult toolExecutionResult;
@@ -38,23 +39,23 @@ public class AgentToolCallExecutor {
                 .conversationHistory()
                 .get(toolExecutionResult.conversationHistory().size() - 1);
         recordToolResponses(executionContext, records, toolResponseMessage);
-        return AgentToolCallExecution.builder()
-                .status(AgentToolCallExecution.Status.SUCCESS)
+        return ToolCallBatchResult.builder()
+                .status(ToolCallBatchResult.Status.SUCCESS)
                 .records(records)
                 .toolExecutionResult(toolExecutionResult)
                 .toolResponseMessage(toolResponseMessage)
                 .build();
     }
 
-    private AgentToolCallExecution failed(List<ToolExecutionRecord> records, RuntimeException error) {
-        return AgentToolCallExecution.builder()
-                .status(AgentToolCallExecution.Status.FAILED)
+    private ToolCallBatchResult failed(List<ToolExecutionRecord> records, RuntimeException error) {
+        return ToolCallBatchResult.builder()
+                .status(ToolCallBatchResult.Status.FAILED)
                 .records(records)
                 .error(error)
                 .build();
     }
 
-    public void recordFailure(com.kama.jchatmind.tool.ToolExecutionContext executionContext,
+    public void recordFailure(ToolExecutionContext executionContext,
                               List<ToolExecutionRecord> records,
                               Throwable error,
                               boolean correctionRequested) {
@@ -69,7 +70,7 @@ public class AgentToolCallExecutor {
     }
 
     private List<ToolExecutionRecord> preflight(ChatResponse chatResponse,
-                                                com.kama.jchatmind.tool.ToolExecutionContext executionContext) {
+                                                ToolExecutionContext executionContext) {
         List<ToolExecutionRecord> records = new ArrayList<>();
         try {
             List<AssistantMessage.ToolCall> toolCalls = chatResponse
@@ -86,7 +87,7 @@ public class AgentToolCallExecutor {
         }
     }
 
-    private void recordToolResponses(com.kama.jchatmind.tool.ToolExecutionContext executionContext,
+    private void recordToolResponses(ToolExecutionContext executionContext,
                                      List<ToolExecutionRecord> records,
                                      ToolResponseMessage toolResponseMessage) {
         List<ToolResponseMessage.ToolResponse> responses = toolResponseMessage.getResponses();

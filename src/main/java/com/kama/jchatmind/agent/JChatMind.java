@@ -64,7 +64,7 @@ public class JChatMind {
     private ChatOptions chatOptions;
     private AgentEventPublisher agentEventPublisher;
     private AgentRunFailureHandler agentRunFailureHandler;
-    private AgentToolCallExecutor agentToolCallExecutor;
+    private ToolCallBatchExecutor toolCallBatchExecutor;
     private ChatMessageConverter chatMessageConverter;
     private ChatMessageFacadeService chatMessageFacadeService;
     private ChatResponse lastChatResponse;
@@ -138,7 +138,7 @@ public class JChatMind {
                      ToolCorrectionProperties toolCorrectionProperties,
                      ToolFailureClassifier toolFailureClassifier,
                      AgentRunFailureHandler agentRunFailureHandler,
-                     AgentToolCallExecutor agentToolCallExecutor) {
+                     ToolCallBatchExecutor toolCallBatchExecutor) {
         this.agentId = agentId;
         this.model = model;
         this.name = name;
@@ -155,9 +155,9 @@ public class JChatMind {
         this.agentRunFailureHandler = agentRunFailureHandler == null
                 ? new AgentRunFailureHandler(agentTaskLogService, this.agentEventPublisher)
                 : agentRunFailureHandler;
-        this.agentToolCallExecutor = agentToolCallExecutor == null
-                ? new AgentToolCallExecutor(toolExecutionService)
-                : agentToolCallExecutor;
+        this.toolCallBatchExecutor = toolCallBatchExecutor == null
+                ? new ToolCallBatchExecutor(toolExecutionService)
+                : toolCallBatchExecutor;
         this.conversationContextCompressor = conversationContextCompressor;
         this.userMessageId = userMessageId;
         this.runtimeToolNames = runtimeToolNames == null ? List.of() : runtimeToolNames;
@@ -301,8 +301,8 @@ public class JChatMind {
             memory.add(new SystemMessage(systemPrompt));
         }
         if (StringUtils.hasLength(compressedContext.summary())) {
-            memory.add(new SystemMessage("[历史摘要]\n" + compressedContext.summary()
-                    + "\n\n说明：历史摘要只是辅助上下文。如果摘要与最近用户输入或检索结果冲突，以最近用户输入和检索结果为准。"));
+            memory.add(new SystemMessage("[Conversation summary]\n" + compressedContext.summary()
+                    + "\n\nNote: The summary is only auxiliary context. If it conflicts with recent user input or retrieval results, prefer the recent input and retrieval results."));
         }
         for (ChatMessageDTO chatMessageDTO : compressedContext.recentMessages()) {
             switch (chatMessageDTO.getRole()) {
@@ -440,7 +440,7 @@ public class JChatMind {
                 .runtimeToolNames(runtimeToolNames)
                 .build();
 
-        AgentToolCallExecution execution = agentToolCallExecutor.execute(
+        ToolCallBatchResult execution = toolCallBatchExecutor.execute(
                 prompt,
                 this.lastChatResponse,
                 toolCallingManager,
@@ -453,7 +453,7 @@ public class JChatMind {
             if (tryRequestToolSelfCorrection(executionContext, records, execution.getError())) {
                 return true;
             }
-            agentToolCallExecutor.recordFailure(executionContext, records, execution.getError(), false);
+            toolCallBatchExecutor.recordFailure(executionContext, records, execution.getError(), false);
             throw execution.getError();
         }
 
@@ -492,7 +492,7 @@ public class JChatMind {
             return false;
         }
 
-        agentToolCallExecutor.recordFailure(executionContext, records, error, true);
+        toolCallBatchExecutor.recordFailure(executionContext, records, error, true);
         ToolResponseMessage failureResponseMessage = buildFailureToolResponseMessage(records, decision);
         List<Message> correctedMemory = new ArrayList<>(this.chatMemory.get(this.chatSessionId));
         correctedMemory.add(this.lastChatResponse.getResult().getOutput());

@@ -60,7 +60,7 @@ public class JChatMindFactory {
     private final AgentTaskLogService agentTaskLogService;
     private final AgentEventPublisher agentEventPublisher;
     private final AgentRunFailureHandler agentRunFailureHandler;
-    private final AgentToolCallExecutor agentToolCallExecutor;
+    private final ToolCallBatchExecutor toolCallBatchExecutor;
     private final ToolExecutionService toolExecutionService;
     private final ToolRegistry toolRegistry;
     private final ConversationContextCompressor conversationContextCompressor;
@@ -82,7 +82,7 @@ public class JChatMindFactory {
             AgentTaskLogService agentTaskLogService,
             AgentEventPublisher agentEventPublisher,
             AgentRunFailureHandler agentRunFailureHandler,
-            AgentToolCallExecutor agentToolCallExecutor,
+            ToolCallBatchExecutor toolCallBatchExecutor,
             ToolExecutionService toolExecutionService,
             ToolRegistry toolRegistry,
             ConversationContextCompressor conversationContextCompressor,
@@ -101,7 +101,7 @@ public class JChatMindFactory {
         this.agentTaskLogService = agentTaskLogService;
         this.agentEventPublisher = agentEventPublisher;
         this.agentRunFailureHandler = agentRunFailureHandler;
-        this.agentToolCallExecutor = agentToolCallExecutor;
+        this.toolCallBatchExecutor = toolCallBatchExecutor;
         this.toolExecutionService = toolExecutionService;
         this.toolRegistry = toolRegistry;
         this.conversationContextCompressor = conversationContextCompressor;
@@ -120,8 +120,8 @@ public class JChatMindFactory {
         List<ChatMessageDTO> chatMessages = compressedContext.recentMessages();
         List<Message> memory = new ArrayList<>();
         if (StringUtils.hasLength(compressedContext.summary())) {
-            memory.add(new SystemMessage("[历史摘要]\n" + compressedContext.summary()
-                    + "\n\n说明：历史摘要只是辅助上下文。如果摘要与最近用户输入或检索结果冲突，以最近用户输入和检索结果为准。"));
+            memory.add(new SystemMessage("[Conversation summary]\n" + compressedContext.summary()
+                    + "\n\nNote: The summary is only auxiliary context. If it conflicts with recent user input or retrieval results, prefer the recent input and retrieval results."));
         }
         for (ChatMessageDTO chatMessageDTO : chatMessages) {
             switch (chatMessageDTO.getRole()) {
@@ -272,7 +272,7 @@ public class JChatMindFactory {
                 toolCorrectionProperties,
                 toolFailureClassifier,
                 agentRunFailureHandler,
-                agentToolCallExecutor
+                toolCallBatchExecutor
         );
     }
 

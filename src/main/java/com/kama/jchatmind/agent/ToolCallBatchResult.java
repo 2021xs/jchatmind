@@ -10,7 +10,7 @@ import java.util.List;
 
 @Data
 @Builder
-public class AgentToolCallExecution {
+public class ToolCallBatchResult {
     private Status status;
     private List<ToolExecutionRecord> records;
     private ToolExecutionResult toolExecutionResult;
