@@ -11,6 +11,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
@@ -25,6 +26,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 class FeishuEventControllerTest {
 
+    private static final String TEST_REPO_ID = "ac61fb27-e3cd-4193-9620-b6d50ef8f096";
+
     private MockMvc mockMvc;
     private FeishuMessageClient messageClient;
     private CodeRagAnswerEvidenceService codeRagAnswerEvidenceService;
@@ -34,10 +37,12 @@ class FeishuEventControllerTest {
         ObjectMapper objectMapper = new ObjectMapper();
         FeishuProperties properties = new FeishuProperties();
         properties.setVerificationToken("test-token");
+        properties.setRepoAliases(Map.of("hmdp", TEST_REPO_ID, "黑马点评", TEST_REPO_ID));
         messageClient = mock(FeishuMessageClient.class);
         codeRagAnswerEvidenceService = mock(CodeRagAnswerEvidenceService.class);
         FeishuBotService botService = new FeishuBotService(
-                new FeishuCommandParser(), messageClient, codeRagAnswerEvidenceService);
+                new FeishuCommandParser(), messageClient, codeRagAnswerEvidenceService,
+                new FeishuRepoResolver(properties));
         FeishuMessageEventHandler messageEventHandler = new FeishuMessageEventHandler(objectMapper, botService);
         FeishuEventController controller = new FeishuEventController(objectMapper, properties, messageEventHandler);
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
@@ -120,7 +125,7 @@ class FeishuEventControllerTest {
 
     @Test
     void messageReceiveAskCodeTextEventReturnsOkAndSendsEvidence() throws Exception {
-        when(codeRagAnswerEvidenceService.retrieve("hmdp", "秒杀订单队列在哪里定义？"))
+        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "秒杀订单队列在哪里定义？"))
                 .thenReturn(CodeAnswerEvidenceResult.builder()
                         .selectedEvidence(List.of(CodeSearchResult.builder()
                                 .filePath("src/main/java/demo/RabbitConstants.java")
@@ -143,7 +148,7 @@ class FeishuEventControllerTest {
                                       "chat_id": "oc_test",
                                       "chat_type": "p2p",
                                       "message_type": "text",
-                                      "content": "{\\"text\\":\\"/ask-code hmdp 秒杀订单队列在哪里定义？\\"}"
+                                      "content": "{\\"text\\":\\"/ask-code 黑马点评 秒杀订单队列在哪里定义？\\"}"
                                     }
                                   }
                                 }
@@ -151,13 +156,13 @@ class FeishuEventControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0));
 
-        verify(codeRagAnswerEvidenceService).retrieve(eq("hmdp"), eq("秒杀订单队列在哪里定义？"));
+        verify(codeRagAnswerEvidenceService).retrieve(eq(TEST_REPO_ID), eq("秒杀订单队列在哪里定义？"));
         verify(messageClient).sendText(eq("oc_test"), org.mockito.ArgumentMatchers.contains("SECKILL_ORDER_QUEUE"));
     }
 
     @Test
     void messageReceiveAskCodeFailureStillReturnsOkCode() throws Exception {
-        when(codeRagAnswerEvidenceService.retrieve("hmdp", "哪里定义队列？"))
+        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "哪里定义队列？"))
                 .thenThrow(new RuntimeException("selector unavailable"));
 
         mockMvc.perform(post("/api/feishu/events")

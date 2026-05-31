@@ -7,6 +7,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.util.Map;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -19,6 +20,8 @@ import static org.mockito.Mockito.when;
 
 class FeishuBotServiceTest {
 
+    private static final String TEST_REPO_ID = "ac61fb27-e3cd-4193-9620-b6d50ef8f096";
+
     private FeishuMessageClient messageClient;
     private CodeRagAnswerEvidenceService codeRagAnswerEvidenceService;
     private FeishuBotService botService;
@@ -27,7 +30,10 @@ class FeishuBotServiceTest {
     void setUp() {
         messageClient = mock(FeishuMessageClient.class);
         codeRagAnswerEvidenceService = mock(CodeRagAnswerEvidenceService.class);
-        botService = new FeishuBotService(new FeishuCommandParser(), messageClient, codeRagAnswerEvidenceService);
+        FeishuProperties properties = new FeishuProperties();
+        properties.setRepoAliases(Map.of("hmdp", TEST_REPO_ID, "黑马点评", TEST_REPO_ID));
+        botService = new FeishuBotService(new FeishuCommandParser(), messageClient, codeRagAnswerEvidenceService,
+                new FeishuRepoResolver(properties));
     }
 
     @Test
@@ -40,7 +46,7 @@ class FeishuBotServiceTest {
 
     @Test
     void validAskCodeCallsCodeRagAndSendsFormattedEvidence() {
-        when(codeRagAnswerEvidenceService.retrieve("hmdp", "秒杀订单队列在哪里定义？"))
+        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "秒杀订单队列在哪里定义？"))
                 .thenReturn(CodeAnswerEvidenceResult.builder()
                         .selectedEvidence(List.of(CodeSearchResult.builder()
                                 .filePath("src/main/java/demo/RabbitConstants.java")
@@ -53,7 +59,7 @@ class FeishuBotServiceTest {
 
         botService.handleTextMessage("oc_test", "/ask-code hmdp 秒杀订单队列在哪里定义？");
 
-        verify(codeRagAnswerEvidenceService).retrieve("hmdp", "秒杀订单队列在哪里定义？");
+        verify(codeRagAnswerEvidenceService).retrieve(TEST_REPO_ID, "秒杀订单队列在哪里定义？");
         ArgumentCaptor<String> replyCaptor = ArgumentCaptor.forClass(String.class);
         verify(messageClient).sendText(eq("oc_test"), replyCaptor.capture());
         String reply = replyCaptor.getValue();
@@ -82,11 +88,19 @@ class FeishuBotServiceTest {
 
     @Test
     void codeRagFailureSendsFriendlyError() {
-        when(codeRagAnswerEvidenceService.retrieve("hmdp", "哪里定义队列？"))
+        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "哪里定义队列？"))
                 .thenThrow(new RuntimeException("selector unavailable"));
 
         botService.handleTextMessage("oc_test", "/ask-code hmdp 哪里定义队列？");
 
         verify(messageClient).sendText(eq("oc_test"), eq(FeishuBotService.ASK_CODE_ERROR));
+    }
+
+    @Test
+    void unknownRepoAliasSendsFriendlyMessageWithoutCallingCodeRag() {
+        botService.handleTextMessage("oc_test", "/ask-code unknown 哪里定义队列？");
+
+        verify(messageClient).sendText(eq("oc_test"), eq(FeishuBotService.ASK_CODE_REPO_NOT_FOUND));
+        verify(codeRagAnswerEvidenceService, never()).retrieve(anyString(), anyString());
     }
 }

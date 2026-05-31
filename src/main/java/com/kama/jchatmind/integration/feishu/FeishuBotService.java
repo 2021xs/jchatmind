@@ -24,22 +24,24 @@ public class FeishuBotService {
 
             Currently supported:
             /help View help
-            /ask-code <repoId> <question> Query code evidence with Code RAG
+            /ask-code <repoKey> <question> Query code evidence with Code RAG
             """;
 
     static final String ASK_CODE_USAGE = """
             用法：
-            /ask-code <repoId> <问题>
+            /ask-code <仓库名或别名> <问题>
 
             示例：
-            /ask-code hmdp 秒杀订单队列在哪里定义？
+            /ask-code 黑马点评 秒杀订单队列在哪里定义？
             """;
 
     static final String ASK_CODE_ERROR = "查询失败，请稍后重试；后端日志已记录错误。";
+    static final String ASK_CODE_REPO_NOT_FOUND = "未找到该代码仓库，请检查仓库名或别名配置。";
 
     private final FeishuCommandParser commandParser;
     private final FeishuMessageClient messageClient;
     private final CodeRagAnswerEvidenceService codeRagAnswerEvidenceService;
+    private final FeishuRepoResolver repoResolver;
 
     public void handleTextMessage(String chatId, String text) {
         FeishuCommandParser.ParsedCommand command = commandParser.parse(text);
@@ -51,18 +53,25 @@ public class FeishuBotService {
         }
     }
 
-    private void handleAskCode(String chatId, String repoId, String query) {
+    private void handleAskCode(String chatId, String repoKey, String query) {
+        String repoId = repoResolver.resolveRepoId(repoKey).orElse(null);
+        if (!StringUtils.hasText(repoId)) {
+            log.info("Feishu ask-code repo alias not found: repoKey={}, queryLength={}", repoKey, query.length());
+            messageClient.sendText(chatId, ASK_CODE_REPO_NOT_FOUND);
+            return;
+        }
+
         long started = System.currentTimeMillis();
         try {
             CodeAnswerEvidenceResult result = codeRagAnswerEvidenceService.retrieve(repoId, query);
             long latencyMs = System.currentTimeMillis() - started;
-            log.info("Feishu ask-code completed: repoId={}, queryLength={}, latencyMs={}",
-                    repoId, query.length(), latencyMs);
+            log.info("Feishu ask-code completed: repoKey={}, repoId={}, queryLength={}, latencyMs={}",
+                    repoKey, repoId, query.length(), latencyMs);
             messageClient.sendText(chatId, formatAskCodeReply(query, result));
         } catch (RuntimeException e) {
             long latencyMs = System.currentTimeMillis() - started;
-            log.warn("Feishu ask-code failed: repoId={}, queryLength={}, latencyMs={}, error={}",
-                    repoId, query.length(), latencyMs, e.getMessage());
+            log.warn("Feishu ask-code failed: repoKey={}, repoId={}, queryLength={}, latencyMs={}, error={}",
+                    repoKey, repoId, query.length(), latencyMs, e.getMessage());
             messageClient.sendText(chatId, ASK_CODE_ERROR);
         }
     }
