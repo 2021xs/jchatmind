@@ -37,8 +37,8 @@ public class FeishuMessageEventHandler {
         }
 
         String text = parseTextContent(messageId, content);
-        log.info("Received Feishu message event: messageId={}, chatId={}, chatType={}, messageType={}, text={}",
-                messageId, chatId, chatType, messageType, text);
+        log.info("Received Feishu message event: messageId={}, chatId={}, chatType={}, messageType={}, textLength={}",
+                messageId, chatId, chatType, messageType, text.length());
         try {
             botService.handleTextMessage(chatId, text);
         } catch (RuntimeException e) {
