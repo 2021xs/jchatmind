@@ -28,6 +28,12 @@ document:
   storage:
     base-path: ./data/documents
 
+logging:
+  level:
+    org.springframework.web.client.RestTemplate: INFO
+    org.springframework.http.codec: INFO
+    org.springframework.web.servlet.mvc.method.annotation: INFO
+
 jchatmind:
   feishu:
     enabled: ${JCHATMIND_FEISHU_ENABLED:false}

@@ -16,6 +16,7 @@ public class FeishuMessageEventHandler {
     static final String MESSAGE_RECEIVE_EVENT = "im.message.receive_v1";
 
     private final ObjectMapper objectMapper;
+    private final FeishuBotService botService;
 
     public void handle(String eventType, JsonNode root) {
         if (!MESSAGE_RECEIVE_EVENT.equals(eventType)) {
@@ -38,6 +39,11 @@ public class FeishuMessageEventHandler {
         String text = parseTextContent(messageId, content);
         log.info("Received Feishu message event: messageId={}, chatId={}, chatType={}, messageType={}, text={}",
                 messageId, chatId, chatType, messageType, text);
+        try {
+            botService.handleTextMessage(chatId, text);
+        } catch (RuntimeException e) {
+            log.warn("Feishu text message handling failed: messageId={}, error={}", messageId, e.getMessage());
+        }
     }
 
     private String parseTextContent(String messageId, String content) {
