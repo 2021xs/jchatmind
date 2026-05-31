@@ -30,7 +30,9 @@ document:
 
 logging:
   level:
+    org.springframework.web: INFO
     org.springframework.web.client.RestTemplate: INFO
+    org.springframework.web.HttpLogging: INFO
     org.springframework.http.codec: INFO
     org.springframework.web.servlet.mvc.method.annotation: INFO
 
