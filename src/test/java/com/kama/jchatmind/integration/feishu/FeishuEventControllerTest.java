@@ -17,9 +17,11 @@ class FeishuEventControllerTest {
 
     @BeforeEach
     void setUp() {
+        ObjectMapper objectMapper = new ObjectMapper();
         FeishuProperties properties = new FeishuProperties();
         properties.setVerificationToken("test-token");
-        FeishuEventController controller = new FeishuEventController(new ObjectMapper(), properties);
+        FeishuMessageEventHandler messageEventHandler = new FeishuMessageEventHandler(objectMapper);
+        FeishuEventController controller = new FeishuEventController(objectMapper, properties, messageEventHandler);
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 
@@ -63,6 +65,81 @@ class FeishuEventControllerTest {
                                     "event_type": "im.message.receive_v1"
                                   },
                                   "event": {}
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0));
+    }
+
+    @Test
+    void messageReceiveTextEventReturnsOkCode() throws Exception {
+        mockMvc.perform(post("/api/feishu/events")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "schema": "2.0",
+                                  "header": {
+                                    "event_type": "im.message.receive_v1"
+                                  },
+                                  "event": {
+                                    "message": {
+                                      "message_id": "om_test",
+                                      "chat_id": "oc_test",
+                                      "chat_type": "p2p",
+                                      "message_type": "text",
+                                      "content": "{\\"text\\":\\"hello\\"}"
+                                    }
+                                  }
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0));
+    }
+
+    @Test
+    void messageReceiveNonTextEventReturnsOkCode() throws Exception {
+        mockMvc.perform(post("/api/feishu/events")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "schema": "2.0",
+                                  "header": {
+                                    "event_type": "im.message.receive_v1"
+                                  },
+                                  "event": {
+                                    "message": {
+                                      "message_id": "om_image",
+                                      "chat_id": "oc_test",
+                                      "chat_type": "p2p",
+                                      "message_type": "image",
+                                      "content": "{\\"image_key\\":\\"img_test\\"}"
+                                    }
+                                  }
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0));
+    }
+
+    @Test
+    void messageReceiveInvalidTextContentReturnsOkCode() throws Exception {
+        mockMvc.perform(post("/api/feishu/events")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "schema": "2.0",
+                                  "header": {
+                                    "event_type": "im.message.receive_v1"
+                                  },
+                                  "event": {
+                                    "message": {
+                                      "message_id": "om_invalid",
+                                      "chat_id": "oc_test",
+                                      "chat_type": "p2p",
+                                      "message_type": "text",
+                                      "content": "not-json"
+                                    }
+                                  }
                                 }
                                 """))
                 .andExpect(status().isOk())

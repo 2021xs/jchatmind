@@ -26,6 +26,7 @@ public class FeishuEventController {
 
     private final ObjectMapper objectMapper;
     private final FeishuProperties feishuProperties;
+    private final FeishuMessageEventHandler messageEventHandler;
 
     @PostMapping
     public ResponseEntity<Map<String, Object>> handleEvent(@RequestBody String body) throws JsonProcessingException {
@@ -46,6 +47,7 @@ public class FeishuEventController {
             return ResponseEntity.ok(Map.of("challenge", challenge));
         }
 
+        messageEventHandler.handle(eventType, root);
         return ResponseEntity.ok(Map.of("code", 0));
     }
 
