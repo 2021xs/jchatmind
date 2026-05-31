@@ -6,12 +6,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Map;
 import java.util.Objects;
@@ -28,7 +28,7 @@ public class FeishuEventController {
     private final FeishuProperties feishuProperties;
 
     @PostMapping
-    public Map<String, Object> handleEvent(@RequestBody String body) throws JsonProcessingException {
+    public ResponseEntity<Map<String, Object>> handleEvent(@RequestBody String body) throws JsonProcessingException {
         JsonNode root = objectMapper.readTree(body);
         String type = root.path("type").asText(null);
         String eventType = StringUtils.hasText(type)
@@ -37,20 +37,20 @@ public class FeishuEventController {
         log.info("Received Feishu event type={}", eventType);
 
         if (URL_VERIFICATION.equals(type)) {
-            verifyToken(root.path("token").asText(null));
+            if (!isValidToken(root.path("token").asText(null))) {
+                log.warn("Feishu URL verification token validation failed");
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+            }
             String challenge = root.path("challenge").asText();
             log.info("Feishu URL verification succeeded");
-            return Map.of("challenge", challenge);
+            return ResponseEntity.ok(Map.of("challenge", challenge));
         }
 
-        return Map.of("code", 0);
+        return ResponseEntity.ok(Map.of("code", 0));
     }
 
-    private void verifyToken(String requestToken) {
+    private boolean isValidToken(String requestToken) {
         String configuredToken = feishuProperties.getVerificationToken();
-        if (!StringUtils.hasText(configuredToken) || !Objects.equals(requestToken, configuredToken)) {
-            log.warn("Feishu URL verification token validation failed");
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Invalid verification token");
-        }
+        return StringUtils.hasText(configuredToken) && Objects.equals(requestToken, configuredToken);
     }
 }
