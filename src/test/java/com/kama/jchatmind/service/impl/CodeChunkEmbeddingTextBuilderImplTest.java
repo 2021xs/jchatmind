@@ -79,6 +79,26 @@ class CodeChunkEmbeddingTextBuilderImplTest {
     }
 
     @Test
+    void luaScriptContextContainsRedisMetadata() throws Exception {
+        CodeChunkEmbeddingTextBuilderImpl builder = builder(true);
+        String text = builder.build(parsed("src/main/resources/lua/seckill.lua", "LUA_SCRIPT", ""),
+                chunk("LUA_SCRIPT", "seckill.lua", "return redis.call('sismember', KEYS[1], ARGV[1])", Map.of(
+                        "scriptName", "seckill",
+                        "redisCommands", List.of("sismember"),
+                        "redisKeys", List.of("KEYS[1]"),
+                        "redisArgs", List.of("ARGV[1]"),
+                        "returnCodes", List.of("0", "1")
+                )));
+
+        assertTrue(text.contains("This chunk is a Lua script."));
+        assertTrue(text.contains("Redis commands: sismember."));
+        assertTrue(text.contains("script_name: seckill"));
+        assertTrue(text.contains("redis_commands: sismember"));
+        assertTrue(text.contains("redis_keys: KEYS[1]"));
+        assertTrue(text.contains("return redis.call('sismember'"));
+    }
+
+    @Test
     void disabledContextualPrefixDoesNotEmitContext() throws Exception {
         CodeChunkEmbeddingTextBuilderImpl builder = builder(false);
         String text = builder.build(parsed("src/main/java/demo/UserService.java", "JAVA", "UserService"),

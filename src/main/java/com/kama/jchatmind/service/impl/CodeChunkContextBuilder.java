@@ -39,6 +39,9 @@ public class CodeChunkContextBuilder {
         if ("SQL_FILE".equals(chunkType)) {
             return sqlFile();
         }
+        if ("LUA_SCRIPT".equals(chunkType)) {
+            return luaScript(parsed, metadata);
+        }
         if ("ENUM".equals(chunkType)) {
             return enumContext(parsed, metadata);
         }
@@ -122,6 +125,15 @@ public class CodeChunkContextBuilder {
         StringBuilder sb = base("This chunk is a standalone SQL file.");
         append(sb, "It may define tables, indexes, schema initialization, or database seed data.");
         append(sb, "Use this chunk when the query asks about database schema, init SQL, table definition, or indexes.");
+        return sb.toString();
+    }
+
+    private String luaScript(ParsedCodeFile parsed, Map<String, Object> metadata) {
+        StringBuilder sb = base("This chunk is a Lua script.");
+        append(sb, "File: " + safe(parsed.getRelativePath()) + ".");
+        append(sb, "Script: " + first(metadata.get("scriptName"), "") + ".");
+        append(sb, "Redis commands: " + format(metadata.get("redisCommands")) + ".");
+        append(sb, "Use this chunk when the query asks about Redis Lua script, atomic validation, stock deduction, duplicate order checks, or script return codes.");
         return sb.toString();
     }
 

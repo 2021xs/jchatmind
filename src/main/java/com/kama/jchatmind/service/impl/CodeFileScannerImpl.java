@@ -99,6 +99,7 @@ public class CodeFileScannerImpl implements CodeFileScanner {
                 || lower.endsWith(".java")
                 || lower.endsWith("mapper.xml")
                 || lower.endsWith(".sql")
+                || lower.endsWith(".lua")
                 || lower.equals("application.yml")
                 || lower.equals("application.yaml")
                 || lower.equals("application.properties");

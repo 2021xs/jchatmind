@@ -59,6 +59,10 @@ public class CodeChunkParserImpl implements CodeChunkParser {
     private static final Pattern METHOD_PATTERN = Pattern.compile("\\b(?:public|private|protected)\\s+[\\w<>\\[\\], ?]+\\s+(\\w+)\\s*\\(");
     private static final Pattern XML_DOCTYPE_PATTERN = Pattern.compile("(?is)<!DOCTYPE\\s+mapper\\s+[^>]*(?:\\[[\\s\\S]*?]\\s*)?>");
     private static final Pattern TABLE_PATTERN = Pattern.compile("\\b(from|join|update|into)\\s+([`\\w.]+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern LUA_REDIS_COMMAND_PATTERN = Pattern.compile("\\bredis\\.call\\s*\\(\\s*['\"]([a-zA-Z0-9_]+)['\"]", Pattern.CASE_INSENSITIVE);
+    private static final Pattern LUA_KEY_PATTERN = Pattern.compile("\\bKEYS\\s*\\[\\s*(\\d+)\\s*]", Pattern.CASE_INSENSITIVE);
+    private static final Pattern LUA_ARG_PATTERN = Pattern.compile("\\bARGV\\s*\\[\\s*(\\d+)\\s*]", Pattern.CASE_INSENSITIVE);
+    private static final Pattern LUA_RETURN_PATTERN = Pattern.compile("(?m)^\\s*return\\s+([^\\s;]+)");
     private static final Set<String> XML_STATEMENT_TAGS = Set.of("select", "insert", "update", "delete");
     private static final Set<String> MYBATIS_DYNAMIC_TAGS = Set.of(
             "if", "choose", "when", "otherwise", "foreach", "where", "set", "trim", "bind"
@@ -93,6 +97,9 @@ public class CodeChunkParserImpl implements CodeChunkParser {
                     break;
                 case "SQL_FILE":
                     chunks = List.of(simpleChunk("SQL_FILE", filePath.getFileName().toString(), content, 1, lineCount(content), Map.of("tables", extractTables(content))));
+                    break;
+                case "LUA_SCRIPT":
+                    chunks = List.of(parseLuaScript(content, filePath.getFileName().toString()));
                     break;
                 default:
                     chunks = List.of(simpleChunk("TEXT", filePath.getFileName().toString(), content, 1, lineCount(content), Map.of("fileType", fileType)));
@@ -545,6 +552,35 @@ public class CodeChunkParserImpl implements CodeChunkParser {
                 .build();
     }
 
+    private CodeChunk parseLuaScript(String content, String fileName) {
+        LinkedHashSet<String> redisCommands = extractMatches(LUA_REDIS_COMMAND_PATTERN, content);
+        LinkedHashSet<String> redisKeys = prefixedMatches("KEYS", LUA_KEY_PATTERN, content);
+        LinkedHashSet<String> redisArgs = prefixedMatches("ARGV", LUA_ARG_PATTERN, content);
+        LinkedHashSet<String> returnCodes = extractMatches(LUA_RETURN_PATTERN, content);
+
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("fileName", fileName);
+        metadata.put("fileType", "LUA_SCRIPT");
+        metadata.put("scriptName", stripExtension(fileName));
+        metadata.put("redisCommands", new ArrayList<>(redisCommands));
+        metadata.put("redisKeys", new ArrayList<>(redisKeys));
+        metadata.put("redisArgs", new ArrayList<>(redisArgs));
+        metadata.put("returnCodes", new ArrayList<>(returnCodes));
+        metadata.put("startLine", 1);
+        metadata.put("endLine", lineCount(content));
+
+        List<SymbolMetadata> symbols = new ArrayList<>();
+        symbols.add(new SymbolMetadata(stripExtension(fileName), fileName, "LUA_SCRIPT",
+                normalizedValues(stripExtension(fileName), fileName)));
+        for (String command : redisCommands) {
+            symbols.add(new SymbolMetadata(command, command, "REDIS_COMMAND",
+                    normalizedValues(command, "redis " + command)));
+        }
+        mergeSymbolMetadata(metadata, symbols);
+
+        return simpleChunk("LUA_SCRIPT", fileName, content, 1, lineCount(content), metadata);
+    }
+
     private String resolveFileType(Path filePath) {
         String name = filePath.getFileName().toString();
         String lower = name.toLowerCase();
@@ -553,6 +589,7 @@ public class CodeChunkParserImpl implements CodeChunkParser {
         if (lower.endsWith(".java")) return "JAVA";
         if (lower.endsWith("mapper.xml")) return "MYBATIS_XML";
         if (lower.endsWith(".sql")) return "SQL_FILE";
+        if (lower.endsWith(".lua")) return "LUA_SCRIPT";
         if (lower.equals("application.yml") || lower.equals("application.yaml") || lower.equals("application.properties")) return "CONFIG";
         return "TEXT";
     }
@@ -799,6 +836,32 @@ public class CodeChunkParserImpl implements CodeChunkParser {
             tables.add(matcher.group(2).replace("`", ""));
         }
         return new ArrayList<>(tables);
+    }
+
+    private LinkedHashSet<String> extractMatches(Pattern pattern, String content) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        Matcher matcher = pattern.matcher(content);
+        while (matcher.find()) {
+            addIfPresent(values, matcher.group(1));
+        }
+        return values;
+    }
+
+    private LinkedHashSet<String> prefixedMatches(String prefix, Pattern pattern, String content) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        Matcher matcher = pattern.matcher(content);
+        while (matcher.find()) {
+            addIfPresent(values, prefix + "[" + matcher.group(1) + "]");
+        }
+        return values;
+    }
+
+    private String stripExtension(String fileName) {
+        if (fileName == null) {
+            return "";
+        }
+        int index = fileName.lastIndexOf('.');
+        return index <= 0 ? fileName : fileName.substring(0, index);
     }
 
     private String extractFirst(Pattern pattern, String content) {

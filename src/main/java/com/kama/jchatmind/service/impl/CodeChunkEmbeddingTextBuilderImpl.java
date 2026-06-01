@@ -22,7 +22,8 @@ public class CodeChunkEmbeddingTextBuilderImpl implements CodeChunkEmbeddingText
             "method", "controller", "namespace", "sqlType", "configKey", "configKeys",
             "javaType", "methods", "fileType", "packageName", "qualifiedClassName",
             "signature", "returnType", "parameters", "annotations", "mapperClass",
-            "mapperMethod", "relatedSymbol", "apiPath", "httpMethod"
+            "mapperMethod", "relatedSymbol", "apiPath", "httpMethod", "scriptName",
+            "redisCommands", "redisKeys", "redisArgs", "returnCodes"
     );
 
     private final ObjectMapper objectMapper;
@@ -45,6 +46,8 @@ public class CodeChunkEmbeddingTextBuilderImpl implements CodeChunkEmbeddingText
             text = buildMapperMethodText(parsed, chunk, metadata);
         } else if ("MYBATIS_SQL".equals(chunkType)) {
             text = buildMyBatisSqlText(parsed, chunk, metadata);
+        } else if ("LUA_SCRIPT".equals(chunkType)) {
+            text = buildLuaScriptText(parsed, chunk, metadata);
         } else {
             text = buildDefaultText(parsed, chunk, metadata);
         }
@@ -121,6 +124,20 @@ public class CodeChunkEmbeddingTextBuilderImpl implements CodeChunkEmbeddingText
         append(sb, "mapper_method", metadata.get("mapperMethod"));
         append(sb, "sql_id", metadata.get("sqlId"));
         append(sb, "sql_type", metadata.get("sqlType"));
+        sb.append("content:\n").append(nullToEmpty(chunk.getContent()));
+        return sb.toString();
+    }
+
+    private String buildLuaScriptText(ParsedCodeFile parsed, CodeChunk chunk, Map<String, Object> metadata) {
+        StringBuilder sb = new StringBuilder();
+        appendContext(sb, parsed, chunk, metadata);
+        append(sb, "chunk_type", chunk.getChunkType());
+        append(sb, "file_path", parsed.getRelativePath());
+        append(sb, "script_name", metadata.get("scriptName"));
+        append(sb, "redis_commands", formatValue(metadata.get("redisCommands")));
+        append(sb, "redis_keys", formatValue(metadata.get("redisKeys")));
+        append(sb, "redis_args", formatValue(metadata.get("redisArgs")));
+        append(sb, "return_codes", formatValue(metadata.get("returnCodes")));
         sb.append("content:\n").append(nullToEmpty(chunk.getContent()));
         return sb.toString();
     }

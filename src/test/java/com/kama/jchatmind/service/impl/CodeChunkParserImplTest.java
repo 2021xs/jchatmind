@@ -293,6 +293,44 @@ class CodeChunkParserImplTest {
         assertTrue(metadata.get("normalizedSymbols").toString().contains("cache shop"));
     }
 
+    @Test
+    void parsesLuaScriptIntoRedisScriptChunk() throws Exception {
+        Path file = write("seckill.lua", """
+                local voucherId = ARGV[1]
+                local userId = ARGV[2]
+                local stockKey = KEYS[1]
+                local orderKey = KEYS[2]
+                if tonumber(redis.call('get', stockKey)) <= 0 then
+                    return 1
+                end
+                if redis.call("sismember", orderKey, userId) == 1 then
+                    return 2
+                end
+                redis.call('incrby', stockKey, -1)
+                redis.call('sadd', orderKey, userId)
+                return 0
+                """);
+
+        ParsedCodeFile parsed = parser.parse(tempDir, file);
+
+        assertEquals("LUA_SCRIPT", parsed.getFileType());
+        CodeChunk chunk = findChunk(parsed, "LUA_SCRIPT");
+        Map<?, ?> metadata = metadata(chunk);
+        assertEquals("seckill.lua", chunk.getSymbolName());
+        assertEquals("seckill", metadata.get("scriptName"));
+        assertTrue(chunk.getContent().contains("redis.call('incrby'"));
+        assertTrue(metadata.get("redisCommands").toString().contains("get"));
+        assertTrue(metadata.get("redisCommands").toString().contains("sismember"));
+        assertTrue(metadata.get("redisCommands").toString().contains("incrby"));
+        assertTrue(metadata.get("redisKeys").toString().contains("KEYS[1]"));
+        assertTrue(metadata.get("redisArgs").toString().contains("ARGV[2]"));
+        assertTrue(metadata.get("returnCodes").toString().contains("1"));
+        assertTrue(metadata.get("returnCodes").toString().contains("0"));
+        assertTrue(metadata.get("symbolTypes").toString().contains("LUA_SCRIPT"));
+        assertTrue(metadata.get("symbolTypes").toString().contains("REDIS_COMMAND"));
+        assertTrue(metadata.get("normalizedSymbols").toString().contains("redis sismember"));
+    }
+
     private Path write(String fileName, String content) throws Exception {
         Path file = tempDir.resolve(fileName);
         Files.writeString(file, content);
