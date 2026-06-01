@@ -3,21 +3,27 @@ package com.kama.jchatmind.integration.feishu;
 import com.kama.jchatmind.model.dto.CodeAnswerEvidenceResult;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.time.Clock;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.Executor;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class FeishuBotService {
 
     private static final int MAX_EVIDENCE_COUNT = 5;
     private static final int MAX_SNIPPET_LENGTH = 1000;
     private static final int MAX_REPLY_LENGTH = 12000;
+    private static final long AGENT_TEST_UPDATE_DELAY_MILLIS = 2000L;
+    private static final DateTimeFormatter CARD_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     static final String HELP_TEXT = """
             JChatMind Feishu bot is connected.
@@ -25,6 +31,7 @@ public class FeishuBotService {
             Currently supported:
             /help View help
             /ask-code <repoKey> <question> Query code evidence with Code RAG
+            /agent-test <question> Verify Feishu card update
             """;
 
     static final String ASK_CODE_USAGE = """
@@ -37,11 +44,52 @@ public class FeishuBotService {
 
     static final String ASK_CODE_ERROR = "查询失败，请稍后重试；后端日志已记录错误。";
     static final String ASK_CODE_REPO_NOT_FOUND = "未找到该代码仓库，请检查仓库名或别名配置。";
+    static final String AGENT_TEST_USAGE = """
+            用法：
+            /agent-test <问题>
+
+            示例：
+            /agent-test 分析秒杀订单链路
+            """;
+    static final String AGENT_TEST_SEND_ERROR = "Agent 测试卡片发送失败，请查看后端日志。";
 
     private final FeishuCommandParser commandParser;
     private final FeishuMessageClient messageClient;
     private final CodeRagAnswerEvidenceService codeRagAnswerEvidenceService;
     private final FeishuRepoResolver repoResolver;
+    private final FeishuCardMessageClient cardMessageClient;
+    private final Executor taskExecutor;
+    private final Clock clock;
+    private final long agentTestUpdateDelayMillis;
+
+    @Autowired
+    public FeishuBotService(FeishuCommandParser commandParser,
+                            FeishuMessageClient messageClient,
+                            CodeRagAnswerEvidenceService codeRagAnswerEvidenceService,
+                            FeishuRepoResolver repoResolver,
+                            FeishuCardMessageClient cardMessageClient,
+                            Executor taskExecutor) {
+        this(commandParser, messageClient, codeRagAnswerEvidenceService, repoResolver, cardMessageClient,
+                taskExecutor, Clock.systemDefaultZone(), AGENT_TEST_UPDATE_DELAY_MILLIS);
+    }
+
+    FeishuBotService(FeishuCommandParser commandParser,
+                     FeishuMessageClient messageClient,
+                     CodeRagAnswerEvidenceService codeRagAnswerEvidenceService,
+                     FeishuRepoResolver repoResolver,
+                     FeishuCardMessageClient cardMessageClient,
+                     Executor taskExecutor,
+                     Clock clock,
+                     long agentTestUpdateDelayMillis) {
+        this.commandParser = commandParser;
+        this.messageClient = messageClient;
+        this.codeRagAnswerEvidenceService = codeRagAnswerEvidenceService;
+        this.repoResolver = repoResolver;
+        this.cardMessageClient = cardMessageClient;
+        this.taskExecutor = taskExecutor;
+        this.clock = clock;
+        this.agentTestUpdateDelayMillis = agentTestUpdateDelayMillis;
+    }
 
     public void handleTextMessage(String chatId, String text) {
         FeishuCommandParser.ParsedCommand command = commandParser.parse(text);
@@ -49,7 +97,51 @@ public class FeishuBotService {
             case HELP -> messageClient.sendText(chatId, HELP_TEXT);
             case ASK_CODE -> handleAskCode(chatId, command.repoId(), command.query());
             case ASK_CODE_INVALID -> messageClient.sendText(chatId, ASK_CODE_USAGE);
+            case AGENT_TEST -> handleAgentTest(chatId, command.query());
+            case AGENT_TEST_INVALID -> messageClient.sendText(chatId, AGENT_TEST_USAGE);
             case UNKNOWN -> log.info("Feishu text message ignored: command not supported");
+        }
+    }
+
+    private void handleAgentTest(String chatId, String question) {
+        String taskId = newTaskId();
+        FeishuAgentCardSnapshot running = FeishuAgentCardSnapshot.builder()
+                .taskId(taskId)
+                .question(question)
+                .status("处理中")
+                .stage("已收到任务，正在模拟执行")
+                .updatedAt(nowText())
+                .build();
+        try {
+            String messageId = cardMessageClient.sendAgentCard(chatId, running);
+            taskExecutor.execute(() -> updateAgentTestCardLater(messageId, taskId, question));
+        } catch (RuntimeException e) {
+            log.warn("Feishu agent-test card send failed: taskId={}, questionLength={}, error={}",
+                    taskId, question.length(), e.getMessage());
+            messageClient.sendText(chatId, AGENT_TEST_SEND_ERROR);
+        }
+    }
+
+    private void updateAgentTestCardLater(String messageId, String taskId, String question) {
+        try {
+            if (agentTestUpdateDelayMillis > 0) {
+                Thread.sleep(agentTestUpdateDelayMillis);
+            }
+            FeishuAgentCardSnapshot finished = FeishuAgentCardSnapshot.builder()
+                    .taskId(taskId)
+                    .question(question)
+                    .status("已完成")
+                    .stage("模拟执行完成")
+                    .result("这是 /agent-test 的卡片更新验证结果，尚未接入真实 Agent")
+                    .updatedAt(nowText())
+                    .build();
+            cardMessageClient.updateAgentCard(messageId, finished);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("Feishu agent-test card update interrupted: taskId={}", taskId);
+        } catch (RuntimeException e) {
+            log.warn("Feishu agent-test card update failed: taskId={}, messageId={}, error={}",
+                    taskId, messageId, e.getMessage());
         }
     }
 
@@ -133,5 +225,13 @@ public class FeishuBotService {
             return "      -";
         }
         return "      " + value.replace("\n", "\n      ");
+    }
+
+    private String newTaskId() {
+        return "FT-" + clock.millis() + "-" + UUID.randomUUID().toString().substring(0, 8);
+    }
+
+    private String nowText() {
+        return LocalDateTime.now(clock).format(CARD_TIME_FORMATTER);
     }
 }

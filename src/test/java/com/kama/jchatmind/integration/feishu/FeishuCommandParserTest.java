@@ -46,6 +46,24 @@ class FeishuCommandParserTest {
     }
 
     @Test
+    void parsesAgentTestCommandAndKeepsChineseQuestion() {
+        FeishuCommandParser.ParsedCommand command = parser.parse("/agent-test 分析秒杀订单链路");
+
+        assertEquals(FeishuCommandParser.CommandType.AGENT_TEST, command.type());
+        assertNull(command.repoId());
+        assertEquals("分析秒杀订单链路", command.query());
+    }
+
+    @Test
+    void agentTestWithoutQuestionIsInvalid() {
+        FeishuCommandParser.ParsedCommand command = parser.parse("/agent-test");
+
+        assertEquals(FeishuCommandParser.CommandType.AGENT_TEST_INVALID, command.type());
+        assertNull(command.repoId());
+        assertNull(command.query());
+    }
+
+    @Test
     void ordinaryTextIsUnknown() {
         FeishuCommandParser.ParsedCommand command = parser.parse("hello");
 

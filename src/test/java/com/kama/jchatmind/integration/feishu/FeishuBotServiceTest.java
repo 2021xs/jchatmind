@@ -7,12 +7,18 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.Map;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isA;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -23,17 +29,20 @@ class FeishuBotServiceTest {
     private static final String TEST_REPO_ID = "ac61fb27-e3cd-4193-9620-b6d50ef8f096";
 
     private FeishuMessageClient messageClient;
+    private FeishuCardMessageClient cardMessageClient;
     private CodeRagAnswerEvidenceService codeRagAnswerEvidenceService;
     private FeishuBotService botService;
 
     @BeforeEach
     void setUp() {
         messageClient = mock(FeishuMessageClient.class);
+        cardMessageClient = mock(FeishuCardMessageClient.class);
         codeRagAnswerEvidenceService = mock(CodeRagAnswerEvidenceService.class);
         FeishuProperties properties = new FeishuProperties();
         properties.setRepoAliases(Map.of("hmdp", TEST_REPO_ID, "黑马点评", TEST_REPO_ID));
         botService = new FeishuBotService(new FeishuCommandParser(), messageClient, codeRagAnswerEvidenceService,
-                new FeishuRepoResolver(properties));
+                new FeishuRepoResolver(properties), cardMessageClient, Runnable::run,
+                Clock.fixed(Instant.parse("2026-06-01T03:00:00Z"), ZoneId.of("Asia/Shanghai")), 0L);
     }
 
     @Test
@@ -102,6 +111,50 @@ class FeishuBotServiceTest {
 
         verify(messageClient).sendText(eq("oc_test"), eq(FeishuBotService.ASK_CODE_REPO_NOT_FOUND));
         verify(codeRagAnswerEvidenceService, never()).retrieve(anyString(), anyString());
+    }
+
+    @Test
+    void validAgentTestSendsAndUpdatesCard() {
+        when(cardMessageClient.sendAgentCard(eq("oc_test"), isA(FeishuAgentCardSnapshot.class)))
+                .thenReturn("om_card");
+        doNothing().when(cardMessageClient).updateAgentCard(eq("om_card"), isA(FeishuAgentCardSnapshot.class));
+
+        botService.handleTextMessage("oc_test", "/agent-test 分析秒杀订单链路");
+
+        verify(cardMessageClient).sendAgentCard(eq("oc_test"), isA(FeishuAgentCardSnapshot.class));
+        verify(cardMessageClient).updateAgentCard(eq("om_card"), isA(FeishuAgentCardSnapshot.class));
+    }
+
+    @Test
+    void invalidAgentTestSendsUsageWithoutCallingCardClient() {
+        botService.handleTextMessage("oc_test", "/agent-test");
+
+        verify(messageClient).sendText(eq("oc_test"), eq(FeishuBotService.AGENT_TEST_USAGE));
+        verify(cardMessageClient, never()).sendAgentCard(anyString(), isA(FeishuAgentCardSnapshot.class));
+    }
+
+    @Test
+    void agentTestSendFailureFallsBackToTextMessage() {
+        when(cardMessageClient.sendAgentCard(eq("oc_test"), isA(FeishuAgentCardSnapshot.class)))
+                .thenThrow(new RuntimeException("access denied"));
+
+        botService.handleTextMessage("oc_test", "/agent-test 分析秒杀订单链路");
+
+        verify(messageClient).sendText(eq("oc_test"), eq(FeishuBotService.AGENT_TEST_SEND_ERROR));
+        verify(cardMessageClient, never()).updateAgentCard(anyString(), isA(FeishuAgentCardSnapshot.class));
+    }
+
+    @Test
+    void agentTestUpdateFailureDoesNotThrow() {
+        when(cardMessageClient.sendAgentCard(eq("oc_test"), isA(FeishuAgentCardSnapshot.class)))
+                .thenReturn("om_card");
+        doThrow(new RuntimeException("update denied"))
+                .when(cardMessageClient).updateAgentCard(eq("om_card"), isA(FeishuAgentCardSnapshot.class));
+
+        botService.handleTextMessage("oc_test", "/agent-test 分析秒杀订单链路");
+
+        verify(cardMessageClient).sendAgentCard(eq("oc_test"), isA(FeishuAgentCardSnapshot.class));
+        verify(cardMessageClient).updateAgentCard(eq("om_card"), isA(FeishuAgentCardSnapshot.class));
     }
 
     @Test

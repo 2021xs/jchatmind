@@ -30,6 +30,7 @@ class FeishuEventControllerTest {
 
     private MockMvc mockMvc;
     private FeishuMessageClient messageClient;
+    private FeishuCardMessageClient cardMessageClient;
     private CodeRagAnswerEvidenceService codeRagAnswerEvidenceService;
 
     @BeforeEach
@@ -39,10 +40,12 @@ class FeishuEventControllerTest {
         properties.setVerificationToken("test-token");
         properties.setRepoAliases(Map.of("hmdp", TEST_REPO_ID, "黑马点评", TEST_REPO_ID));
         messageClient = mock(FeishuMessageClient.class);
+        cardMessageClient = mock(FeishuCardMessageClient.class);
         codeRagAnswerEvidenceService = mock(CodeRagAnswerEvidenceService.class);
         FeishuBotService botService = new FeishuBotService(
                 new FeishuCommandParser(), messageClient, codeRagAnswerEvidenceService,
-                new FeishuRepoResolver(properties));
+                new FeishuRepoResolver(properties), cardMessageClient, Runnable::run,
+                java.time.Clock.systemDefaultZone(), 0L);
         FeishuMessageEventHandler messageEventHandler = new FeishuMessageEventHandler(objectMapper, botService, Runnable::run);
         FeishuEventController controller = new FeishuEventController(objectMapper, properties, messageEventHandler);
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();

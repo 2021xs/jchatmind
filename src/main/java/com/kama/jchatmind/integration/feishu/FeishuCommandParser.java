@@ -8,6 +8,7 @@ public class FeishuCommandParser {
 
     static final String HELP_COMMAND = "/help";
     static final String ASK_CODE_COMMAND = "/ask-code";
+    static final String AGENT_TEST_COMMAND = "/agent-test";
 
     public boolean isHelpCommand(String text) {
         return parse(text).type() == CommandType.HELP;
@@ -22,6 +23,13 @@ public class FeishuCommandParser {
         String commandName = commandParts[0];
         if (HELP_COMMAND.equals(commandName)) {
             return new ParsedCommand(CommandType.HELP, null, null);
+        }
+        if (AGENT_TEST_COMMAND.equals(commandName)) {
+            String question = commandParts.length > 1 ? commandParts[1].trim() : "";
+            if (!StringUtils.hasText(question)) {
+                return new ParsedCommand(CommandType.AGENT_TEST_INVALID, null, null);
+            }
+            return new ParsedCommand(CommandType.AGENT_TEST, null, question);
         }
         if (!ASK_CODE_COMMAND.equals(commandName)) {
             return ParsedCommand.unknown();
@@ -42,6 +50,8 @@ public class FeishuCommandParser {
         HELP,
         ASK_CODE,
         ASK_CODE_INVALID,
+        AGENT_TEST,
+        AGENT_TEST_INVALID,
         UNKNOWN
     }
 
