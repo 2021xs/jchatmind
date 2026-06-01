@@ -387,11 +387,7 @@ public class JChatMind {
     }
 
     private boolean think() {
-        String thinkPrompt = "You are the decision module of an intelligent agent.\n"
-                + "Decide the next action from the current conversation context.\n\n"
-                + "Extra information:\n"
-                + "- Available knowledge bases: " + this.availableKbs + "\n"
-                + "- If context is missing, prefer searching the knowledge base first.";
+        String thinkPrompt = buildThinkPrompt(this.availableKbs);
 
         Prompt prompt = Prompt.builder()
                 .chatOptions(this.chatOptions)
@@ -416,6 +412,20 @@ public class JChatMind {
         logToolCalls(toolCalls);
 
         return toolCalls != null && !toolCalls.isEmpty();
+    }
+
+    static String buildThinkPrompt(List<KnowledgeBaseDTO> availableKbs) {
+        return "You are the decision module of an intelligent agent.\n"
+                + "Decide the next action from the current conversation context.\n\n"
+                + "Planning rules:\n"
+                + "- For macro questions about architecture, lifecycle, business flow, request flow, or how a feature works, answer the main path first.\n"
+                + "- For flow questions, prioritize entry point, core service method, persistence, messaging, consumer, state transition, and error or idempotency handling.\n"
+                + "- Do not let local details such as exact constant values, field declarations, config values, or script internals block the answer when the main flow evidence is sufficient.\n"
+                + "- If a local detail is missing after a reasonable search, state that it is not fully confirmed and continue with the macro answer.\n"
+                + "- After enough evidence covers the user's main question, stop calling tools and produce a concise final answer.\n\n"
+                + "Extra information:\n"
+                + "- Available knowledge bases: " + availableKbs + "\n"
+                + "- If context is missing, prefer searching the knowledge base first.";
     }
 
     private boolean execute() {
