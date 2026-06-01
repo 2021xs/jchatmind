@@ -62,4 +62,57 @@ class AgentMemoryHistorySanitizerTest {
         assertThat(assistant.getToolCalls()).isEmpty();
         assertThat(memory).noneMatch(ToolResponseMessage.class::isInstance);
     }
+
+    @Test
+    void dropsOrphanToolResponsesAndKeepsValidToolPairsDuringModelReplay() {
+        AssistantMessage pairedAssistant = AssistantMessage.builder()
+                .content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        "call-1",
+                        "function",
+                        "searchProjectCode",
+                        "{\"query\":\"seckill\"}"
+                )))
+                .build();
+        ToolResponseMessage pairedToolResponse = ToolResponseMessage.builder()
+                .responses(List.of(new ToolResponseMessage.ToolResponse(
+                        "call-1",
+                        "searchProjectCode",
+                        "tool result"
+                )))
+                .build();
+        ToolResponseMessage orphanToolResponse = ToolResponseMessage.builder()
+                .responses(List.of(new ToolResponseMessage.ToolResponse(
+                        "call-orphan",
+                        "databaseQuery",
+                        "orphan result"
+                )))
+                .build();
+        AssistantMessage unpairedAssistant = AssistantMessage.builder()
+                .content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        "call-missing-response",
+                        "function",
+                        "databaseQuery",
+                        "{\"sql\":\"SELECT 1\"}"
+                )))
+                .build();
+
+        List<Message> memory = AgentMemoryHistorySanitizer.toSafeModelMessages(List.of(
+                new SystemMessage("system"),
+                orphanToolResponse,
+                new UserMessage("question"),
+                pairedAssistant,
+                pairedToolResponse,
+                unpairedAssistant,
+                AssistantMessage.builder().content("final answer").toolCalls(List.of()).build()
+        ));
+
+        assertThat(memory).hasSize(5);
+        assertThat(memory.get(0)).isInstanceOf(SystemMessage.class);
+        assertThat(memory.get(1)).isInstanceOf(UserMessage.class);
+        assertThat(memory.get(2)).isSameAs(pairedAssistant);
+        assertThat(memory.get(3)).isSameAs(pairedToolResponse);
+        assertThat(((AssistantMessage) memory.get(4)).getText()).isEqualTo("final answer");
+    }
 }

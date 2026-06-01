@@ -395,7 +395,7 @@ public class JChatMind {
 
         Prompt prompt = Prompt.builder()
                 .chatOptions(this.chatOptions)
-                .messages(this.chatMemory.get(this.chatSessionId))
+                .messages(AgentMemoryHistorySanitizer.toSafeModelMessages(this.chatMemory.get(this.chatSessionId)))
                 .build();
 
         this.lastChatResponse = this.chatClient
@@ -425,7 +425,7 @@ public class JChatMind {
         }
 
         Prompt prompt = Prompt.builder()
-                .messages(this.chatMemory.get(this.chatSessionId))
+                .messages(AgentMemoryHistorySanitizer.toSafeModelMessages(this.chatMemory.get(this.chatSessionId)))
                 .chatOptions(this.chatOptions)
                 .build();
 

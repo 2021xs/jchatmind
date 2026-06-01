@@ -6,11 +6,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 final class AgentMemoryHistorySanitizer {
 
@@ -62,9 +65,60 @@ final class AgentMemoryHistorySanitizer {
         return memory;
     }
 
+    static List<Message> toSafeModelMessages(List<Message> messages) {
+        List<Message> safeMessages = new ArrayList<>();
+        for (int i = 0; i < messages.size(); i++) {
+            Message message = messages.get(i);
+            if (message instanceof ToolResponseMessage) {
+                log.debug("Skip orphan tool response message during model replay");
+                continue;
+            }
+            if (message instanceof AssistantMessage assistantMessage && hasToolCalls(assistantMessage)) {
+                ToolResponseMessage toolResponseMessage = nextToolResponse(messages, i + 1);
+                if (toolResponseMessage == null || !matchesToolCalls(assistantMessage, toolResponseMessage)) {
+                    log.debug("Skip assistant tool-call message without matching tool response during model replay");
+                    continue;
+                }
+                safeMessages.add(assistantMessage);
+                safeMessages.add(toolResponseMessage);
+                i++;
+                continue;
+            }
+            safeMessages.add(message);
+        }
+        return safeMessages;
+    }
+
     private static boolean hasToolCalls(ChatMessageDTO chatMessageDTO) {
         return chatMessageDTO.getMetadata() != null
                 && chatMessageDTO.getMetadata().getToolCalls() != null
                 && !chatMessageDTO.getMetadata().getToolCalls().isEmpty();
+    }
+
+    private static boolean hasToolCalls(AssistantMessage assistantMessage) {
+        return assistantMessage.getToolCalls() != null && !assistantMessage.getToolCalls().isEmpty();
+    }
+
+    private static ToolResponseMessage nextToolResponse(List<Message> messages, int index) {
+        if (index >= messages.size() || !(messages.get(index) instanceof ToolResponseMessage toolResponseMessage)) {
+            return null;
+        }
+        return toolResponseMessage;
+    }
+
+    private static boolean matchesToolCalls(AssistantMessage assistantMessage,
+                                            ToolResponseMessage toolResponseMessage) {
+        Set<String> toolCallIds = new HashSet<>();
+        for (AssistantMessage.ToolCall toolCall : assistantMessage.getToolCalls()) {
+            if (StringUtils.hasLength(toolCall.id())) {
+                toolCallIds.add(toolCall.id());
+            }
+        }
+        if (toolCallIds.isEmpty()) {
+            return !toolResponseMessage.getResponses().isEmpty();
+        }
+        return toolResponseMessage.getResponses()
+                .stream()
+                .allMatch(response -> StringUtils.hasLength(response.id()) && toolCallIds.contains(response.id()));
     }
 }
