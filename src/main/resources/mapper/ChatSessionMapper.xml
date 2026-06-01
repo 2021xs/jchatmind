@@ -38,6 +38,27 @@
             )
     </insert>
 
+    <insert id="insertWithId" parameterType="com.kama.jchatmind.model.entity.ChatSession">
+        INSERT INTO chat_session
+        (
+            id,
+            agent_id,
+            title,
+            metadata,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                CAST(#{id} AS uuid),
+                CAST(#{agentId} AS uuid),
+                #{title},
+                CAST(#{metadata} AS jsonb),
+                #{createdAt},
+                #{updatedAt}
+            )
+    </insert>
+
     <select id="selectById" resultMap="BaseResultMap">
         SELECT
             id,

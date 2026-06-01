@@ -2,7 +2,9 @@ package com.kama.jchatmind.integration.feishu;
 
 import com.kama.jchatmind.agent.JChatMind;
 import com.kama.jchatmind.agent.JChatMindFactory;
+import com.kama.jchatmind.mapper.ChatSessionMapper;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
+import com.kama.jchatmind.model.entity.ChatSession;
 import com.kama.jchatmind.model.request.CreateChatMessageRequest;
 import com.kama.jchatmind.model.response.CreateChatMessageResponse;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
@@ -11,6 +13,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
@@ -23,18 +26,21 @@ public class FeishuAgentRunAdapter {
 
     private final JChatMindFactory jChatMindFactory;
     private final ChatMessageFacadeService chatMessageFacadeService;
+    private final ChatSessionMapper chatSessionMapper;
+    private final FeishuProperties feishuProperties;
 
     public AgentRunResult run(String agentId, String chatId, String question) {
         if (!StringUtils.hasText(agentId)) {
             throw new IllegalArgumentException("Feishu default agent id is not configured");
         }
-        String sessionId = toSessionId(chatId);
+        String sessionId = newRunSessionId();
+        ensureChatSession(agentId, sessionId);
         CreateChatMessageResponse userMessage = chatMessageFacadeService.agentCreateChatMessage(
                 CreateChatMessageRequest.builder()
                         .agentId(agentId)
                         .sessionId(sessionId)
                         .role(ChatMessageDTO.RoleType.USER)
-                        .content(question)
+                        .content(withFeishuContext(question))
                         .build());
 
         JChatMind agent = jChatMindFactory.create(agentId, sessionId, userMessage.getChatMessageId());
@@ -44,9 +50,41 @@ public class FeishuAgentRunAdapter {
         return new AgentRunResult(sessionId, userMessage.getChatMessageId(), answer);
     }
 
-    String toSessionId(String chatId) {
+    private void ensureChatSession(String agentId, String sessionId) {
+        if (chatSessionMapper.selectById(sessionId) != null) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        chatSessionMapper.insertWithId(ChatSession.builder()
+                .id(sessionId)
+                .agentId(agentId)
+                .title("Feishu chat")
+                .metadata(null)
+                .createdAt(now)
+                .updatedAt(now)
+                .build());
+    }
+
+    String stableChatKey(String chatId) {
         String source = "feishu:" + (StringUtils.hasText(chatId) ? chatId : "unknown");
         return UUID.nameUUIDFromBytes(source.getBytes(StandardCharsets.UTF_8)).toString();
+    }
+
+    String newRunSessionId() {
+        return UUID.randomUUID().toString();
+    }
+
+    String withFeishuContext(String question) {
+        String hmdpRepoId = feishuProperties.getRepoAliases().get("hmdp");
+        if (!StringUtils.hasText(hmdpRepoId)) {
+            return question;
+        }
+        return question + "\n\n"
+                + "Feishu context:\n"
+                + "- default code repository alias: hmdp / 黑马点评\n"
+                + "- default code repository repoId: " + hmdpRepoId + "\n"
+                + "- When the question mentions 黑马点评, hmdp, 秒杀, 优惠券, 订单, 库存, "
+                + "use this repoId for searchProjectCode.";
     }
 
     private String loadLatestAssistantAnswer(String sessionId) {

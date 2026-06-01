@@ -15,6 +15,8 @@ import java.util.List;
 public interface ChatSessionMapper {
     int insert(ChatSession chatSession);
 
+    int insertWithId(ChatSession chatSession);
+
     ChatSession selectById(String id);
 
     List<ChatSession> selectAll();

@@ -38,6 +38,28 @@ class DatabaseToolDataSourceConfigTest {
     }
 
     @Test
+    void keepsApplicationDataSourceSeparateFromDatabaseToolDataSource() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(ApplicationDataSourceConfig.class, DatabaseToolDataSourceConfig.class)
+                .withPropertyValues(
+                        "spring.datasource.url=jdbc:postgresql://localhost:5432/jchatmind",
+                        "spring.datasource.username=postgres",
+                        "spring.datasource.password=postgres",
+                        "spring.datasource.driver-class-name=org.postgresql.Driver",
+                        "jchatmind.database-tool.datasource.url=jdbc:postgresql://localhost:5432/jchatmind",
+                        "jchatmind.database-tool.datasource.username=jchatmind_readonly",
+                        "jchatmind.database-tool.datasource.password=test-password",
+                        "jchatmind.database-tool.datasource.driver-class-name=org.postgresql.Driver")
+                .run(context -> {
+                    DataSource applicationDataSource = context.getBean("dataSource", DataSource.class);
+                    DataSource databaseToolDataSource = context.getBean("databaseToolDataSource", DataSource.class);
+
+                    assertThat(applicationDataSource).isNotSameAs(databaseToolDataSource);
+                    assertThat(context.getBean(DataSource.class)).isSameAs(applicationDataSource);
+                });
+    }
+
+    @Test
     void dataBaseToolsUsesQualifiedReadOnlyJdbcTemplate() {
         JdbcTemplate defaultJdbcTemplate = mock(JdbcTemplate.class);
         JdbcTemplate readOnlyJdbcTemplate = mock(JdbcTemplate.class);

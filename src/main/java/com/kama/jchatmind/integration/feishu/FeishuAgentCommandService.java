@@ -1,6 +1,7 @@
 package com.kama.jchatmind.integration.feishu;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -35,6 +36,7 @@ public class FeishuAgentCommandService {
     private final Executor taskExecutor;
     private final Clock clock;
 
+    @Autowired
     public FeishuAgentCommandService(FeishuProperties properties,
                                      FeishuMessageClient messageClient,
                                      FeishuCardMessageClient cardMessageClient,
@@ -105,7 +107,7 @@ public class FeishuAgentCommandService {
         } catch (RuntimeException e) {
             long latencyMs = System.currentTimeMillis() - startedAt;
             log.warn("Feishu agent command failed: taskId={}, questionLength={}, latencyMs={}, error={}",
-                    taskId, question.length(), latencyMs, e.getMessage());
+                    taskId, question.length(), latencyMs, safeErrorMessage(e), e);
             FeishuAgentCardSnapshot failed = FeishuAgentCardSnapshot.builder()
                     .taskId(taskId)
                     .question(truncate(question, MAX_QUESTION_LENGTH))
@@ -124,7 +126,17 @@ public class FeishuAgentCommandService {
     }
 
     private String safeErrorMessage(RuntimeException e) {
-        return StringUtils.hasText(e.getMessage()) ? e.getMessage() : e.getClass().getSimpleName();
+        Throwable cursor = e;
+        while (cursor.getCause() != null) {
+            cursor = cursor.getCause();
+        }
+        if (StringUtils.hasText(cursor.getMessage())) {
+            return cursor.getClass().getSimpleName() + ": " + cursor.getMessage();
+        }
+        if (StringUtils.hasText(e.getMessage())) {
+            return e.getClass().getSimpleName() + ": " + e.getMessage();
+        }
+        return e.getClass().getSimpleName();
     }
 
     private String truncateWithMarker(String value, int maxLength) {
