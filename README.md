@@ -110,10 +110,6 @@ POSTGRES_URL=jdbc:postgresql://localhost:5432/jchatmind
 POSTGRES_USER=your_db_user
 POSTGRES_PASSWORD=your_db_password
 
-DEEPSEEK_RELAY_API_KEY=your-api-key
-DEEPSEEK_RELAY_BASE_URL=https://rapi.asia/v1
-DEEPSEEK_RELAY_MODEL=deepseek-v4-pro
-
 DEEPSEEK_OFFICIAL_API_KEY=your-api-key
 DEEPSEEK_OFFICIAL_BASE_URL=https://api.deepseek.com
 DEEPSEEK_OFFICIAL_MODEL=deepseek-chat

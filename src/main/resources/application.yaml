@@ -1,18 +1,15 @@
 spring:
   application:
     name: jchatmind
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration
   datasource:
     url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/jchatmind}
     username: ${POSTGRES_USER:your-db-user}
     password: ${POSTGRES_PASSWORD:your-db-password}
     driver-class-name: org.postgresql.Driver
   ai:
-    deepseek:
-      api-key: ${DEEPSEEK_RELAY_API_KEY:your-api-key}
-      base-url: ${DEEPSEEK_RELAY_BASE_URL:https://rapi.asia/v1}
-      chat:
-        options:
-          model: ${DEEPSEEK_RELAY_MODEL:deepseek-v4-pro}
     zhipuai:
       api-key: your-api-key
       base-url: https://open.bigmodel.cn/api/paas

@@ -13,15 +13,12 @@ import io.micrometer.observation.ObservationRegistry;
 
 @Configuration
 public class MultiChatClientConfig {
-    // DeepSeek relay channel. Keep deepseek-chat for backward compatibility.
     @Bean("deepseek-chat")
-    public ChatClient deepSeekChatClient(DeepSeekChatModel deepSeekChatModel) {
-        return ChatClient.create(deepSeekChatModel);
-    }
-
-    @Bean("deepseek-relay-chat")
-    public ChatClient deepSeekRelayChatClient(DeepSeekChatModel deepSeekChatModel) {
-        return ChatClient.create(deepSeekChatModel);
+    public ChatClient deepSeekChatClient(
+            @Value("${jchatmind.ai.deepseek.official.api-key}") String apiKey,
+            @Value("${jchatmind.ai.deepseek.official.base-url}") String baseUrl,
+            @Value("${jchatmind.ai.deepseek.official.model}") String model) {
+        return buildDeepSeekClient(apiKey, baseUrl, model);
     }
 
     @Bean("deepseek-official-chat")
@@ -29,6 +26,10 @@ public class MultiChatClientConfig {
             @Value("${jchatmind.ai.deepseek.official.api-key}") String apiKey,
             @Value("${jchatmind.ai.deepseek.official.base-url}") String baseUrl,
             @Value("${jchatmind.ai.deepseek.official.model}") String model) {
+        return buildDeepSeekClient(apiKey, baseUrl, model);
+    }
+
+    private ChatClient buildDeepSeekClient(String apiKey, String baseUrl, String model) {
         DeepSeekApi deepSeekApi = DeepSeekApi.builder()
                 .apiKey(apiKey)
                 .baseUrl(baseUrl)
