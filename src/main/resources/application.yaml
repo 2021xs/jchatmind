@@ -43,6 +43,7 @@ jchatmind:
     app-secret: ${JCHATMIND_FEISHU_APP_SECRET:}
     verification-token: ${JCHATMIND_FEISHU_VERIFICATION_TOKEN:}
     encrypt-key: ${JCHATMIND_FEISHU_ENCRYPT_KEY:}
+    default-agent-id: ${JCHATMIND_FEISHU_DEFAULT_AGENT_ID:}
     repo-aliases:
       hmdp: ${JCHATMIND_FEISHU_REPO_ALIAS_HMDP:}
       黑马点评: ${JCHATMIND_FEISHU_REPO_ALIAS_HEIMA_DIANPING:}

@@ -14,5 +14,6 @@ public class FeishuProperties {
     private String appSecret;
     private String verificationToken;
     private String encryptKey;
+    private String defaultAgentId;
     private Map<String, String> repoAliases = new LinkedHashMap<>();
 }

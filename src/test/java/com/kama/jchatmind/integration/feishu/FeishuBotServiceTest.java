@@ -30,6 +30,7 @@ class FeishuBotServiceTest {
 
     private FeishuMessageClient messageClient;
     private FeishuCardMessageClient cardMessageClient;
+    private FeishuAgentCommandService agentCommandService;
     private CodeRagAnswerEvidenceService codeRagAnswerEvidenceService;
     private FeishuBotService botService;
 
@@ -37,11 +38,12 @@ class FeishuBotServiceTest {
     void setUp() {
         messageClient = mock(FeishuMessageClient.class);
         cardMessageClient = mock(FeishuCardMessageClient.class);
+        agentCommandService = mock(FeishuAgentCommandService.class);
         codeRagAnswerEvidenceService = mock(CodeRagAnswerEvidenceService.class);
         FeishuProperties properties = new FeishuProperties();
         properties.setRepoAliases(Map.of("hmdp", TEST_REPO_ID, "黑马点评", TEST_REPO_ID));
         botService = new FeishuBotService(new FeishuCommandParser(), messageClient, codeRagAnswerEvidenceService,
-                new FeishuRepoResolver(properties), cardMessageClient, Runnable::run,
+                new FeishuRepoResolver(properties), cardMessageClient, agentCommandService, Runnable::run,
                 Clock.fixed(Instant.parse("2026-06-01T03:00:00Z"), ZoneId.of("Asia/Shanghai")), 0L);
     }
 
@@ -131,6 +133,22 @@ class FeishuBotServiceTest {
 
         verify(messageClient).sendText(eq("oc_test"), eq(FeishuBotService.AGENT_TEST_USAGE));
         verify(cardMessageClient, never()).sendAgentCard(anyString(), isA(FeishuAgentCardSnapshot.class));
+    }
+
+    @Test
+    void validAgentCommandDelegatesToAgentCommandService() {
+        botService.handleTextMessage("oc_test", "/agent 分析秒杀订单链路");
+
+        verify(agentCommandService).handleAgent(eq("oc_test"), eq("分析秒杀订单链路"));
+        verify(codeRagAnswerEvidenceService, never()).retrieve(anyString(), anyString());
+    }
+
+    @Test
+    void invalidAgentCommandSendsUsage() {
+        botService.handleTextMessage("oc_test", "/agent");
+
+        verify(messageClient).sendText(eq("oc_test"), eq(FeishuAgentCommandService.AGENT_USAGE));
+        verify(agentCommandService, never()).handleAgent(anyString(), anyString());
     }
 
     @Test

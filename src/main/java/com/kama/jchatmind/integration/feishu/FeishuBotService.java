@@ -31,6 +31,7 @@ public class FeishuBotService {
             Currently supported:
             /help View help
             /ask-code <repoKey> <question> Query code evidence with Code RAG
+            /agent <question> Run the configured JChatMind Agent
             /agent-test <question> Verify Feishu card update
             """;
 
@@ -58,6 +59,7 @@ public class FeishuBotService {
     private final CodeRagAnswerEvidenceService codeRagAnswerEvidenceService;
     private final FeishuRepoResolver repoResolver;
     private final FeishuCardMessageClient cardMessageClient;
+    private final FeishuAgentCommandService agentCommandService;
     private final Executor taskExecutor;
     private final Clock clock;
     private final long agentTestUpdateDelayMillis;
@@ -68,8 +70,9 @@ public class FeishuBotService {
                             CodeRagAnswerEvidenceService codeRagAnswerEvidenceService,
                             FeishuRepoResolver repoResolver,
                             FeishuCardMessageClient cardMessageClient,
+                            FeishuAgentCommandService agentCommandService,
                             Executor taskExecutor) {
-        this(commandParser, messageClient, codeRagAnswerEvidenceService, repoResolver, cardMessageClient,
+        this(commandParser, messageClient, codeRagAnswerEvidenceService, repoResolver, cardMessageClient, agentCommandService,
                 taskExecutor, Clock.systemDefaultZone(), AGENT_TEST_UPDATE_DELAY_MILLIS);
     }
 
@@ -78,6 +81,7 @@ public class FeishuBotService {
                      CodeRagAnswerEvidenceService codeRagAnswerEvidenceService,
                      FeishuRepoResolver repoResolver,
                      FeishuCardMessageClient cardMessageClient,
+                     FeishuAgentCommandService agentCommandService,
                      Executor taskExecutor,
                      Clock clock,
                      long agentTestUpdateDelayMillis) {
@@ -86,6 +90,7 @@ public class FeishuBotService {
         this.codeRagAnswerEvidenceService = codeRagAnswerEvidenceService;
         this.repoResolver = repoResolver;
         this.cardMessageClient = cardMessageClient;
+        this.agentCommandService = agentCommandService;
         this.taskExecutor = taskExecutor;
         this.clock = clock;
         this.agentTestUpdateDelayMillis = agentTestUpdateDelayMillis;
@@ -99,6 +104,8 @@ public class FeishuBotService {
             case ASK_CODE_INVALID -> messageClient.sendText(chatId, ASK_CODE_USAGE);
             case AGENT_TEST -> handleAgentTest(chatId, command.query());
             case AGENT_TEST_INVALID -> messageClient.sendText(chatId, AGENT_TEST_USAGE);
+            case AGENT -> agentCommandService.handleAgent(chatId, command.query());
+            case AGENT_INVALID -> messageClient.sendText(chatId, FeishuAgentCommandService.AGENT_USAGE);
             case UNKNOWN -> log.info("Feishu text message ignored: command not supported");
         }
     }

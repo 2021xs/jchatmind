@@ -15,7 +15,7 @@ import java.util.Map;
 public class FeishuAgentCardRenderer {
 
     private static final int MAX_QUESTION_LENGTH = 300;
-    private static final int MAX_RESULT_LENGTH = 1000;
+    private static final int MAX_RESULT_LENGTH = 3000;
 
     private final ObjectMapper objectMapper;
 

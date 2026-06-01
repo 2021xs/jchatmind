@@ -31,6 +31,7 @@ class FeishuEventControllerTest {
     private MockMvc mockMvc;
     private FeishuMessageClient messageClient;
     private FeishuCardMessageClient cardMessageClient;
+    private FeishuAgentCommandService agentCommandService;
     private CodeRagAnswerEvidenceService codeRagAnswerEvidenceService;
 
     @BeforeEach
@@ -42,9 +43,10 @@ class FeishuEventControllerTest {
         messageClient = mock(FeishuMessageClient.class);
         cardMessageClient = mock(FeishuCardMessageClient.class);
         codeRagAnswerEvidenceService = mock(CodeRagAnswerEvidenceService.class);
+        agentCommandService = mock(FeishuAgentCommandService.class);
         FeishuBotService botService = new FeishuBotService(
                 new FeishuCommandParser(), messageClient, codeRagAnswerEvidenceService,
-                new FeishuRepoResolver(properties), cardMessageClient, Runnable::run,
+                new FeishuRepoResolver(properties), cardMessageClient, agentCommandService, Runnable::run,
                 java.time.Clock.systemDefaultZone(), 0L);
         FeishuMessageEventHandler messageEventHandler = new FeishuMessageEventHandler(objectMapper, botService, Runnable::run);
         FeishuEventController controller = new FeishuEventController(objectMapper, properties, messageEventHandler);
@@ -191,6 +193,33 @@ class FeishuEventControllerTest {
                 .andExpect(jsonPath("$.code").value(0));
 
         verify(messageClient).sendText(eq("oc_test"), eq(FeishuBotService.ASK_CODE_ERROR));
+    }
+
+    @Test
+    void messageReceiveAgentTextEventReturnsOkAndStartsAgentCommand() throws Exception {
+        mockMvc.perform(post("/api/feishu/events")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "schema": "2.0",
+                                  "header": {
+                                    "event_type": "im.message.receive_v1"
+                                  },
+                                  "event": {
+                                    "message": {
+                                      "message_id": "om_agent",
+                                      "chat_id": "oc_test",
+                                      "chat_type": "p2p",
+                                      "message_type": "text",
+                                      "content": "{\\"text\\":\\"/agent 分析秒杀订单链路\\"}"
+                                    }
+                                  }
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0));
+
+        verify(agentCommandService).handleAgent(eq("oc_test"), eq("分析秒杀订单链路"));
     }
 
     @Test

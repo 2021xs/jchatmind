@@ -15,10 +15,10 @@ class FeishuAgentCardRendererTest {
     @Test
     void rendersRunningSnapshotAsValidJson() throws Exception {
         String content = renderer.renderCardContent(FeishuAgentCardSnapshot.builder()
-                .taskId("FT-1")
+                .taskId("FA-1")
                 .question("分析秒杀订单链路")
                 .status("处理中")
-                .stage("已收到任务，正在模拟执行")
+                .stage("Agent 处理中")
                 .updatedAt("2026-06-01 11:00:00")
                 .build());
 
@@ -33,32 +33,48 @@ class FeishuAgentCardRendererTest {
     @Test
     void rendersFinishedSnapshotAsValidJson() throws Exception {
         String content = renderer.renderCardContent(FeishuAgentCardSnapshot.builder()
-                .taskId("FT-1")
+                .taskId("FA-1")
                 .question("分析秒杀订单链路")
                 .status("已完成")
-                .stage("模拟执行完成")
-                .result("这是 /agent-test 的卡片更新验证结果，尚未接入真实 Agent")
+                .stage("Agent 执行完成")
+                .result("这是 /agent 的真实执行结果")
                 .updatedAt("2026-06-01 11:00:02")
                 .build());
 
         JsonNode root = objectMapper.readTree(content);
         assertEquals("green", root.path("header").path("template").asText());
         assertTrue(content.contains("已完成"));
-        assertTrue(content.contains("尚未接入真实 Agent"));
+        assertTrue(content.contains("真实执行结果"));
+    }
+
+    @Test
+    void rendersFailedSnapshotAsValidJson() throws Exception {
+        String content = renderer.renderCardContent(FeishuAgentCardSnapshot.builder()
+                .taskId("FA-1")
+                .question("分析秒杀订单链路")
+                .status("失败")
+                .stage("Agent 执行失败")
+                .result("模型不可用")
+                .updatedAt("2026-06-01 11:00:02")
+                .build());
+
+        JsonNode root = objectMapper.readTree(content);
+        assertEquals("red", root.path("header").path("template").asText());
+        assertTrue(content.contains("失败"));
     }
 
     @Test
     void truncatesLongQuestionAndResult() {
         String content = renderer.renderCardContent(FeishuAgentCardSnapshot.builder()
-                .taskId("FT-1")
+                .taskId("FA-1")
                 .question("问".repeat(500))
                 .status("已完成")
-                .stage("模拟执行完成")
-                .result("结".repeat(1200))
+                .stage("Agent 执行完成")
+                .result("结".repeat(3200))
                 .updatedAt("2026-06-01 11:00:02")
                 .build());
 
         assertTrue(content.contains("问".repeat(297) + "..."));
-        assertTrue(content.contains("结".repeat(997) + "..."));
+        assertTrue(content.contains("结".repeat(2997) + "..."));
     }
 }
