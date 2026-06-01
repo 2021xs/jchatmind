@@ -103,4 +103,22 @@ class FeishuBotServiceTest {
         verify(messageClient).sendText(eq("oc_test"), eq(FeishuBotService.ASK_CODE_REPO_NOT_FOUND));
         verify(codeRagAnswerEvidenceService, never()).retrieve(anyString(), anyString());
     }
+
+    @Test
+    void askCodeReplyKeepsLongerSnippet() {
+        String longSnippet = "x".repeat(500);
+        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "哪里定义队列？"))
+                .thenReturn(CodeAnswerEvidenceResult.builder()
+                        .selectedEvidence(List.of(CodeSearchResult.builder()
+                                .filePath("src/main/java/demo/RabbitConstants.java")
+                                .contentPreview(longSnippet)
+                                .build()))
+                        .build());
+
+        botService.handleTextMessage("oc_test", "/ask-code hmdp 哪里定义队列？");
+
+        ArgumentCaptor<String> replyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(messageClient).sendText(eq("oc_test"), replyCaptor.capture());
+        assertTrue(replyCaptor.getValue().contains(longSnippet));
+    }
 }

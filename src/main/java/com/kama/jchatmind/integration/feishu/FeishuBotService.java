@@ -16,8 +16,8 @@ import java.util.List;
 public class FeishuBotService {
 
     private static final int MAX_EVIDENCE_COUNT = 5;
-    private static final int MAX_SNIPPET_LENGTH = 120;
-    private static final int MAX_REPLY_LENGTH = 3000;
+    private static final int MAX_SNIPPET_LENGTH = 1000;
+    private static final int MAX_REPLY_LENGTH = 12000;
 
     static final String HELP_TEXT = """
             JChatMind Feishu bot is connected.
@@ -94,8 +94,8 @@ public class FeishuBotService {
                     sb.append("   line: ").append(lineRange).append('\n');
                 }
                 sb.append("   symbol: ").append(valueOrDash(item.getSymbolName())).append('\n');
-                sb.append("   snippet: ").append(truncate(valueOrDash(item.getContentPreview()), MAX_SNIPPET_LENGTH))
-                        .append('\n');
+                sb.append("   snippet:\n").append(indent(truncate(valueOrDash(item.getContentPreview()), MAX_SNIPPET_LENGTH)))
+                        .append("\n\n");
             }
         }
 
@@ -126,5 +126,12 @@ public class FeishuBotService {
             return value.substring(0, maxLength);
         }
         return value.substring(0, maxLength - 3) + "...";
+    }
+
+    private String indent(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "      -";
+        }
+        return "      " + value.replace("\n", "\n      ");
     }
 }
