@@ -38,6 +38,7 @@ public class FeishuMessageEventHandler {
         String chatType = message.path("chat_type").asText("");
         String messageType = message.path("message_type").asText("");
         String content = message.path("content").asText("");
+        String senderOpenId = root.path("event").path("sender").path("sender_id").path("open_id").asText("");
 
         if (!"text".equals(messageType)) {
             log.info("Received Feishu non-text message event: messageId={}, chatId={}, chatType={}, messageType={}",
@@ -57,12 +58,12 @@ public class FeishuMessageEventHandler {
                     messageId, chatId, text.length());
             return;
         }
-        taskExecutor.execute(() -> handleTextMessage(messageId, chatId, text));
+        taskExecutor.execute(() -> handleTextMessage(messageId, chatId, chatType, senderOpenId, text));
     }
 
-    private void handleTextMessage(String messageId, String chatId, String text) {
+    private void handleTextMessage(String messageId, String chatId, String chatType, String senderOpenId, String text) {
         try {
-            botService.handleTextMessage(chatId, text);
+            botService.handleTextMessage(chatId, chatType, senderOpenId, text);
         } catch (RuntimeException e) {
             log.warn("Feishu text message handling failed: messageId={}, error={}", messageId, e.getMessage());
         }

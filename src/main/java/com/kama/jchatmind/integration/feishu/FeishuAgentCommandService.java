@@ -16,14 +16,18 @@ import java.util.concurrent.Executor;
 public class FeishuAgentCommandService {
 
     static final String AGENT_USAGE = """
-            用法：
+            用法:
             /agent <问题>
 
-            示例：
+            示例:
             /agent 分析秒杀订单链路
             """;
     static final String AGENT_SEND_ERROR = "Agent 卡片发送失败，请查看后端日志。";
     static final String AGENT_MISSING_CONFIG_ERROR = "未配置飞书默认 Agent，请设置 JCHATMIND_FEISHU_DEFAULT_AGENT_ID。";
+    static final String NEW_SESSION_CREATED_TEXT = """
+            已创建新的 Agent 会话。
+            后续 /agent 将使用这个新会话。
+            """;
 
     private static final int MAX_QUESTION_LENGTH = 300;
     private static final int MAX_RESULT_LENGTH = 3000;
@@ -33,6 +37,7 @@ public class FeishuAgentCommandService {
     private final FeishuMessageClient messageClient;
     private final FeishuCardMessageClient cardMessageClient;
     private final FeishuAgentRunAdapter agentRunAdapter;
+    private final FeishuAgentSessionBindingService sessionBindingService;
     private final Executor taskExecutor;
     private final Clock clock;
 
@@ -41,25 +46,29 @@ public class FeishuAgentCommandService {
                                      FeishuMessageClient messageClient,
                                      FeishuCardMessageClient cardMessageClient,
                                      FeishuAgentRunAdapter agentRunAdapter,
+                                     FeishuAgentSessionBindingService sessionBindingService,
                                      Executor taskExecutor) {
-        this(properties, messageClient, cardMessageClient, agentRunAdapter, taskExecutor, Clock.systemDefaultZone());
+        this(properties, messageClient, cardMessageClient, agentRunAdapter, sessionBindingService,
+                taskExecutor, Clock.systemDefaultZone());
     }
 
     FeishuAgentCommandService(FeishuProperties properties,
                               FeishuMessageClient messageClient,
                               FeishuCardMessageClient cardMessageClient,
                               FeishuAgentRunAdapter agentRunAdapter,
+                              FeishuAgentSessionBindingService sessionBindingService,
                               Executor taskExecutor,
                               Clock clock) {
         this.properties = properties;
         this.messageClient = messageClient;
         this.cardMessageClient = cardMessageClient;
         this.agentRunAdapter = agentRunAdapter;
+        this.sessionBindingService = sessionBindingService;
         this.taskExecutor = taskExecutor;
         this.clock = clock;
     }
 
-    public void handleAgent(String chatId, String question) {
+    public void handleAgent(String chatId, String chatType, String senderOpenId, String question) {
         if (!StringUtils.hasText(question)) {
             messageClient.sendText(chatId, AGENT_USAGE);
             return;
@@ -80,7 +89,8 @@ public class FeishuAgentCommandService {
                 .build();
         try {
             String messageId = cardMessageClient.sendAgentCard(chatId, running);
-            taskExecutor.execute(() -> runAgentAndUpdateCard(messageId, taskId, agentId, chatId, question));
+            taskExecutor.execute(() -> runAgentAndUpdateCard(messageId, taskId, agentId,
+                    chatId, chatType, senderOpenId, question));
         } catch (RuntimeException e) {
             log.warn("Feishu agent card send failed: taskId={}, questionLength={}, error={}",
                     taskId, question.length(), e.getMessage());
@@ -88,10 +98,28 @@ public class FeishuAgentCommandService {
         }
     }
 
-    private void runAgentAndUpdateCard(String messageId, String taskId, String agentId, String chatId, String question) {
+    public void handleNewSession(String chatId, String chatType, String senderOpenId) {
+        String agentId = properties.getDefaultAgentId();
+        if (!StringUtils.hasText(agentId)) {
+            messageClient.sendText(chatId, AGENT_MISSING_CONFIG_ERROR);
+            return;
+        }
+        String sessionId = sessionBindingService.createNewSession(chatId, chatType, senderOpenId, agentId);
+        log.info("Feishu agent new session command completed: sessionId={}", shortId(sessionId));
+        messageClient.sendText(chatId, NEW_SESSION_CREATED_TEXT);
+    }
+
+    private void runAgentAndUpdateCard(String messageId,
+                                       String taskId,
+                                       String agentId,
+                                       String chatId,
+                                       String chatType,
+                                       String senderOpenId,
+                                       String question) {
         long startedAt = System.currentTimeMillis();
         try {
-            FeishuAgentRunAdapter.AgentRunResult result = agentRunAdapter.run(agentId, chatId, question);
+            FeishuAgentRunAdapter.AgentRunResult result =
+                    agentRunAdapter.run(agentId, chatId, chatType, senderOpenId, question);
             long latencyMs = System.currentTimeMillis() - startedAt;
             log.info("Feishu agent command completed: taskId={}, sessionId={}, userMessageId={}, latencyMs={}",
                     taskId, result.sessionId(), result.userMessageId(), latencyMs);
@@ -161,6 +189,10 @@ public class FeishuAgentCommandService {
 
     private String newTaskId() {
         return "FA-" + clock.millis() + "-" + UUID.randomUUID().toString().substring(0, 8);
+    }
+
+    private String shortId(String id) {
+        return id == null || id.length() <= 8 ? id : id.substring(0, 8);
     }
 
     private String nowText() {

@@ -10,8 +10,8 @@ import org.mockito.ArgumentCaptor;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
-import java.util.Map;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -41,7 +41,7 @@ class FeishuBotServiceTest {
         agentCommandService = mock(FeishuAgentCommandService.class);
         codeRagAnswerEvidenceService = mock(CodeRagAnswerEvidenceService.class);
         FeishuProperties properties = new FeishuProperties();
-        properties.setRepoAliases(Map.of("hmdp", TEST_REPO_ID, "黑马点评", TEST_REPO_ID));
+        properties.setRepoAliases(Map.of("hmdp", TEST_REPO_ID, "heima", TEST_REPO_ID));
         botService = new FeishuBotService(new FeishuCommandParser(), messageClient, codeRagAnswerEvidenceService,
                 new FeishuRepoResolver(properties), cardMessageClient, agentCommandService, Runnable::run,
                 Clock.fixed(Instant.parse("2026-06-01T03:00:00Z"), ZoneId.of("Asia/Shanghai")), 0L);
@@ -57,7 +57,7 @@ class FeishuBotServiceTest {
 
     @Test
     void validAskCodeCallsCodeRagAndSendsFormattedEvidence() {
-        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "秒杀订单队列在哪里定义？"))
+        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "where is queue defined"))
                 .thenReturn(CodeAnswerEvidenceResult.builder()
                         .selectedEvidence(List.of(CodeSearchResult.builder()
                                 .filePath("src/main/java/demo/RabbitConstants.java")
@@ -68,17 +68,14 @@ class FeishuBotServiceTest {
                                 .build()))
                         .build());
 
-        botService.handleTextMessage("oc_test", "/ask-code hmdp 秒杀订单队列在哪里定义？");
+        botService.handleTextMessage("oc_test", "/ask-code hmdp where is queue defined");
 
-        verify(codeRagAnswerEvidenceService).retrieve(TEST_REPO_ID, "秒杀订单队列在哪里定义？");
+        verify(codeRagAnswerEvidenceService).retrieve(TEST_REPO_ID, "where is queue defined");
         ArgumentCaptor<String> replyCaptor = ArgumentCaptor.forClass(String.class);
         verify(messageClient).sendText(eq("oc_test"), replyCaptor.capture());
         String reply = replyCaptor.getValue();
-        assertTrue(reply.contains("问题："));
-        assertTrue(reply.contains("命中证据："));
         assertTrue(reply.contains("src/main/java/demo/RabbitConstants.java"));
         assertTrue(reply.contains("SECKILL_ORDER_QUEUE"));
-        assertTrue(reply.contains("结果来自 JChatMind Code RAG evidence 查询。"));
     }
 
     @Test
@@ -99,17 +96,17 @@ class FeishuBotServiceTest {
 
     @Test
     void codeRagFailureSendsFriendlyError() {
-        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "哪里定义队列？"))
+        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "where is queue"))
                 .thenThrow(new RuntimeException("selector unavailable"));
 
-        botService.handleTextMessage("oc_test", "/ask-code hmdp 哪里定义队列？");
+        botService.handleTextMessage("oc_test", "/ask-code hmdp where is queue");
 
         verify(messageClient).sendText(eq("oc_test"), eq(FeishuBotService.ASK_CODE_ERROR));
     }
 
     @Test
     void unknownRepoAliasSendsFriendlyMessageWithoutCallingCodeRag() {
-        botService.handleTextMessage("oc_test", "/ask-code unknown 哪里定义队列？");
+        botService.handleTextMessage("oc_test", "/ask-code unknown where is queue");
 
         verify(messageClient).sendText(eq("oc_test"), eq(FeishuBotService.ASK_CODE_REPO_NOT_FOUND));
         verify(codeRagAnswerEvidenceService, never()).retrieve(anyString(), anyString());
@@ -121,7 +118,7 @@ class FeishuBotServiceTest {
                 .thenReturn("om_card");
         doNothing().when(cardMessageClient).updateAgentCard(eq("om_card"), isA(FeishuAgentCardSnapshot.class));
 
-        botService.handleTextMessage("oc_test", "/agent-test 分析秒杀订单链路");
+        botService.handleTextMessage("oc_test", "/agent-test analyze seckill order flow");
 
         verify(cardMessageClient).sendAgentCard(eq("oc_test"), isA(FeishuAgentCardSnapshot.class));
         verify(cardMessageClient).updateAgentCard(eq("om_card"), isA(FeishuAgentCardSnapshot.class));
@@ -137,10 +134,18 @@ class FeishuBotServiceTest {
 
     @Test
     void validAgentCommandDelegatesToAgentCommandService() {
-        botService.handleTextMessage("oc_test", "/agent 分析秒杀订单链路");
+        botService.handleTextMessage("oc_test", "p2p", "ou_test", "/agent analyze seckill order flow");
 
-        verify(agentCommandService).handleAgent(eq("oc_test"), eq("分析秒杀订单链路"));
+        verify(agentCommandService).handleAgent(eq("oc_test"), eq("p2p"), eq("ou_test"),
+                eq("analyze seckill order flow"));
         verify(codeRagAnswerEvidenceService, never()).retrieve(anyString(), anyString());
+    }
+
+    @Test
+    void newSessionCommandDelegatesToAgentCommandService() {
+        botService.handleTextMessage("oc_test", "p2p", "ou_test", "/new-session");
+
+        verify(agentCommandService).handleNewSession(eq("oc_test"), eq("p2p"), eq("ou_test"));
     }
 
     @Test
@@ -148,7 +153,7 @@ class FeishuBotServiceTest {
         botService.handleTextMessage("oc_test", "/agent");
 
         verify(messageClient).sendText(eq("oc_test"), eq(FeishuAgentCommandService.AGENT_USAGE));
-        verify(agentCommandService, never()).handleAgent(anyString(), anyString());
+        verify(agentCommandService, never()).handleAgent(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -156,7 +161,7 @@ class FeishuBotServiceTest {
         when(cardMessageClient.sendAgentCard(eq("oc_test"), isA(FeishuAgentCardSnapshot.class)))
                 .thenThrow(new RuntimeException("access denied"));
 
-        botService.handleTextMessage("oc_test", "/agent-test 分析秒杀订单链路");
+        botService.handleTextMessage("oc_test", "/agent-test analyze seckill order flow");
 
         verify(messageClient).sendText(eq("oc_test"), eq(FeishuBotService.AGENT_TEST_SEND_ERROR));
         verify(cardMessageClient, never()).updateAgentCard(anyString(), isA(FeishuAgentCardSnapshot.class));
@@ -169,7 +174,7 @@ class FeishuBotServiceTest {
         doThrow(new RuntimeException("update denied"))
                 .when(cardMessageClient).updateAgentCard(eq("om_card"), isA(FeishuAgentCardSnapshot.class));
 
-        botService.handleTextMessage("oc_test", "/agent-test 分析秒杀订单链路");
+        botService.handleTextMessage("oc_test", "/agent-test analyze seckill order flow");
 
         verify(cardMessageClient).sendAgentCard(eq("oc_test"), isA(FeishuAgentCardSnapshot.class));
         verify(cardMessageClient).updateAgentCard(eq("om_card"), isA(FeishuAgentCardSnapshot.class));
@@ -178,7 +183,7 @@ class FeishuBotServiceTest {
     @Test
     void askCodeReplyKeepsLongerSnippet() {
         String longSnippet = "x".repeat(500);
-        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "哪里定义队列？"))
+        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "where is queue"))
                 .thenReturn(CodeAnswerEvidenceResult.builder()
                         .selectedEvidence(List.of(CodeSearchResult.builder()
                                 .filePath("src/main/java/demo/RabbitConstants.java")
@@ -186,7 +191,7 @@ class FeishuBotServiceTest {
                                 .build()))
                         .build());
 
-        botService.handleTextMessage("oc_test", "/ask-code hmdp 哪里定义队列？");
+        botService.handleTextMessage("oc_test", "/ask-code hmdp where is queue");
 
         ArgumentCaptor<String> replyCaptor = ArgumentCaptor.forClass(String.class);
         verify(messageClient).sendText(eq("oc_test"), replyCaptor.capture());

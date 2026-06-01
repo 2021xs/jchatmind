@@ -9,6 +9,7 @@ public class FeishuCommandParser {
     static final String HELP_COMMAND = "/help";
     static final String ASK_CODE_COMMAND = "/ask-code";
     static final String AGENT_TEST_COMMAND = "/agent-test";
+    static final String NEW_SESSION_COMMAND = "/new-session";
     static final String AGENT_COMMAND = "/agent";
 
     public boolean isHelpCommand(String text) {
@@ -24,6 +25,9 @@ public class FeishuCommandParser {
         String commandName = commandParts[0];
         if (HELP_COMMAND.equals(commandName)) {
             return new ParsedCommand(CommandType.HELP, null, null);
+        }
+        if (NEW_SESSION_COMMAND.equals(commandName)) {
+            return new ParsedCommand(CommandType.NEW_SESSION, null, null);
         }
         if (AGENT_TEST_COMMAND.equals(commandName)) {
             String question = commandParts.length > 1 ? commandParts[1].trim() : "";
@@ -60,6 +64,7 @@ public class FeishuCommandParser {
         ASK_CODE_INVALID,
         AGENT_TEST,
         AGENT_TEST_INVALID,
+        NEW_SESSION,
         AGENT,
         AGENT_INVALID,
         UNKNOWN

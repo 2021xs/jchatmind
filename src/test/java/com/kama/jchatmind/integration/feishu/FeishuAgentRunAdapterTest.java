@@ -2,9 +2,7 @@ package com.kama.jchatmind.integration.feishu;
 
 import com.kama.jchatmind.agent.JChatMind;
 import com.kama.jchatmind.agent.JChatMindFactory;
-import com.kama.jchatmind.mapper.ChatSessionMapper;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
-import com.kama.jchatmind.model.entity.ChatSession;
 import com.kama.jchatmind.model.request.CreateChatMessageRequest;
 import com.kama.jchatmind.model.response.CreateChatMessageResponse;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
@@ -23,7 +21,6 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isA;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -31,7 +28,7 @@ class FeishuAgentRunAdapterTest {
 
     private JChatMindFactory jChatMindFactory;
     private ChatMessageFacadeService chatMessageFacadeService;
-    private ChatSessionMapper chatSessionMapper;
+    private FeishuAgentSessionBindingService sessionBindingService;
     private JChatMind jChatMind;
     private FeishuAgentRunAdapter adapter;
 
@@ -39,21 +36,24 @@ class FeishuAgentRunAdapterTest {
     void setUp() {
         jChatMindFactory = mock(JChatMindFactory.class);
         chatMessageFacadeService = mock(ChatMessageFacadeService.class);
-        chatSessionMapper = mock(ChatSessionMapper.class);
+        sessionBindingService = mock(FeishuAgentSessionBindingService.class);
         jChatMind = mock(JChatMind.class);
         FeishuProperties properties = new FeishuProperties();
         properties.setRepoAliases(new LinkedHashMap<>(Map.of("hmdp", "repo-hmdp-id")));
-        adapter = new FeishuAgentRunAdapter(jChatMindFactory, chatMessageFacadeService, chatSessionMapper, properties);
+        adapter = new FeishuAgentRunAdapter(jChatMindFactory, chatMessageFacadeService, sessionBindingService, properties);
     }
 
     @Test
-    void runCreatesFeishuSessionUserMessageRunsExistingAgentAndReturnsLatestAssistantAnswer() {
+    void runUsesActiveFeishuSessionCreatesUserMessageRunsExistingAgentAndReturnsLatestAssistantAnswer() {
         String agentId = "11111111-1111-1111-1111-111111111111";
+        when(sessionBindingService.getOrCreateActiveSession(eq("oc_test"), eq("p2p"), eq("ou_test"), eq(agentId)))
+                .thenReturn("22222222-2222-2222-2222-222222222222");
         when(chatMessageFacadeService.agentCreateChatMessage(isA(CreateChatMessageRequest.class)))
                 .thenReturn(CreateChatMessageResponse.builder().chatMessageId("user-message-id").build());
-        when(jChatMindFactory.create(eq(agentId), anyString(), eq("user-message-id")))
+        when(jChatMindFactory.create(eq(agentId), eq("22222222-2222-2222-2222-222222222222"), eq("user-message-id")))
                 .thenReturn(jChatMind);
-        when(chatMessageFacadeService.getChatMessagesBySessionIdRecently(anyString(), eq(30)))
+        when(chatMessageFacadeService.getChatMessagesBySessionIdRecently(
+                eq("22222222-2222-2222-2222-222222222222"), eq(30)))
                 .thenReturn(List.of(
                         ChatMessageDTO.builder()
                                 .role(ChatMessageDTO.RoleType.ASSISTANT)
@@ -66,35 +66,20 @@ class FeishuAgentRunAdapterTest {
                                 .createdAt(LocalDateTime.parse("2026-06-01T11:00:02"))
                                 .build()));
 
-        FeishuAgentRunAdapter.AgentRunResult result = adapter.run(agentId, "oc_test", "analyze seckill order flow");
+        FeishuAgentRunAdapter.AgentRunResult result =
+                adapter.run(agentId, "oc_test", "p2p", "ou_test", "analyze seckill order flow");
 
-        verify(chatSessionMapper).insertWithId(isA(ChatSession.class));
         ArgumentCaptor<CreateChatMessageRequest> requestCaptor = ArgumentCaptor.forClass(CreateChatMessageRequest.class);
         verify(chatMessageFacadeService).agentCreateChatMessage(requestCaptor.capture());
         assertEquals(ChatMessageDTO.RoleType.USER, requestCaptor.getValue().getRole());
+        assertEquals("22222222-2222-2222-2222-222222222222", requestCaptor.getValue().getSessionId());
         org.assertj.core.api.Assertions.assertThat(requestCaptor.getValue().getContent())
                 .contains("analyze seckill order flow")
                 .contains("repo-hmdp-id");
         verify(jChatMind).run();
+        assertEquals("22222222-2222-2222-2222-222222222222", result.sessionId());
         assertEquals("user-message-id", result.userMessageId());
         assertEquals("final answer", result.answer());
-    }
-
-    @Test
-    void runReusesExistingFeishuChatSession() {
-        String agentId = "11111111-1111-1111-1111-111111111111";
-        when(chatSessionMapper.selectById(anyString()))
-                .thenReturn(ChatSession.builder().id("existing-session").agentId(agentId).build());
-        when(chatMessageFacadeService.agentCreateChatMessage(isA(CreateChatMessageRequest.class)))
-                .thenReturn(CreateChatMessageResponse.builder().chatMessageId("user-message-id").build());
-        when(jChatMindFactory.create(eq(agentId), anyString(), eq("user-message-id")))
-                .thenReturn(jChatMind);
-        when(chatMessageFacadeService.getChatMessagesBySessionIdRecently(anyString(), eq(30)))
-                .thenReturn(List.of());
-
-        adapter.run(agentId, "oc_test", "analyze seckill order flow");
-
-        verify(chatSessionMapper, never()).insertWithId(isA(ChatSession.class));
     }
 
     @Test
@@ -108,16 +93,11 @@ class FeishuAgentRunAdapterTest {
     }
 
     @Test
-    void newRunSessionIdCreatesFreshSessionForEachAgentRun() {
-        assertNotEquals(adapter.newRunSessionId(), adapter.newRunSessionId());
-    }
-
-    @Test
     void withFeishuContextLeavesQuestionUnchangedWhenNoRepoAliasConfigured() {
         FeishuProperties properties = new FeishuProperties();
         properties.setRepoAliases(new LinkedHashMap<>());
         FeishuAgentRunAdapter adapterWithoutRepoAlias =
-                new FeishuAgentRunAdapter(jChatMindFactory, chatMessageFacadeService, chatSessionMapper, properties);
+                new FeishuAgentRunAdapter(jChatMindFactory, chatMessageFacadeService, sessionBindingService, properties);
 
         assertEquals("question", adapterWithoutRepoAlias.withFeishuContext("question"));
     }

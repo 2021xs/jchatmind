@@ -24,6 +24,7 @@ class FeishuAgentCommandServiceTest {
     private FeishuMessageClient messageClient;
     private FeishuCardMessageClient cardMessageClient;
     private FeishuAgentRunAdapter agentRunAdapter;
+    private FeishuAgentSessionBindingService sessionBindingService;
     private FeishuAgentCommandService service;
 
     @BeforeEach
@@ -33,26 +34,29 @@ class FeishuAgentCommandServiceTest {
         messageClient = mock(FeishuMessageClient.class);
         cardMessageClient = mock(FeishuCardMessageClient.class);
         agentRunAdapter = mock(FeishuAgentRunAdapter.class);
+        sessionBindingService = mock(FeishuAgentSessionBindingService.class);
         service = new FeishuAgentCommandService(properties, messageClient, cardMessageClient, agentRunAdapter,
-                Runnable::run, Clock.fixed(Instant.parse("2026-06-01T03:00:00Z"), ZoneId.of("Asia/Shanghai")));
+                sessionBindingService, Runnable::run,
+                Clock.fixed(Instant.parse("2026-06-01T03:00:00Z"), ZoneId.of("Asia/Shanghai")));
     }
 
     @Test
     void handleAgentSendsRunningCardRunsAgentAndUpdatesFinalCard() {
         when(cardMessageClient.sendAgentCard(eq("oc_test"), isA(FeishuAgentCardSnapshot.class)))
                 .thenReturn("om_card");
-        when(agentRunAdapter.run(eq(properties.getDefaultAgentId()), eq("oc_test"), eq("分析秒杀订单链路")))
+        when(agentRunAdapter.run(eq(properties.getDefaultAgentId()), eq("oc_test"), eq("p2p"), eq("ou_test"),
+                eq("analyze seckill order flow")))
                 .thenReturn(new FeishuAgentRunAdapter.AgentRunResult(
                         "3b494f89-8d6b-3f2c-a61f-c65609be4bfa",
                         "user-message-id",
-                        "最终答案"));
+                        "final answer"));
 
-        service.handleAgent("oc_test", "分析秒杀订单链路");
+        service.handleAgent("oc_test", "p2p", "ou_test", "analyze seckill order flow");
 
         verify(cardMessageClient).sendAgentCard(eq("oc_test"), isA(FeishuAgentCardSnapshot.class));
         ArgumentCaptor<FeishuAgentCardSnapshot> updated = ArgumentCaptor.forClass(FeishuAgentCardSnapshot.class);
         verify(cardMessageClient).updateAgentCard(eq("om_card"), updated.capture());
-        assertTrue(updated.getValue().getResult().contains("最终答案"));
+        assertTrue(updated.getValue().getResult().contains("final answer"));
         assertTrue(updated.getValue().getStatus().contains("已完成"));
     }
 
@@ -60,11 +64,11 @@ class FeishuAgentCommandServiceTest {
     void missingDefaultAgentIdSendsFriendlyMessageWithoutCard() {
         properties.setDefaultAgentId("");
 
-        service.handleAgent("oc_test", "分析秒杀订单链路");
+        service.handleAgent("oc_test", "p2p", "ou_test", "analyze seckill order flow");
 
         verify(messageClient).sendText(eq("oc_test"), eq(FeishuAgentCommandService.AGENT_MISSING_CONFIG_ERROR));
         verify(cardMessageClient, never()).sendAgentCard(anyString(), isA(FeishuAgentCardSnapshot.class));
-        verify(agentRunAdapter, never()).run(anyString(), anyString(), anyString());
+        verify(agentRunAdapter, never()).run(anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -72,10 +76,10 @@ class FeishuAgentCommandServiceTest {
         when(cardMessageClient.sendAgentCard(eq("oc_test"), isA(FeishuAgentCardSnapshot.class)))
                 .thenThrow(new RuntimeException("permission denied"));
 
-        service.handleAgent("oc_test", "分析秒杀订单链路");
+        service.handleAgent("oc_test", "p2p", "ou_test", "analyze seckill order flow");
 
         verify(messageClient).sendText(eq("oc_test"), eq(FeishuAgentCommandService.AGENT_SEND_ERROR));
-        verify(agentRunAdapter, never()).run(anyString(), anyString(), anyString());
+        verify(agentRunAdapter, never()).run(anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -83,13 +87,35 @@ class FeishuAgentCommandServiceTest {
         when(cardMessageClient.sendAgentCard(eq("oc_test"), isA(FeishuAgentCardSnapshot.class)))
                 .thenReturn("om_card");
         doThrow(new RuntimeException("model unavailable"))
-                .when(agentRunAdapter).run(eq(properties.getDefaultAgentId()), eq("oc_test"), eq("分析秒杀订单链路"));
+                .when(agentRunAdapter).run(eq(properties.getDefaultAgentId()), eq("oc_test"), eq("p2p"), eq("ou_test"),
+                        eq("analyze seckill order flow"));
 
-        service.handleAgent("oc_test", "分析秒杀订单链路");
+        service.handleAgent("oc_test", "p2p", "ou_test", "analyze seckill order flow");
 
         ArgumentCaptor<FeishuAgentCardSnapshot> updated = ArgumentCaptor.forClass(FeishuAgentCardSnapshot.class);
         verify(cardMessageClient).updateAgentCard(eq("om_card"), updated.capture());
         assertTrue(updated.getValue().getStatus().contains("失败"));
         assertTrue(updated.getValue().getResult().contains("model unavailable"));
+    }
+
+    @Test
+    void handleNewSessionCreatesBindingAndSendsConfirmation() {
+        when(sessionBindingService.createNewSession(eq("oc_test"), eq("p2p"), eq("ou_test"),
+                eq(properties.getDefaultAgentId())))
+                .thenReturn("33333333-3333-3333-3333-333333333333");
+
+        service.handleNewSession("oc_test", "p2p", "ou_test");
+
+        verify(messageClient).sendText(eq("oc_test"), eq(FeishuAgentCommandService.NEW_SESSION_CREATED_TEXT));
+    }
+
+    @Test
+    void handleNewSessionRequiresDefaultAgentId() {
+        properties.setDefaultAgentId("");
+
+        service.handleNewSession("oc_test", "p2p", "ou_test");
+
+        verify(messageClient).sendText(eq("oc_test"), eq(FeishuAgentCommandService.AGENT_MISSING_CONFIG_ERROR));
+        verify(sessionBindingService, never()).createNewSession(anyString(), anyString(), anyString(), anyString());
     }
 }

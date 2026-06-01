@@ -64,6 +64,15 @@ class FeishuCommandParserTest {
     }
 
     @Test
+    void parsesNewSessionCommand() {
+        FeishuCommandParser.ParsedCommand command = parser.parse("  /new-session  ");
+
+        assertEquals(FeishuCommandParser.CommandType.NEW_SESSION, command.type());
+        assertNull(command.repoId());
+        assertNull(command.query());
+    }
+
+    @Test
     void parsesAgentCommandAndKeepsChineseQuestion() {
         FeishuCommandParser.ParsedCommand command = parser.parse("/agent 分析秒杀订单链路");
 

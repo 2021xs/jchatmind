@@ -32,6 +32,7 @@ public class FeishuBotService {
             /help View help
             /ask-code <repoKey> <question> Query code evidence with Code RAG
             /agent <question> Run the configured JChatMind Agent
+            /new-session Start a fresh Feishu Agent session
             /agent-test <question> Verify Feishu card update
             """;
 
@@ -96,7 +97,7 @@ public class FeishuBotService {
         this.agentTestUpdateDelayMillis = agentTestUpdateDelayMillis;
     }
 
-    public void handleTextMessage(String chatId, String text) {
+    public void handleTextMessage(String chatId, String chatType, String senderOpenId, String text) {
         FeishuCommandParser.ParsedCommand command = commandParser.parse(text);
         switch (command.type()) {
             case HELP -> messageClient.sendText(chatId, HELP_TEXT);
@@ -104,10 +105,15 @@ public class FeishuBotService {
             case ASK_CODE_INVALID -> messageClient.sendText(chatId, ASK_CODE_USAGE);
             case AGENT_TEST -> handleAgentTest(chatId, command.query());
             case AGENT_TEST_INVALID -> messageClient.sendText(chatId, AGENT_TEST_USAGE);
-            case AGENT -> agentCommandService.handleAgent(chatId, command.query());
+            case NEW_SESSION -> agentCommandService.handleNewSession(chatId, chatType, senderOpenId);
+            case AGENT -> agentCommandService.handleAgent(chatId, chatType, senderOpenId, command.query());
             case AGENT_INVALID -> messageClient.sendText(chatId, FeishuAgentCommandService.AGENT_USAGE);
             case UNKNOWN -> log.info("Feishu text message ignored: command not supported");
         }
+    }
+
+    void handleTextMessage(String chatId, String text) {
+        handleTextMessage(chatId, "", "", text);
     }
 
     private void handleAgentTest(String chatId, String question) {

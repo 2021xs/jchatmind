@@ -83,3 +83,18 @@ CREATE INDEX IF NOT EXISTS idx_agent_step_task_status
 
 CREATE INDEX IF NOT EXISTS idx_tool_call_log_task_status
     ON tool_call_log(task_id, status);
+
+CREATE TABLE IF NOT EXISTS feishu_agent_session_binding (
+    id uuid PRIMARY KEY,
+    feishu_chat_id varchar(128) NOT NULL UNIQUE,
+    feishu_chat_type varchar(64),
+    feishu_sender_open_id varchar(128),
+    agent_id uuid NOT NULL,
+    session_id uuid NOT NULL,
+    created_at timestamp,
+    updated_at timestamp,
+    last_message_at timestamp
+);
+
+CREATE INDEX IF NOT EXISTS idx_feishu_agent_session_binding_agent
+    ON feishu_agent_session_binding(agent_id, updated_at DESC);

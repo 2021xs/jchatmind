@@ -25,11 +25,7 @@ import com.kama.jchatmind.tool.ToolFailureClassifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.ToolResponseMessage;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.aop.support.AopUtils;
@@ -117,48 +113,8 @@ public class JChatMindFactory {
         List<ChatMessageDTO> allMessages = chatMessageFacadeService.getChatMessageDTOsBySessionId(chatSessionId);
         ConversationContextCompressor.CompressedContext compressedContext =
                 conversationContextCompressor.compressIfNeeded(chatSessionId, model, allMessages);
-        List<ChatMessageDTO> chatMessages = compressedContext.recentMessages();
-        List<Message> memory = new ArrayList<>();
-        if (StringUtils.hasLength(compressedContext.summary())) {
-            memory.add(new SystemMessage("[Conversation summary]\n" + compressedContext.summary()
-                    + "\n\nNote: The summary is only auxiliary context. If it conflicts with recent user input or retrieval results, prefer the recent input and retrieval results."));
-        }
-        for (ChatMessageDTO chatMessageDTO : chatMessages) {
-            switch (chatMessageDTO.getRole()) {
-                case SYSTEM:
-                    if (StringUtils.hasLength(chatMessageDTO.getContent())) {
-                        memory.add(0, new SystemMessage(chatMessageDTO.getContent()));
-                    }
-                    break;
-                case USER:
-                    if (StringUtils.hasLength(chatMessageDTO.getContent())) {
-                        memory.add(new UserMessage(chatMessageDTO.getContent()));
-                    }
-                    break;
-                case ASSISTANT:
-                    memory.add(AssistantMessage.builder()
-                            .content(chatMessageDTO.getContent())
-                            .toolCalls(chatMessageDTO.getMetadata() == null || chatMessageDTO.getMetadata().getToolCalls() == null
-                                    ? List.of()
-                                    : chatMessageDTO.getMetadata().getToolCalls())
-                            .build());
-                    break;
-                case TOOL:
-                    if (chatMessageDTO.getMetadata() == null || chatMessageDTO.getMetadata().getToolResponse() == null) {
-                        log.warn("Skip tool message without tool response metadata: messageId={}", chatMessageDTO.getId());
-                        break;
-                    }
-                    memory.add(ToolResponseMessage.builder()
-                            .responses(List.of(chatMessageDTO.getMetadata().getToolResponse()))
-                            .build());
-                    break;
-                default:
-                    log.error("Unsupported message type: {}, content={}",
-                            chatMessageDTO.getRole().getRole(), chatMessageDTO.getContent());
-                    throw new IllegalStateException("Unsupported message type");
-            }
-        }
-        return memory;
+        return AgentMemoryHistorySanitizer.toSafeReplayMessages(
+                compressedContext.summary(), compressedContext.recentMessages());
     }
 
     private AgentDTO toAgentConfig(Agent agent) {

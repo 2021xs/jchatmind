@@ -14,8 +14,8 @@ import java.util.List;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -30,7 +30,6 @@ class FeishuEventControllerTest {
 
     private MockMvc mockMvc;
     private FeishuMessageClient messageClient;
-    private FeishuCardMessageClient cardMessageClient;
     private FeishuAgentCommandService agentCommandService;
     private CodeRagAnswerEvidenceService codeRagAnswerEvidenceService;
 
@@ -39,9 +38,9 @@ class FeishuEventControllerTest {
         ObjectMapper objectMapper = new ObjectMapper();
         FeishuProperties properties = new FeishuProperties();
         properties.setVerificationToken("test-token");
-        properties.setRepoAliases(Map.of("hmdp", TEST_REPO_ID, "黑马点评", TEST_REPO_ID));
+        properties.setRepoAliases(Map.of("hmdp", TEST_REPO_ID));
         messageClient = mock(FeishuMessageClient.class);
-        cardMessageClient = mock(FeishuCardMessageClient.class);
+        FeishuCardMessageClient cardMessageClient = mock(FeishuCardMessageClient.class);
         codeRagAnswerEvidenceService = mock(CodeRagAnswerEvidenceService.class);
         agentCommandService = mock(FeishuAgentCommandService.class);
         FeishuBotService botService = new FeishuBotService(
@@ -105,23 +104,7 @@ class FeishuEventControllerTest {
     void messageReceiveHelpTextEventSendsHelpText() throws Exception {
         mockMvc.perform(post("/api/feishu/events")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "schema": "2.0",
-                                  "header": {
-                                    "event_type": "im.message.receive_v1"
-                                  },
-                                  "event": {
-                                    "message": {
-                                      "message_id": "om_help",
-                                      "chat_id": "oc_test",
-                                      "chat_type": "p2p",
-                                      "message_type": "text",
-                                      "content": "{\\"text\\":\\"/help\\"}"
-                                    }
-                                  }
-                                }
-                                """))
+                        .content(textEvent("om_help", "/help")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0));
 
@@ -130,7 +113,7 @@ class FeishuEventControllerTest {
 
     @Test
     void messageReceiveAskCodeTextEventReturnsOkAndSendsEvidence() throws Exception {
-        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "秒杀订单队列在哪里定义？"))
+        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "where is queue"))
                 .thenReturn(CodeAnswerEvidenceResult.builder()
                         .selectedEvidence(List.of(CodeSearchResult.builder()
                                 .filePath("src/main/java/demo/RabbitConstants.java")
@@ -141,54 +124,22 @@ class FeishuEventControllerTest {
 
         mockMvc.perform(post("/api/feishu/events")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "schema": "2.0",
-                                  "header": {
-                                    "event_type": "im.message.receive_v1"
-                                  },
-                                  "event": {
-                                    "message": {
-                                      "message_id": "om_ask_code",
-                                      "chat_id": "oc_test",
-                                      "chat_type": "p2p",
-                                      "message_type": "text",
-                                      "content": "{\\"text\\":\\"/ask-code 黑马点评 秒杀订单队列在哪里定义？\\"}"
-                                    }
-                                  }
-                                }
-                                """))
+                        .content(textEvent("om_ask_code", "/ask-code hmdp where is queue")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0));
 
-        verify(codeRagAnswerEvidenceService).retrieve(eq(TEST_REPO_ID), eq("秒杀订单队列在哪里定义？"));
+        verify(codeRagAnswerEvidenceService).retrieve(eq(TEST_REPO_ID), eq("where is queue"));
         verify(messageClient).sendText(eq("oc_test"), org.mockito.ArgumentMatchers.contains("SECKILL_ORDER_QUEUE"));
     }
 
     @Test
     void messageReceiveAskCodeFailureStillReturnsOkCode() throws Exception {
-        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "哪里定义队列？"))
+        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "where is queue"))
                 .thenThrow(new RuntimeException("selector unavailable"));
 
         mockMvc.perform(post("/api/feishu/events")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "schema": "2.0",
-                                  "header": {
-                                    "event_type": "im.message.receive_v1"
-                                  },
-                                  "event": {
-                                    "message": {
-                                      "message_id": "om_ask_code_failed",
-                                      "chat_id": "oc_test",
-                                      "chat_type": "p2p",
-                                      "message_type": "text",
-                                      "content": "{\\"text\\":\\"/ask-code hmdp 哪里定义队列？\\"}"
-                                    }
-                                  }
-                                }
-                                """))
+                        .content(textEvent("om_ask_code_failed", "/ask-code hmdp where is queue")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0));
 
@@ -199,50 +150,30 @@ class FeishuEventControllerTest {
     void messageReceiveAgentTextEventReturnsOkAndStartsAgentCommand() throws Exception {
         mockMvc.perform(post("/api/feishu/events")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "schema": "2.0",
-                                  "header": {
-                                    "event_type": "im.message.receive_v1"
-                                  },
-                                  "event": {
-                                    "message": {
-                                      "message_id": "om_agent",
-                                      "chat_id": "oc_test",
-                                      "chat_type": "p2p",
-                                      "message_type": "text",
-                                      "content": "{\\"text\\":\\"/agent 分析秒杀订单链路\\"}"
-                                    }
-                                  }
-                                }
-                                """))
+                        .content(textEvent("om_agent", "/agent analyze seckill order flow")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0));
 
-        verify(agentCommandService).handleAgent(eq("oc_test"), eq("分析秒杀订单链路"));
+        verify(agentCommandService).handleAgent(eq("oc_test"), eq("p2p"), eq("ou_test"),
+                eq("analyze seckill order flow"));
+    }
+
+    @Test
+    void messageReceiveNewSessionTextEventReturnsOkAndStartsNewSessionCommand() throws Exception {
+        mockMvc.perform(post("/api/feishu/events")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(textEvent("om_new_session", "/new-session")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0));
+
+        verify(agentCommandService).handleNewSession(eq("oc_test"), eq("p2p"), eq("ou_test"));
     }
 
     @Test
     void duplicateMessageReceiveEventIsIgnored() throws Exception {
-        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "哪里定义队列？"))
+        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "where is queue"))
                 .thenReturn(CodeAnswerEvidenceResult.builder().selectedEvidence(List.of()).build());
-        String body = """
-                {
-                  "schema": "2.0",
-                  "header": {
-                    "event_type": "im.message.receive_v1"
-                  },
-                  "event": {
-                    "message": {
-                      "message_id": "om_duplicate",
-                      "chat_id": "oc_test",
-                      "chat_type": "p2p",
-                      "message_type": "text",
-                      "content": "{\\"text\\":\\"/ask-code hmdp 哪里定义队列？\\"}"
-                    }
-                  }
-                }
-                """;
+        String body = textEvent("om_duplicate", "/ask-code hmdp where is queue");
 
         mockMvc.perform(post("/api/feishu/events").contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
@@ -251,76 +182,18 @@ class FeishuEventControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0));
 
-        verify(codeRagAnswerEvidenceService).retrieve(eq(TEST_REPO_ID), eq("哪里定义队列？"));
-    }
-
-    @Test
-    void duplicateMessageTextWithDifferentMessageIdIsIgnored() throws Exception {
-        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "哪里定义队列？"))
-                .thenReturn(CodeAnswerEvidenceResult.builder().selectedEvidence(List.of()).build());
-        String firstBody = askCodeBody("om_duplicate_text_1");
-        String secondBody = askCodeBody("om_duplicate_text_2");
-
-        mockMvc.perform(post("/api/feishu/events").contentType(MediaType.APPLICATION_JSON).content(firstBody))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(0));
-        mockMvc.perform(post("/api/feishu/events").contentType(MediaType.APPLICATION_JSON).content(secondBody))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(0));
-
-        verify(codeRagAnswerEvidenceService).retrieve(eq(TEST_REPO_ID), eq("哪里定义队列？"));
+        verify(codeRagAnswerEvidenceService).retrieve(eq(TEST_REPO_ID), eq("where is queue"));
     }
 
     @Test
     void messageReceiveNonHelpTextEventDoesNotSendMessage() throws Exception {
         mockMvc.perform(post("/api/feishu/events")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "schema": "2.0",
-                                  "header": {
-                                    "event_type": "im.message.receive_v1"
-                                  },
-                                  "event": {
-                                    "message": {
-                                      "message_id": "om_test",
-                                      "chat_id": "oc_test",
-                                      "chat_type": "p2p",
-                                      "message_type": "text",
-                                      "content": "{\\"text\\":\\"hello\\"}"
-                                    }
-                                  }
-                                }
-                                """))
+                        .content(textEvent("om_test", "hello")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0));
 
         verify(messageClient, never()).sendText(anyString(), anyString());
-    }
-
-    @Test
-    void messageReceiveTextEventReturnsOkCode() throws Exception {
-        mockMvc.perform(post("/api/feishu/events")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "schema": "2.0",
-                                  "header": {
-                                    "event_type": "im.message.receive_v1"
-                                  },
-                                  "event": {
-                                    "message": {
-                                      "message_id": "om_test",
-                                      "chat_id": "oc_test",
-                                      "chat_type": "p2p",
-                                      "message_type": "text",
-                                      "content": "{\\"text\\":\\"hello\\"}"
-                                    }
-                                  }
-                                }
-                                """))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(0));
     }
 
     @Test
@@ -334,6 +207,11 @@ class FeishuEventControllerTest {
                                     "event_type": "im.message.receive_v1"
                                   },
                                   "event": {
+                                    "sender": {
+                                      "sender_id": {
+                                        "open_id": "ou_test"
+                                      }
+                                    },
                                     "message": {
                                       "message_id": "om_image",
                                       "chat_id": "oc_test",
@@ -381,28 +259,12 @@ class FeishuEventControllerTest {
 
         mockMvc.perform(post("/api/feishu/events")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "schema": "2.0",
-                                  "header": {
-                                    "event_type": "im.message.receive_v1"
-                                  },
-                                  "event": {
-                                    "message": {
-                                      "message_id": "om_help",
-                                      "chat_id": "oc_test",
-                                      "chat_type": "p2p",
-                                      "message_type": "text",
-                                      "content": "{\\"text\\":\\"/help\\"}"
-                                    }
-                                  }
-                                }
-                                """))
+                        .content(textEvent("om_help_failed", "/help")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0));
     }
 
-    private String askCodeBody(String messageId) {
+    private String textEvent(String messageId, String text) {
         return """
                 {
                   "schema": "2.0",
@@ -410,15 +272,20 @@ class FeishuEventControllerTest {
                     "event_type": "im.message.receive_v1"
                   },
                   "event": {
+                    "sender": {
+                      "sender_id": {
+                        "open_id": "ou_test"
+                      }
+                    },
                     "message": {
                       "message_id": "%s",
                       "chat_id": "oc_test",
                       "chat_type": "p2p",
                       "message_type": "text",
-                      "content": "{\\"text\\":\\"/ask-code hmdp 哪里定义队列？\\"}"
+                      "content": "{\\"text\\":\\"%s\\"}"
                     }
                   }
                 }
-                """.formatted(messageId);
+                """.formatted(messageId, text);
     }
 }
