@@ -5,6 +5,7 @@ import com.kama.jchatmind.agent.JChatMindFactory;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.request.CreateChatMessageRequest;
 import com.kama.jchatmind.model.response.CreateChatMessageResponse;
+import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -76,10 +77,32 @@ class FeishuAgentRunAdapterTest {
         org.assertj.core.api.Assertions.assertThat(requestCaptor.getValue().getContent())
                 .contains("analyze seckill order flow")
                 .contains("repo-hmdp-id");
+        verify(jChatMind).setMaxLoopSteps(8);
         verify(jChatMind).run();
         assertEquals("22222222-2222-2222-2222-222222222222", result.sessionId());
         assertEquals("user-message-id", result.userMessageId());
         assertEquals("final answer", result.answer());
+    }
+
+    @Test
+    void runReturnsStepLimitFallbackWhenFeishuLightweightAgentHitsMaxSteps() {
+        String agentId = "11111111-1111-1111-1111-111111111111";
+        when(sessionBindingService.getOrCreateActiveSession(eq("oc_test"), eq("p2p"), eq("ou_test"), eq(agentId)))
+                .thenReturn("22222222-2222-2222-2222-222222222222");
+        when(chatMessageFacadeService.agentCreateChatMessage(isA(CreateChatMessageRequest.class)))
+                .thenReturn(CreateChatMessageResponse.builder().chatMessageId("user-message-id").build());
+        when(jChatMindFactory.create(eq(agentId), eq("22222222-2222-2222-2222-222222222222"), eq("user-message-id")))
+                .thenReturn(jChatMind);
+        when(jChatMind.getFinishReason()).thenReturn(AgentTaskLogService.FINISH_REASON_MAX_STEPS_REACHED);
+
+        FeishuAgentRunAdapter.AgentRunResult result =
+                adapter.run(agentId, "oc_test", "p2p", "ou_test", "analyze seckill order flow");
+
+        verify(jChatMind).setMaxLoopSteps(8);
+        verify(jChatMind).run();
+        org.assertj.core.api.Assertions.assertThat(result.answer())
+                .contains("Agent 已达到飞书轻量运行步数上限")
+                .contains("/ask-code");
     }
 
     @Test

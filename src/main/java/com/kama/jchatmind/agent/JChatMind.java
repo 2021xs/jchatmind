@@ -79,6 +79,7 @@ public class JChatMind {
     private ToolFailureClassifier toolFailureClassifier = new ToolFailureClassifier();
     private int nextStepNo = 1;
     private int toolCallCount = 0;
+    private int maxLoopSteps = MAX_STEPS;
     private String finishReason;
     private final Map<String, Integer> toolCorrectionAttempts = new HashMap<>();
 
@@ -612,7 +613,7 @@ public class JChatMind {
 
         String traceId = UUID.randomUUID().toString();
         AgentTask task = agentTaskLogService.startTask(this.chatSessionId, this.agentId, this.userMessageId,
-                "chat session agent run", this.model, MAX_STEPS, traceId);
+                "chat session agent run", this.model, maxLoopSteps, traceId);
         this.currentTaskId = task.getId();
         this.agentExecutionContext = AgentExecutionContext.builder()
                 .taskId(currentTaskId)
@@ -620,7 +621,7 @@ public class JChatMind {
                 .sessionId(chatSessionId)
                 .agentId(agentId)
                 .modelName(model)
-                .maxSteps(MAX_STEPS)
+                .maxSteps(maxLoopSteps)
                 .build();
         sendAgentEvent(AgentSseEvent.Type.MESSAGE_START, payload(
                 "taskId", currentTaskId,
@@ -630,10 +631,10 @@ public class JChatMind {
         ));
 
         try {
-            for (int i = 0; i < MAX_STEPS && agentState != AgentState.FINISHED; i++) {
+            for (int i = 0; i < maxLoopSteps && agentState != AgentState.FINISHED; i++) {
                 int loopStep = i + 1;
                 step(loopStep);
-                if (loopStep >= MAX_STEPS && agentState != AgentState.FINISHED) {
+                if (loopStep >= maxLoopSteps && agentState != AgentState.FINISHED) {
                     agentState = AgentState.FINISHED;
                     finishReason = AgentTaskLogService.FINISH_REASON_MAX_STEPS_REACHED;
                     log.warn("Max steps reached, stopping agent");
@@ -665,6 +666,14 @@ public class JChatMind {
         } finally {
             agentExecutionContext = null;
         }
+    }
+
+    public void setMaxLoopSteps(int maxLoopSteps) {
+        this.maxLoopSteps = Math.max(1, maxLoopSteps);
+    }
+
+    public String getFinishReason() {
+        return finishReason;
     }
 
     @Override

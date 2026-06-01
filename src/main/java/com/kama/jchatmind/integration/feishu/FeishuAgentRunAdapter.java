@@ -5,6 +5,7 @@ import com.kama.jchatmind.agent.JChatMindFactory;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.request.CreateChatMessageRequest;
 import com.kama.jchatmind.model.response.CreateChatMessageResponse;
+import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -20,6 +21,12 @@ import java.util.UUID;
 public class FeishuAgentRunAdapter {
 
     private static final int RECENT_MESSAGE_LIMIT = 30;
+    private static final int FEISHU_MAX_AGENT_LOOP_STEPS = 8;
+    private static final String STEP_LIMIT_FALLBACK_ANSWER = """
+            Agent 已达到飞书轻量运行步数上限。
+            这通常表示模型仍在继续检索局部细节，但当前对话场景会优先停止以避免长时间无回复。
+            请换用更聚焦的问题，或使用 /ask-code 获取更直接的代码证据。
+            """;
 
     private final JChatMindFactory jChatMindFactory;
     private final ChatMessageFacadeService chatMessageFacadeService;
@@ -40,8 +47,12 @@ public class FeishuAgentRunAdapter {
                         .build());
 
         JChatMind agent = jChatMindFactory.create(agentId, sessionId, userMessage.getChatMessageId());
+        agent.setMaxLoopSteps(FEISHU_MAX_AGENT_LOOP_STEPS);
         agent.run();
 
+        if (AgentTaskLogService.FINISH_REASON_MAX_STEPS_REACHED.equals(agent.getFinishReason())) {
+            return new AgentRunResult(sessionId, userMessage.getChatMessageId(), STEP_LIMIT_FALLBACK_ANSWER);
+        }
         String answer = loadLatestAssistantAnswer(sessionId);
         return new AgentRunResult(sessionId, userMessage.getChatMessageId(), answer);
     }
