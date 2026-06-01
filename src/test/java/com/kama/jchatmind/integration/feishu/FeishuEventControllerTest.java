@@ -43,7 +43,7 @@ class FeishuEventControllerTest {
         FeishuBotService botService = new FeishuBotService(
                 new FeishuCommandParser(), messageClient, codeRagAnswerEvidenceService,
                 new FeishuRepoResolver(properties));
-        FeishuMessageEventHandler messageEventHandler = new FeishuMessageEventHandler(objectMapper, botService);
+        FeishuMessageEventHandler messageEventHandler = new FeishuMessageEventHandler(objectMapper, botService, Runnable::run);
         FeishuEventController controller = new FeishuEventController(objectMapper, properties, messageEventHandler);
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
@@ -188,6 +188,38 @@ class FeishuEventControllerTest {
                 .andExpect(jsonPath("$.code").value(0));
 
         verify(messageClient).sendText(eq("oc_test"), eq(FeishuBotService.ASK_CODE_ERROR));
+    }
+
+    @Test
+    void duplicateMessageReceiveEventIsIgnored() throws Exception {
+        when(codeRagAnswerEvidenceService.retrieve(TEST_REPO_ID, "哪里定义队列？"))
+                .thenReturn(CodeAnswerEvidenceResult.builder().selectedEvidence(List.of()).build());
+        String body = """
+                {
+                  "schema": "2.0",
+                  "header": {
+                    "event_type": "im.message.receive_v1"
+                  },
+                  "event": {
+                    "message": {
+                      "message_id": "om_duplicate",
+                      "chat_id": "oc_test",
+                      "chat_type": "p2p",
+                      "message_type": "text",
+                      "content": "{\\"text\\":\\"/ask-code hmdp 哪里定义队列？\\"}"
+                    }
+                  }
+                }
+                """;
+
+        mockMvc.perform(post("/api/feishu/events").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0));
+        mockMvc.perform(post("/api/feishu/events").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0));
+
+        verify(codeRagAnswerEvidenceService).retrieve(eq(TEST_REPO_ID), eq("哪里定义队列？"));
     }
 
     @Test

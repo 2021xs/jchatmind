@@ -29,6 +29,15 @@ class FeishuRepoResolverTest {
     }
 
     @Test
+    void repairsUtf8TextDecodedAsGbkBeforeResolvingAlias() {
+        FeishuProperties properties = new FeishuProperties();
+        properties.setRepoAliases(Map.of("黑马点评", TEST_REPO_ID));
+        FeishuRepoResolver resolver = new FeishuRepoResolver(properties);
+
+        assertEquals(TEST_REPO_ID, resolver.resolveRepoId("榛戦┈鐐硅瘎").orElseThrow());
+    }
+
+    @Test
     void ignoresBlankOrInvalidAliasValues() {
         FeishuProperties properties = new FeishuProperties();
         properties.setRepoAliases(Map.of("hmdp", ""));

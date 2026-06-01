@@ -4,13 +4,19 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 @Component
 @RequiredArgsConstructor
 public class FeishuRepoResolver {
+
+    private static final Charset GBK = Charset.forName("GBK");
 
     private final FeishuProperties properties;
 
@@ -28,10 +34,7 @@ public class FeishuRepoResolver {
             return Optional.empty();
         }
 
-        String repoId = aliases.get(trimmed);
-        if (!StringUtils.hasText(repoId)) {
-            repoId = aliases.get(trimmed.toLowerCase());
-        }
+        String repoId = resolveAlias(aliases, trimmed);
         if (!StringUtils.hasText(repoId)) {
             return Optional.empty();
         }
@@ -46,6 +49,39 @@ public class FeishuRepoResolver {
             return true;
         } catch (IllegalArgumentException e) {
             return false;
+        }
+    }
+
+    private String resolveAlias(Map<String, String> aliases, String repoKey) {
+        for (String candidate : aliasCandidates(repoKey)) {
+            String repoId = aliases.get(candidate);
+            if (StringUtils.hasText(repoId)) {
+                return repoId;
+            }
+            repoId = aliases.get(candidate.toLowerCase());
+            if (StringUtils.hasText(repoId)) {
+                return repoId;
+            }
+        }
+        return null;
+    }
+
+    private Set<String> aliasCandidates(String repoKey) {
+        Set<String> candidates = new LinkedHashSet<>();
+        candidates.add(repoKey);
+        String repaired = repairUtf8DecodedAsGbk(repoKey);
+        if (StringUtils.hasText(repaired)) {
+            candidates.add(repaired);
+        }
+        return candidates;
+    }
+
+    private String repairUtf8DecodedAsGbk(String value) {
+        try {
+            String repaired = new String(value.getBytes(GBK), StandardCharsets.UTF_8);
+            return repaired.equals(value) ? null : repaired;
+        } catch (RuntimeException e) {
+            return null;
         }
     }
 }

@@ -8,15 +8,22 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class FeishuMessageEventHandler {
 
     static final String MESSAGE_RECEIVE_EVENT = "im.message.receive_v1";
+    private static final long MESSAGE_ID_CACHE_TTL_MS = 10 * 60 * 1000L;
 
     private final ObjectMapper objectMapper;
     private final FeishuBotService botService;
+    private final Executor taskExecutor;
+    private final Map<String, Long> processedMessageIds = new ConcurrentHashMap<>();
 
     public void handle(String eventType, JsonNode root) {
         if (!MESSAGE_RECEIVE_EVENT.equals(eventType)) {
@@ -35,10 +42,18 @@ public class FeishuMessageEventHandler {
                     messageId, chatId, chatType, messageType);
             return;
         }
+        if (isDuplicate(messageId)) {
+            log.info("Duplicate Feishu message event ignored: messageId={}", messageId);
+            return;
+        }
 
         String text = parseTextContent(messageId, content);
         log.info("Received Feishu message event: messageId={}, chatId={}, chatType={}, messageType={}, textLength={}",
                 messageId, chatId, chatType, messageType, text.length());
+        taskExecutor.execute(() -> handleTextMessage(messageId, chatId, text));
+    }
+
+    private void handleTextMessage(String messageId, String chatId, String text) {
         try {
             botService.handleTextMessage(chatId, text);
         } catch (RuntimeException e) {
@@ -58,5 +73,18 @@ public class FeishuMessageEventHandler {
                     messageId, e.getOriginalMessage());
             return "";
         }
+    }
+
+    private boolean isDuplicate(String messageId) {
+        if (!StringUtils.hasText(messageId)) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        cleanupProcessedMessageIds(now);
+        return processedMessageIds.putIfAbsent(messageId, now) != null;
+    }
+
+    private void cleanupProcessedMessageIds(long now) {
+        processedMessageIds.entrySet().removeIf(entry -> now - entry.getValue() > MESSAGE_ID_CACHE_TTL_MS);
     }
 }
