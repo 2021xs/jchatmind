@@ -74,14 +74,14 @@ final class AgentMemoryHistorySanitizer {
                 continue;
             }
             if (message instanceof AssistantMessage assistantMessage && hasToolCalls(assistantMessage)) {
-                ToolResponseMessage toolResponseMessage = nextToolResponse(messages, i + 1);
-                if (toolResponseMessage == null || !matchesToolCalls(assistantMessage, toolResponseMessage)) {
+                List<ToolResponseMessage> toolResponseMessages = nextToolResponses(messages, i + 1);
+                if (!matchesToolCalls(assistantMessage, toolResponseMessages)) {
                     log.debug("Skip assistant tool-call message without matching tool response during model replay");
                     continue;
                 }
                 safeMessages.add(assistantMessage);
-                safeMessages.add(toolResponseMessage);
-                i++;
+                safeMessages.addAll(toolResponseMessages);
+                i += toolResponseMessages.size();
                 continue;
             }
             safeMessages.add(message);
@@ -99,15 +99,19 @@ final class AgentMemoryHistorySanitizer {
         return assistantMessage.getToolCalls() != null && !assistantMessage.getToolCalls().isEmpty();
     }
 
-    private static ToolResponseMessage nextToolResponse(List<Message> messages, int index) {
-        if (index >= messages.size() || !(messages.get(index) instanceof ToolResponseMessage toolResponseMessage)) {
-            return null;
+    private static List<ToolResponseMessage> nextToolResponses(List<Message> messages, int index) {
+        List<ToolResponseMessage> responses = new ArrayList<>();
+        for (int i = index; i < messages.size(); i++) {
+            if (!(messages.get(i) instanceof ToolResponseMessage toolResponseMessage)) {
+                break;
+            }
+            responses.add(toolResponseMessage);
         }
-        return toolResponseMessage;
+        return responses;
     }
 
     private static boolean matchesToolCalls(AssistantMessage assistantMessage,
-                                            ToolResponseMessage toolResponseMessage) {
+                                            List<ToolResponseMessage> toolResponseMessages) {
         Set<String> toolCallIds = new HashSet<>();
         for (AssistantMessage.ToolCall toolCall : assistantMessage.getToolCalls()) {
             if (StringUtils.hasLength(toolCall.id())) {
@@ -115,10 +119,14 @@ final class AgentMemoryHistorySanitizer {
             }
         }
         if (toolCallIds.isEmpty()) {
-            return !toolResponseMessage.getResponses().isEmpty();
+            return !toolResponseMessages.isEmpty()
+                    && toolResponseMessages.stream().anyMatch(response -> !response.getResponses().isEmpty());
         }
-        return toolResponseMessage.getResponses()
-                .stream()
-                .allMatch(response -> StringUtils.hasLength(response.id()) && toolCallIds.contains(response.id()));
+        Set<String> responseIds = new HashSet<>();
+        toolResponseMessages.stream()
+                .flatMap(response -> response.getResponses().stream())
+                .filter(response -> StringUtils.hasLength(response.id()))
+                .forEach(response -> responseIds.add(response.id()));
+        return responseIds.equals(toolCallIds);
     }
 }

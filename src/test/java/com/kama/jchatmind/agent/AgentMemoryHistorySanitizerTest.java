@@ -115,4 +115,52 @@ class AgentMemoryHistorySanitizerTest {
         assertThat(memory.get(3)).isSameAs(pairedToolResponse);
         assertThat(((AssistantMessage) memory.get(4)).getText()).isEqualTo("final answer");
     }
+
+    @Test
+    void keepsAssistantToolCallFollowedByMultipleToolResponseMessages() {
+        AssistantMessage assistant = AssistantMessage.builder()
+                .content("")
+                .toolCalls(List.of(
+                        new AssistantMessage.ToolCall(
+                                "call-1",
+                                "function",
+                                "searchProjectCode",
+                                "{\"query\":\"queue\"}"
+                        ),
+                        new AssistantMessage.ToolCall(
+                                "call-2",
+                                "function",
+                                "searchProjectCode",
+                                "{\"query\":\"lua\"}"
+                        )
+                ))
+                .build();
+        ToolResponseMessage firstResponse = ToolResponseMessage.builder()
+                .responses(List.of(new ToolResponseMessage.ToolResponse(
+                        "call-1",
+                        "searchProjectCode",
+                        "queue result"
+                )))
+                .build();
+        ToolResponseMessage secondResponse = ToolResponseMessage.builder()
+                .responses(List.of(new ToolResponseMessage.ToolResponse(
+                        "call-2",
+                        "searchProjectCode",
+                        "lua result"
+                )))
+                .build();
+
+        List<Message> memory = AgentMemoryHistorySanitizer.toSafeModelMessages(List.of(
+                new UserMessage("question"),
+                assistant,
+                firstResponse,
+                secondResponse
+        ));
+
+        assertThat(memory).hasSize(4);
+        assertThat(memory.get(0)).isInstanceOf(UserMessage.class);
+        assertThat(memory.get(1)).isSameAs(assistant);
+        assertThat(memory.get(2)).isSameAs(firstResponse);
+        assertThat(memory.get(3)).isSameAs(secondResponse);
+    }
 }
