@@ -19,11 +19,13 @@ public class FeishuMessageEventHandler {
 
     static final String MESSAGE_RECEIVE_EVENT = "im.message.receive_v1";
     private static final long MESSAGE_ID_CACHE_TTL_MS = 10 * 60 * 1000L;
+    private static final long MESSAGE_FINGERPRINT_CACHE_TTL_MS = 60 * 1000L;
 
     private final ObjectMapper objectMapper;
     private final FeishuBotService botService;
     private final Executor taskExecutor;
     private final Map<String, Long> processedMessageIds = new ConcurrentHashMap<>();
+    private final Map<String, Long> processedMessageFingerprints = new ConcurrentHashMap<>();
 
     public void handle(String eventType, JsonNode root) {
         if (!MESSAGE_RECEIVE_EVENT.equals(eventType)) {
@@ -50,6 +52,11 @@ public class FeishuMessageEventHandler {
         String text = parseTextContent(messageId, content);
         log.info("Received Feishu message event: messageId={}, chatId={}, chatType={}, messageType={}, textLength={}",
                 messageId, chatId, chatType, messageType, text.length());
+        if (isDuplicateMessageFingerprint(chatId, text)) {
+            log.info("Duplicate Feishu message text ignored: messageId={}, chatId={}, textLength={}",
+                    messageId, chatId, text.length());
+            return;
+        }
         taskExecutor.execute(() -> handleTextMessage(messageId, chatId, text));
     }
 
@@ -86,5 +93,20 @@ public class FeishuMessageEventHandler {
 
     private void cleanupProcessedMessageIds(long now) {
         processedMessageIds.entrySet().removeIf(entry -> now - entry.getValue() > MESSAGE_ID_CACHE_TTL_MS);
+    }
+
+    private boolean isDuplicateMessageFingerprint(String chatId, String text) {
+        if (!StringUtils.hasText(chatId) || !StringUtils.hasText(text)) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        cleanupProcessedMessageFingerprints(now);
+        String fingerprint = chatId + '\n' + text.trim();
+        return processedMessageFingerprints.putIfAbsent(fingerprint, now) != null;
+    }
+
+    private void cleanupProcessedMessageFingerprints(long now) {
+        processedMessageFingerprints.entrySet()
+                .removeIf(entry -> now - entry.getValue() > MESSAGE_FINGERPRINT_CACHE_TTL_MS);
     }
 }
