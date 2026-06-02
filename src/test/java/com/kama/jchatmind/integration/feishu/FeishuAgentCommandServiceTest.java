@@ -82,16 +82,19 @@ class FeishuAgentCommandServiceTest {
 
         ArgumentCaptor<FeishuAgentCardSnapshot> updated = ArgumentCaptor.forClass(FeishuAgentCardSnapshot.class);
         verify(cardMessageClient).updateAgentCard(eq("om_card"), updated.capture());
-        assertTrue(updated.getValue().getResult().contains("sent below in parts"));
+        assertTrue(updated.getValue().getResult().contains("回答较长"));
+        assertTrue(updated.getValue().getResult().contains("摘要"));
+        assertTrue(updated.getValue().getResult().contains("3 段"));
         assertFalse(updated.getValue().getResult().contains("...[truncated]"));
+        assertTrue(updated.getValue().getResult().length() < 1000);
 
         ArgumentCaptor<String> textParts = ArgumentCaptor.forClass(String.class);
         verify(messageClient, times(3)).sendText(eq("oc_test"), textParts.capture());
         List<String> messages = textParts.getAllValues();
         assertEquals(3, messages.size());
-        assertTrue(messages.get(0).startsWith("Full answer 1/3"));
-        assertTrue(messages.get(1).startsWith("Full answer 2/3"));
-        assertTrue(messages.get(2).startsWith("Full answer 3/3"));
+        assertTrue(messages.get(0).startsWith("完整回答 1/3"));
+        assertTrue(messages.get(1).startsWith("完整回答 2/3"));
+        assertTrue(messages.get(2).startsWith("完整回答 3/3"));
     }
 
     @Test

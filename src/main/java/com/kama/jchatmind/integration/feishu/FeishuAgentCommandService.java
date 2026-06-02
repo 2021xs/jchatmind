@@ -33,6 +33,7 @@ public class FeishuAgentCommandService {
 
     private static final int MAX_QUESTION_LENGTH = 300;
     private static final int MAX_RESULT_LENGTH = 3000;
+    private static final int MAX_CARD_SUMMARY_LENGTH = 800;
     private static final int MAX_FOLLOWUP_MESSAGE_LENGTH = 3500;
     private static final DateTimeFormatter CARD_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
@@ -178,7 +179,7 @@ public class FeishuAgentCommandService {
         }
         List<String> parts = splitText(text, MAX_FOLLOWUP_MESSAGE_LENGTH);
         for (int i = 0; i < parts.size(); i++) {
-            String message = "Full answer " + (i + 1) + "/" + parts.size() + "\n\n" + parts.get(i);
+            String message = "完整回答 " + (i + 1) + "/" + parts.size() + "\n\n" + parts.get(i);
             boolean sent = messageClient.sendText(chatId, message);
             if (!sent) {
                 log.warn("Feishu long agent answer part send failed: chatId={}, part={}/{}",
@@ -209,9 +210,28 @@ public class FeishuAgentCommandService {
         if (text.length() <= MAX_RESULT_LENGTH) {
             return text;
         }
-        String marker = "\n\nFull answer is long; complete answer is sent below in parts.";
-        int keep = Math.max(0, MAX_RESULT_LENGTH - marker.length());
-        return text.substring(0, keep) + marker;
+        int partCount = splitText(text, MAX_FOLLOWUP_MESSAGE_LENGTH).size();
+        return "回答较长，已拆分为 " + partCount + " 段完整消息发送。\n\n"
+                + "摘要：\n" + summarizeForCard(text);
+    }
+
+    private String summarizeForCard(String answer) {
+        String text = answer == null ? "" : answer.replace("\r\n", "\n").trim();
+        if (text.length() <= MAX_CARD_SUMMARY_LENGTH) {
+            return text;
+        }
+
+        int end = MAX_CARD_SUMMARY_LENGTH;
+        int paragraphEnd = text.lastIndexOf("\n\n", MAX_CARD_SUMMARY_LENGTH);
+        if (paragraphEnd >= MAX_CARD_SUMMARY_LENGTH / 3) {
+            end = paragraphEnd;
+        } else {
+            int lineEnd = text.lastIndexOf('\n', MAX_CARD_SUMMARY_LENGTH);
+            if (lineEnd >= MAX_CARD_SUMMARY_LENGTH / 2) {
+                end = lineEnd;
+            }
+        }
+        return text.substring(0, Math.max(0, end)).trim() + "\n...";
     }
 
     private String truncateWithMarker(String value, int maxLength) {
