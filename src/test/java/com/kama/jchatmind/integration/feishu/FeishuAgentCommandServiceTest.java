@@ -7,7 +7,10 @@ import org.mockito.ArgumentCaptor;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -15,6 +18,7 @@ import static org.mockito.ArgumentMatchers.isA;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -57,7 +61,37 @@ class FeishuAgentCommandServiceTest {
         ArgumentCaptor<FeishuAgentCardSnapshot> updated = ArgumentCaptor.forClass(FeishuAgentCardSnapshot.class);
         verify(cardMessageClient).updateAgentCard(eq("om_card"), updated.capture());
         assertTrue(updated.getValue().getResult().contains("final answer"));
+        verify(messageClient, never()).sendText(eq("oc_test"), anyString());
         assertTrue(updated.getValue().getStatus().contains("已完成"));
+    }
+
+    @Test
+    void handleAgentSendsLongAnswerInFollowupTextParts() {
+        String longAnswer = ("line-1\n" + "a".repeat(3900) + "\nline-2\n" + "b".repeat(3900));
+        when(cardMessageClient.sendAgentCard(eq("oc_test"), isA(FeishuAgentCardSnapshot.class)))
+                .thenReturn("om_card");
+        when(agentRunAdapter.run(eq(properties.getDefaultAgentId()), eq("oc_test"), eq("p2p"), eq("ou_test"),
+                eq("analyze seckill order flow")))
+                .thenReturn(new FeishuAgentRunAdapter.AgentRunResult(
+                        "3b494f89-8d6b-3f2c-a61f-c65609be4bfa",
+                        "user-message-id",
+                        longAnswer));
+        when(messageClient.sendText(eq("oc_test"), anyString())).thenReturn(true);
+
+        service.handleAgent("oc_test", "p2p", "ou_test", "analyze seckill order flow");
+
+        ArgumentCaptor<FeishuAgentCardSnapshot> updated = ArgumentCaptor.forClass(FeishuAgentCardSnapshot.class);
+        verify(cardMessageClient).updateAgentCard(eq("om_card"), updated.capture());
+        assertTrue(updated.getValue().getResult().contains("sent below in parts"));
+        assertFalse(updated.getValue().getResult().contains("...[truncated]"));
+
+        ArgumentCaptor<String> textParts = ArgumentCaptor.forClass(String.class);
+        verify(messageClient, times(3)).sendText(eq("oc_test"), textParts.capture());
+        List<String> messages = textParts.getAllValues();
+        assertEquals(3, messages.size());
+        assertTrue(messages.get(0).startsWith("Full answer 1/3"));
+        assertTrue(messages.get(1).startsWith("Full answer 2/3"));
+        assertTrue(messages.get(2).startsWith("Full answer 3/3"));
     }
 
     @Test

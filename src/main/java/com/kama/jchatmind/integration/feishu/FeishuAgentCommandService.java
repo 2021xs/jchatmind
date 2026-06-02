@@ -8,6 +8,8 @@ import org.springframework.util.StringUtils;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Executor;
 
@@ -31,6 +33,7 @@ public class FeishuAgentCommandService {
 
     private static final int MAX_QUESTION_LENGTH = 300;
     private static final int MAX_RESULT_LENGTH = 3000;
+    private static final int MAX_FOLLOWUP_MESSAGE_LENGTH = 3500;
     private static final DateTimeFormatter CARD_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final FeishuProperties properties;
@@ -128,10 +131,11 @@ public class FeishuAgentCommandService {
                     .question(truncate(question, MAX_QUESTION_LENGTH))
                     .status("已完成")
                     .stage("Agent 执行完成")
-                    .result(truncateWithMarker(result.answer(), MAX_RESULT_LENGTH))
+                    .result(cardResult(result.answer()))
                     .updatedAt(nowText())
                     .build();
             cardMessageClient.updateAgentCard(messageId, finished);
+            sendFullAnswerIfLong(chatId, result.answer());
         } catch (RuntimeException e) {
             long latencyMs = System.currentTimeMillis() - startedAt;
             log.warn("Feishu agent command failed: taskId={}, questionLength={}, latencyMs={}, error={}",
@@ -165,6 +169,49 @@ public class FeishuAgentCommandService {
             return e.getClass().getSimpleName() + ": " + e.getMessage();
         }
         return e.getClass().getSimpleName();
+    }
+
+    private void sendFullAnswerIfLong(String chatId, String answer) {
+        String text = answer == null ? "" : answer;
+        if (text.length() <= MAX_RESULT_LENGTH) {
+            return;
+        }
+        List<String> parts = splitText(text, MAX_FOLLOWUP_MESSAGE_LENGTH);
+        for (int i = 0; i < parts.size(); i++) {
+            String message = "Full answer " + (i + 1) + "/" + parts.size() + "\n\n" + parts.get(i);
+            boolean sent = messageClient.sendText(chatId, message);
+            if (!sent) {
+                log.warn("Feishu long agent answer part send failed: chatId={}, part={}/{}",
+                        chatId, i + 1, parts.size());
+            }
+        }
+    }
+
+    private List<String> splitText(String text, int maxLength) {
+        List<String> parts = new ArrayList<>();
+        int offset = 0;
+        while (offset < text.length()) {
+            int end = Math.min(text.length(), offset + maxLength);
+            if (end < text.length()) {
+                int newline = text.lastIndexOf('\n', end - 1);
+                if (newline > offset + maxLength / 2) {
+                    end = newline + 1;
+                }
+            }
+            parts.add(text.substring(offset, end));
+            offset = end;
+        }
+        return parts;
+    }
+
+    private String cardResult(String value) {
+        String text = value == null ? "" : value;
+        if (text.length() <= MAX_RESULT_LENGTH) {
+            return text;
+        }
+        String marker = "\n\nFull answer is long; complete answer is sent below in parts.";
+        int keep = Math.max(0, MAX_RESULT_LENGTH - marker.length());
+        return text.substring(0, keep) + marker;
     }
 
     private String truncateWithMarker(String value, int maxLength) {
