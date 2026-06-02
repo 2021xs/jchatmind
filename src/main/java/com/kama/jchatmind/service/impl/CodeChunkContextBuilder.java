@@ -27,6 +27,9 @@ public class CodeChunkContextBuilder {
         if ("CLASS_SUMMARY".equals(chunkType)) {
             return classSummary(parsed, metadata);
         }
+        if ("JAVA_CLASS_MEMBER".equals(chunkType)) {
+            return javaClassMember(parsed, metadata);
+        }
         if ("CONFIG".equals(chunkType)) {
             return config(parsed);
         }
@@ -96,6 +99,17 @@ public class CodeChunkContextBuilder {
         append(sb, "Java type: " + first(metadata.get("javaType"), parsed.getFileType()) + ".");
         append(sb, "It describes the responsibility, annotations, and method list of the class.");
         append(sb, "Use this chunk when the query asks about class responsibility, class purpose, or what a class does.");
+        return sb.toString();
+    }
+
+    private String javaClassMember(ParsedCodeFile parsed, Map<String, Object> metadata) {
+        StringBuilder sb = base("This chunk contains Java class members.");
+        append(sb, "Class: " + first(metadata.get("className"), parsed.getClassName()) + ".");
+        append(sb, "Fields: " + format(metadata.get("fields")) + ".");
+        append(sb, "Field types: " + format(metadata.get("fieldTypes")) + ".");
+        append(sb, "Initializer blocks: " + format(metadata.get("initializerKinds")) + ".");
+        append(sb, "Literal values: " + format(metadata.get("literalValues")) + ".");
+        append(sb, "Use this chunk when the query asks about fields, constants, injected configuration, static initialization, DefaultRedisScript, loaded Lua scripts, Redis keys, MQ constants, or class-level dependencies.");
         return sb.toString();
     }
 

@@ -43,7 +43,10 @@ public class DataBaseTools implements Tool {
 
     @Override
     public String getDescription() {
-        return "Read-only database query tool. Allows one safe SELECT statement only.";
+        return "Read-only PostgreSQL database query tool. Allows one safe SELECT statement only. "
+                + "Use PostgreSQL syntax; do not use MySQL-only statements such as SHOW TABLES, DATABASE(), "
+                + "COLUMN_TYPE, or COLUMN_COMMENT. Use this tool only when the user explicitly asks about "
+                + "database schema, fields, records, or SQL query results, or when code evidence cannot explain persistence behavior.";
     }
 
     @Override
@@ -53,7 +56,14 @@ public class DataBaseTools implements Tool {
 
     @org.springframework.ai.tool.annotation.Tool(
             name = "databaseQuery",
-            description = "Execute a safe read-only database query. Only one SELECT statement is allowed. Dangerous SQL is rejected by parser policy."
+            description = """
+                    Execute a safe read-only query against PostgreSQL. Only one SELECT statement is allowed.
+                    Use PostgreSQL syntax. Do not use MySQL-only SQL such as SHOW TABLES, DATABASE(), COLUMN_TYPE, or COLUMN_COMMENT.
+                    To inspect tables, query information_schema.tables or information_schema.columns with table_schema='public'.
+                    Use this tool only when the user explicitly asks about database schema, fields, records, or SQL query results,
+                    or when code evidence cannot explain persistence behavior. For code execution flow analysis, prefer searchProjectCode.
+                    Dangerous SQL is rejected by parser policy.
+                    """
     )
     public String query(String sql) {
         SqlSafetyValidator.SqlValidationResult validation;

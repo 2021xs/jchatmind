@@ -387,8 +387,12 @@ public class JChatMind {
         }
     }
 
-    private boolean think() {
-        String thinkPrompt = buildThinkPrompt(this.availableKbs);
+    private boolean think(int loopStep) {
+        boolean finalLoop = loopStep >= maxLoopSteps;
+        String thinkPrompt = buildThinkPrompt(this.availableKbs, loopStep, maxLoopSteps);
+        ToolCallback[] toolCallbacks = finalLoop
+                ? new ToolCallback[0]
+                : this.availableTools.toArray(new ToolCallback[0]);
 
         Prompt prompt = Prompt.builder()
                 .chatOptions(this.chatOptions)
@@ -398,7 +402,7 @@ public class JChatMind {
         this.lastChatResponse = this.chatClient
                 .prompt(prompt)
                 .system(thinkPrompt)
-                .toolCallbacks(this.availableTools.toArray(new ToolCallback[0]))
+                .toolCallbacks(toolCallbacks)
                 .call()
                 .chatClientResponse()
                 .chatResponse();
@@ -416,6 +420,10 @@ public class JChatMind {
     }
 
     static String buildThinkPrompt(List<KnowledgeBaseDTO> availableKbs) {
+        return buildThinkPrompt(availableKbs, 1, Integer.MAX_VALUE);
+    }
+
+    static String buildThinkPrompt(List<KnowledgeBaseDTO> availableKbs, int loopStep, int maxLoopSteps) {
         return "You are the decision module of an intelligent agent.\n"
                 + "Decide the next action from the current conversation context.\n\n"
                 + "Planning rules:\n"
@@ -424,9 +432,29 @@ public class JChatMind {
                 + "- Do not let local details such as exact constant values, field declarations, config values, or script internals block the answer when the main flow evidence is sufficient.\n"
                 + "- If a local detail is missing after a reasonable search, state that it is not fully confirmed and continue with the macro answer.\n"
                 + "- After enough evidence covers the user's main question, stop calling tools and produce a concise final answer.\n\n"
+                + runtimeStepInstruction(loopStep, maxLoopSteps)
                 + "Extra information:\n"
                 + "- Available knowledge bases: " + availableKbs + "\n"
                 + "- If context is missing, prefer searching the knowledge base first.";
+    }
+
+    private static String runtimeStepInstruction(int loopStep, int maxLoopSteps) {
+        if (maxLoopSteps <= 0 || maxLoopSteps == Integer.MAX_VALUE) {
+            return "";
+        }
+        if (loopStep >= maxLoopSteps) {
+            return "Runtime step limit instruction:\n"
+                    + "- This is the final reasoning round for this run.\n"
+                    + "- Do not call any tool. You must answer now using the evidence already available in the conversation.\n"
+                    + "- If evidence is incomplete, explicitly state the uncertainty or missing evidence instead of searching again.\n\n";
+        }
+        int remaining = maxLoopSteps - loopStep;
+        if (remaining <= Math.max(1, maxLoopSteps / 4)) {
+            return "Runtime step limit instruction:\n"
+                    + "- You are approaching the tool-call round limit. If the available evidence is enough, stop calling tools and summarize the answer.\n"
+                    + "- Only call another tool if it is essential to answer the user's main question.\n\n";
+        }
+        return "";
     }
 
     private boolean execute() {
@@ -567,7 +595,7 @@ public class JChatMind {
 
         boolean hasToolCalls;
         long thinkStartedAt = System.currentTimeMillis();
-        hasToolCalls = think();
+        hasToolCalls = think(loopStep);
         long llmLatencyMs = System.currentTimeMillis() - thinkStartedAt;
         List<AssistantMessage.ToolCall> toolCalls = lastChatResponse.getResult().getOutput().getToolCalls();
         String thinkFinishReason = hasToolCalls

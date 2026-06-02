@@ -21,7 +21,7 @@ import java.util.UUID;
 public class FeishuAgentRunAdapter {
 
     private static final int RECENT_MESSAGE_LIMIT = 30;
-    private static final int FEISHU_MAX_AGENT_LOOP_STEPS = 8;
+    private static final int FEISHU_MAX_AGENT_LOOP_STEPS = 12;
     private static final String STEP_LIMIT_FALLBACK_ANSWER = """
             Agent 已达到飞书轻量运行步数上限。
             这通常表示模型仍在继续检索局部细节，但当前对话场景会优先停止以避免长时间无回复。

@@ -99,6 +99,32 @@ class CodeChunkEmbeddingTextBuilderImplTest {
     }
 
     @Test
+    void javaClassMemberContextContainsFieldAndInitializerMetadata() throws Exception {
+        CodeChunkEmbeddingTextBuilderImpl builder = builder(true);
+        String text = builder.build(parsed("src/main/java/demo/VoucherOrderServiceImpl.java", "JAVA", "VoucherOrderServiceImpl"),
+                chunk("JAVA_CLASS_MEMBER", "demo.VoucherOrderServiceImpl#classMembers", """
+                        private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
+                        static {
+                            SECKILL_SCRIPT.setLocation(new ClassPathResource("seckill.lua"));
+                        }
+                        """, Map.of(
+                        "className", "VoucherOrderServiceImpl",
+                        "fields", List.of("SECKILL_SCRIPT", "seckillOrderMode"),
+                        "fieldTypes", List.of("DefaultRedisScript", "String"),
+                        "initializerKinds", List.of("static"),
+                        "literalValues", List.of("seckill.lua", "hmdp.seckill.order-mode:async")
+                )));
+
+        assertTrue(text.contains("This chunk contains Java class members."));
+        assertTrue(text.contains("Fields: SECKILL_SCRIPT, seckillOrderMode."));
+        assertTrue(text.contains("field_names: SECKILL_SCRIPT, seckillOrderMode"));
+        assertTrue(text.contains("field_types: DefaultRedisScript, String"));
+        assertTrue(text.contains("initializer_blocks: static"));
+        assertTrue(text.contains("literal_values: seckill.lua, hmdp.seckill.order-mode:async"));
+        assertTrue(text.contains("ClassPathResource(\"seckill.lua\")"));
+    }
+
+    @Test
     void disabledContextualPrefixDoesNotEmitContext() throws Exception {
         CodeChunkEmbeddingTextBuilderImpl builder = builder(false);
         String text = builder.build(parsed("src/main/java/demo/UserService.java", "JAVA", "UserService"),

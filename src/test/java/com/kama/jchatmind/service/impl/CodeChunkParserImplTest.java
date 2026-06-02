@@ -294,6 +294,50 @@ class CodeChunkParserImplTest {
     }
 
     @Test
+    void parsesJavaClassMembersAndStaticInitializersIntoDedicatedChunk() throws Exception {
+        Path file = write("VoucherOrderServiceImpl.java", """
+                package com.demo;
+                import org.springframework.beans.factory.annotation.Value;
+                import org.springframework.core.io.ClassPathResource;
+                import org.springframework.data.redis.core.script.DefaultRedisScript;
+                public class VoucherOrderServiceImpl {
+                    private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
+                    private static final DefaultRedisScript<Long> SECKILL_ROLLBACK_SCRIPT;
+                    @Value("${hmdp.seckill.order-mode:async}")
+                    private String seckillOrderMode;
+                    static {
+                        SECKILL_SCRIPT = new DefaultRedisScript<>();
+                        SECKILL_SCRIPT.setLocation(new ClassPathResource("seckill.lua"));
+                        SECKILL_SCRIPT.setResultType(Long.class);
+                        SECKILL_ROLLBACK_SCRIPT = new DefaultRedisScript<>();
+                        SECKILL_ROLLBACK_SCRIPT.setLocation(new ClassPathResource("seckill_rollback.lua"));
+                        SECKILL_ROLLBACK_SCRIPT.setResultType(Long.class);
+                    }
+                    public void createVoucherOrder() {
+                    }
+                }
+                """);
+
+        ParsedCodeFile parsed = parser.parse(tempDir, file);
+
+        CodeChunk memberChunk = findChunk(parsed, "JAVA_CLASS_MEMBER");
+        Map<?, ?> metadata = metadata(memberChunk);
+        assertEquals("com.demo.VoucherOrderServiceImpl#classMembers", memberChunk.getSymbolName());
+        assertTrue(memberChunk.getContent().contains("SECKILL_SCRIPT"));
+        assertTrue(memberChunk.getContent().contains("static"));
+        assertTrue(metadata.get("fields").toString().contains("SECKILL_SCRIPT"));
+        assertTrue(metadata.get("fields").toString().contains("seckillOrderMode"));
+        assertTrue(metadata.get("fieldTypes").toString().contains("DefaultRedisScript"));
+        assertTrue(metadata.get("initializerKinds").toString().contains("static"));
+        assertTrue(metadata.get("literalValues").toString().contains("seckill.lua"));
+        assertTrue(metadata.get("literalValues").toString().contains("hmdp.seckill.order-mode:async"));
+        assertTrue(metadata.get("symbolTypes").toString().contains("CLASS_CONSTANT"));
+        assertTrue(metadata.get("symbolTypes").toString().contains("FIELD"));
+        assertTrue(metadata.get("symbolTypes").toString().contains("STATIC_INITIALIZER"));
+        assertTrue(metadata.get("normalizedSymbols").toString().contains("seckill script"));
+    }
+
+    @Test
     void parsesLuaScriptIntoRedisScriptChunk() throws Exception {
         Path file = write("seckill.lua", """
                 local voucherId = ARGV[1]

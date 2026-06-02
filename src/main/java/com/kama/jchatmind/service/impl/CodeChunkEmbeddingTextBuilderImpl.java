@@ -23,7 +23,8 @@ public class CodeChunkEmbeddingTextBuilderImpl implements CodeChunkEmbeddingText
             "javaType", "methods", "fileType", "packageName", "qualifiedClassName",
             "signature", "returnType", "parameters", "annotations", "mapperClass",
             "mapperMethod", "relatedSymbol", "apiPath", "httpMethod", "scriptName",
-            "redisCommands", "redisKeys", "redisArgs", "returnCodes"
+            "redisCommands", "redisKeys", "redisArgs", "returnCodes",
+            "fields", "fieldTypes", "initializerKinds", "literalValues"
     );
 
     private final ObjectMapper objectMapper;
@@ -48,6 +49,8 @@ public class CodeChunkEmbeddingTextBuilderImpl implements CodeChunkEmbeddingText
             text = buildMyBatisSqlText(parsed, chunk, metadata);
         } else if ("LUA_SCRIPT".equals(chunkType)) {
             text = buildLuaScriptText(parsed, chunk, metadata);
+        } else if ("JAVA_CLASS_MEMBER".equals(chunkType)) {
+            text = buildJavaClassMemberText(parsed, chunk, metadata);
         } else {
             text = buildDefaultText(parsed, chunk, metadata);
         }
@@ -138,6 +141,20 @@ public class CodeChunkEmbeddingTextBuilderImpl implements CodeChunkEmbeddingText
         append(sb, "redis_keys", formatValue(metadata.get("redisKeys")));
         append(sb, "redis_args", formatValue(metadata.get("redisArgs")));
         append(sb, "return_codes", formatValue(metadata.get("returnCodes")));
+        sb.append("content:\n").append(nullToEmpty(chunk.getContent()));
+        return sb.toString();
+    }
+
+    private String buildJavaClassMemberText(ParsedCodeFile parsed, CodeChunk chunk, Map<String, Object> metadata) {
+        StringBuilder sb = new StringBuilder();
+        appendContext(sb, parsed, chunk, metadata);
+        append(sb, "chunk_type", chunk.getChunkType());
+        append(sb, "file_path", parsed.getRelativePath());
+        append(sb, "class_name", first(metadata.get("className"), parsed.getClassName()));
+        append(sb, "field_names", formatValue(metadata.get("fields")));
+        append(sb, "field_types", formatValue(metadata.get("fieldTypes")));
+        append(sb, "initializer_blocks", formatValue(metadata.get("initializerKinds")));
+        append(sb, "literal_values", formatValue(metadata.get("literalValues")));
         sb.append("content:\n").append(nullToEmpty(chunk.getContent()));
         return sb.toString();
     }

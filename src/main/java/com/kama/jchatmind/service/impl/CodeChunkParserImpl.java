@@ -6,11 +6,14 @@ import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.EnumDeclaration;
 import com.github.javaparser.ast.body.FieldDeclaration;
+import com.github.javaparser.ast.body.InitializerDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.BodyDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.AnnotationExpr;
 import com.github.javaparser.ast.expr.Expression;
+import com.github.javaparser.ast.expr.StringLiteralExpr;
 import com.kama.jchatmind.exception.BizException;
 import com.kama.jchatmind.model.dto.ParsedCodeFile;
 import com.kama.jchatmind.model.entity.CodeChunk;
@@ -169,6 +172,9 @@ public class CodeChunkParserImpl implements CodeChunkParser {
                 buildClassSummary(packageName, className, javaType, annotations, methodNames),
                 startLine, endLine, classMetadata));
 
+        buildClassMemberChunk(packageName, className, qualifiedClassName, javaType, type)
+                .ifPresent(chunks::add);
+
         String classPath = findMappingPath(type.getAnnotations());
         for (MethodDeclaration method : type.getMethods()) {
             Optional<AnnotationExpr> mapping = findMappingAnnotation(method.getAnnotations());
@@ -179,6 +185,74 @@ public class CodeChunkParserImpl implements CodeChunkParser {
             chunks.add(buildMethodChunk(content, packageName, className, qualifiedClassName, javaType, classPath, method, mapping.orElse(null), chunkType));
         }
         return chunks;
+    }
+
+    private Optional<CodeChunk> buildClassMemberChunk(String packageName, String className, String qualifiedClassName,
+                                                      String javaType, TypeDeclaration<?> type) {
+        List<BodyDeclaration<?>> members = type.getMembers().stream()
+                .filter(member -> member instanceof FieldDeclaration || member instanceof InitializerDeclaration)
+                .toList();
+        if (members.isEmpty()) {
+            return Optional.empty();
+        }
+
+        int startLine = members.stream().flatMap(member -> beginLine(member).stream()).min(Integer::compareTo).orElse(1);
+        int endLine = members.stream().flatMap(member -> endLine(member).stream()).max(Integer::compareTo).orElse(startLine);
+        String content = members.stream()
+                .map(Object::toString)
+                .collect(java.util.stream.Collectors.joining("\n\n"));
+
+        List<String> fieldNames = new ArrayList<>();
+        List<String> fieldTypes = new ArrayList<>();
+        List<String> initializerKinds = new ArrayList<>();
+        LinkedHashSet<String> literalValues = new LinkedHashSet<>();
+        List<SymbolMetadata> symbols = new ArrayList<>();
+
+        for (BodyDeclaration<?> member : members) {
+            if (member instanceof FieldDeclaration field) {
+                for (VariableDeclarator variable : field.getVariables()) {
+                    String fieldName = variable.getNameAsString();
+                    String fieldType = variable.getTypeAsString();
+                    fieldNames.add(fieldName);
+                    fieldTypes.add(fieldType);
+                    variable.getInitializer().ifPresent(initializer ->
+                            literalValues.addAll(stringLiteralValues(initializer)));
+                    String symbolType = field.isStatic() && field.isFinal() ? "CLASS_CONSTANT" : "FIELD";
+                    symbols.add(new SymbolMetadata(fieldName, fieldType, symbolType,
+                            normalizedValues(fieldName, fieldType, className, qualifiedClassName)));
+                }
+                for (AnnotationExpr annotation : field.getAnnotations()) {
+                    literalValues.addAll(extractStringLiterals(annotation.toString()));
+                }
+            } else if (member instanceof InitializerDeclaration initializer) {
+                initializerKinds.add(initializer.isStatic() ? "static" : "instance");
+                literalValues.addAll(extractStringLiterals(initializer.toString()));
+                symbols.add(new SymbolMetadata(
+                        initializer.isStatic() ? "static initializer" : "instance initializer",
+                        "",
+                        initializer.isStatic() ? "STATIC_INITIALIZER" : "INSTANCE_INITIALIZER",
+                        normalizedValues(className, "initializer", initializer.isStatic() ? "static initializer" : "instance initializer")));
+            }
+        }
+
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("packageName", empty(packageName));
+        metadata.put("className", className);
+        metadata.put("qualifiedClassName", qualifiedClassName);
+        metadata.put("javaType", javaType);
+        metadata.put("fields", fieldNames);
+        metadata.put("fieldTypes", fieldTypes.stream().distinct().toList());
+        metadata.put("initializerKinds", initializerKinds);
+        metadata.put("literalValues", new ArrayList<>(literalValues));
+        metadata.put("startLine", startLine);
+        metadata.put("endLine", endLine);
+        mergeSymbolMetadata(metadata, symbols);
+        if (!literalValues.isEmpty()) {
+            metadata.put("literalValues", new ArrayList<>(literalValues));
+        }
+
+        return Optional.of(simpleChunk("JAVA_CLASS_MEMBER", qualifiedClassName + "#classMembers",
+                content, startLine, endLine, metadata));
     }
 
     private CodeChunk buildMethodChunk(String content, String packageName, String className, String qualifiedClassName,
@@ -677,6 +751,25 @@ public class CodeChunkParserImpl implements CodeChunkParser {
             return expression.asStringLiteralExpr().asString();
         }
         return expression.toString();
+    }
+
+    private List<String> stringLiteralValues(Expression expression) {
+        return expression.findAll(StringLiteralExpr.class).stream()
+                .map(StringLiteralExpr::asString)
+                .filter(value -> !isBlank(value))
+                .toList();
+    }
+
+    private List<String> extractStringLiterals(String content) {
+        List<String> values = new ArrayList<>();
+        Matcher matcher = Pattern.compile("\"((?:\\\\.|[^\"\\\\])*)\"").matcher(content == null ? "" : content);
+        while (matcher.find()) {
+            String value = matcher.group(1).replace("\\\"", "\"");
+            if (!isBlank(value)) {
+                values.add(value);
+            }
+        }
+        return values;
     }
 
     private String inferSymbolType(String name, String value, String className) {

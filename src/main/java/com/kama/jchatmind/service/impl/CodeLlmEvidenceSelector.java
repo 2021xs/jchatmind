@@ -132,6 +132,7 @@ public class CodeLlmEvidenceSelector {
         sb.append("- Mapper interface queries: prefer MAPPER_METHOD.\n");
         sb.append("- SQL / XML / table / statement queries: prefer MYBATIS_SQL.\n");
         sb.append("- Config / bean queries: prefer JAVA_METHOD or CLASS_SUMMARY with relevant config evidence.\n");
+        sb.append("- Field, constant, static initializer, injected config, or class dependency queries: prefer JAVA_CLASS_MEMBER.\n");
         sb.append("- Select at most ").append(properties.getLlmSelector().getMaxSelected()).append(" chunks.\n");
         sb.append("- Do not invent chunk ids or facts outside the candidate cards.\n\n");
         sb.append("Query:\n").append(query).append("\n\n");

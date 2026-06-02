@@ -77,7 +77,7 @@ class FeishuAgentRunAdapterTest {
         org.assertj.core.api.Assertions.assertThat(requestCaptor.getValue().getContent())
                 .contains("analyze seckill order flow")
                 .contains("repo-hmdp-id");
-        verify(jChatMind).setMaxLoopSteps(8);
+        verify(jChatMind).setMaxLoopSteps(12);
         verify(jChatMind).run();
         assertEquals("22222222-2222-2222-2222-222222222222", result.sessionId());
         assertEquals("user-message-id", result.userMessageId());
@@ -98,7 +98,7 @@ class FeishuAgentRunAdapterTest {
         FeishuAgentRunAdapter.AgentRunResult result =
                 adapter.run(agentId, "oc_test", "p2p", "ou_test", "analyze seckill order flow");
 
-        verify(jChatMind).setMaxLoopSteps(8);
+        verify(jChatMind).setMaxLoopSteps(12);
         verify(jChatMind).run();
         org.assertj.core.api.Assertions.assertThat(result.answer())
                 .contains("Agent 已达到飞书轻量运行步数上限")
