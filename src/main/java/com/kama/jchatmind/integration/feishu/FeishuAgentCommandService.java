@@ -33,8 +33,8 @@ public class FeishuAgentCommandService {
 
     private static final int MAX_QUESTION_LENGTH = 300;
     private static final int MAX_RESULT_LENGTH = 3000;
-    private static final int MAX_CARD_SUMMARY_LENGTH = 800;
     private static final int MAX_FOLLOWUP_MESSAGE_LENGTH = 3500;
+    private static final String ANSWER_SENT_STATUS = "回答已发送到后续消息。";
     private static final DateTimeFormatter CARD_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final FeishuProperties properties;
@@ -132,11 +132,11 @@ public class FeishuAgentCommandService {
                     .question(truncate(question, MAX_QUESTION_LENGTH))
                     .status("已完成")
                     .stage("Agent 执行完成")
-                    .result(cardResult(result.answer()))
+                    .result(ANSWER_SENT_STATUS)
                     .updatedAt(nowText())
                     .build();
             cardMessageClient.updateAgentCard(messageId, finished);
-            sendFullAnswerIfLong(chatId, result.answer());
+            sendAnswerMessages(chatId, result.answer());
         } catch (RuntimeException e) {
             long latencyMs = System.currentTimeMillis() - startedAt;
             log.warn("Feishu agent command failed: taskId={}, questionLength={}, latencyMs={}, error={}",
@@ -172,9 +172,9 @@ public class FeishuAgentCommandService {
         return e.getClass().getSimpleName();
     }
 
-    private void sendFullAnswerIfLong(String chatId, String answer) {
+    private void sendAnswerMessages(String chatId, String answer) {
         String text = answer == null ? "" : answer;
-        if (text.length() <= MAX_RESULT_LENGTH) {
+        if (!StringUtils.hasText(text)) {
             return;
         }
         List<String> parts = splitText(text, MAX_FOLLOWUP_MESSAGE_LENGTH);
@@ -203,35 +203,6 @@ public class FeishuAgentCommandService {
             offset = end;
         }
         return parts;
-    }
-
-    private String cardResult(String value) {
-        String text = value == null ? "" : value;
-        if (text.length() <= MAX_RESULT_LENGTH) {
-            return text;
-        }
-        int partCount = splitText(text, MAX_FOLLOWUP_MESSAGE_LENGTH).size();
-        return "回答较长，已拆分为 " + partCount + " 段完整消息发送。\n\n"
-                + "摘要：\n" + summarizeForCard(text);
-    }
-
-    private String summarizeForCard(String answer) {
-        String text = answer == null ? "" : answer.replace("\r\n", "\n").trim();
-        if (text.length() <= MAX_CARD_SUMMARY_LENGTH) {
-            return text;
-        }
-
-        int end = MAX_CARD_SUMMARY_LENGTH;
-        int paragraphEnd = text.lastIndexOf("\n\n", MAX_CARD_SUMMARY_LENGTH);
-        if (paragraphEnd >= MAX_CARD_SUMMARY_LENGTH / 3) {
-            end = paragraphEnd;
-        } else {
-            int lineEnd = text.lastIndexOf('\n', MAX_CARD_SUMMARY_LENGTH);
-            if (lineEnd >= MAX_CARD_SUMMARY_LENGTH / 2) {
-                end = lineEnd;
-            }
-        }
-        return text.substring(0, Math.max(0, end)).trim() + "\n...";
     }
 
     private String truncateWithMarker(String value, int maxLength) {

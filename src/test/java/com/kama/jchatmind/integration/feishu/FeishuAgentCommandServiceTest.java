@@ -10,7 +10,6 @@ import java.time.ZoneId;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -54,15 +53,20 @@ class FeishuAgentCommandServiceTest {
                         "3b494f89-8d6b-3f2c-a61f-c65609be4bfa",
                         "user-message-id",
                         "final answer"));
+        when(messageClient.sendText(eq("oc_test"), anyString())).thenReturn(true);
 
         service.handleAgent("oc_test", "p2p", "ou_test", "analyze seckill order flow");
 
         verify(cardMessageClient).sendAgentCard(eq("oc_test"), isA(FeishuAgentCardSnapshot.class));
         ArgumentCaptor<FeishuAgentCardSnapshot> updated = ArgumentCaptor.forClass(FeishuAgentCardSnapshot.class);
         verify(cardMessageClient).updateAgentCard(eq("om_card"), updated.capture());
-        assertTrue(updated.getValue().getResult().contains("final answer"));
-        verify(messageClient, never()).sendText(eq("oc_test"), anyString());
+        assertTrue(updated.getValue().getResult().contains("回答已发送"));
         assertTrue(updated.getValue().getStatus().contains("已完成"));
+
+        ArgumentCaptor<String> answer = ArgumentCaptor.forClass(String.class);
+        verify(messageClient).sendText(eq("oc_test"), answer.capture());
+        assertTrue(answer.getValue().startsWith("完整回答 1/1"));
+        assertTrue(answer.getValue().contains("final answer"));
     }
 
     @Test
@@ -82,11 +86,8 @@ class FeishuAgentCommandServiceTest {
 
         ArgumentCaptor<FeishuAgentCardSnapshot> updated = ArgumentCaptor.forClass(FeishuAgentCardSnapshot.class);
         verify(cardMessageClient).updateAgentCard(eq("om_card"), updated.capture());
-        assertTrue(updated.getValue().getResult().contains("回答较长"));
-        assertTrue(updated.getValue().getResult().contains("摘要"));
-        assertTrue(updated.getValue().getResult().contains("3 段"));
-        assertFalse(updated.getValue().getResult().contains("...[truncated]"));
-        assertTrue(updated.getValue().getResult().length() < 1000);
+        assertTrue(updated.getValue().getResult().contains("回答已发送"));
+        assertTrue(updated.getValue().getResult().length() < 50);
 
         ArgumentCaptor<String> textParts = ArgumentCaptor.forClass(String.class);
         verify(messageClient, times(3)).sendText(eq("oc_test"), textParts.capture());
