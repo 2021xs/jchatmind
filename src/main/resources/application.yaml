@@ -68,6 +68,7 @@ jchatmind:
     max-files-per-import: 2000
     embedding-base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
     embedding-model: ${OLLAMA_EMBEDDING_MODEL:bge-m3}
+    embedding-batch-size: ${CODE_RAG_EMBEDDING_BATCH_SIZE:16}
     embedding-warmup:
       enabled: true
       prompt: warmup code rag embedding

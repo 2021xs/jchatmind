@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.mapper.CodeChunkMapper;
 import com.kama.jchatmind.mapper.CodeFileMapper;
 import com.kama.jchatmind.mapper.CodeRepositoryMapper;
+import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.model.dto.ImportQualitySummary;
 import com.kama.jchatmind.model.dto.ParsedCodeFile;
 import com.kama.jchatmind.model.entity.CodeChunk;
@@ -50,6 +51,7 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
     private final EmbeddingService embeddingService;
     private final PlatformTransactionManager transactionManager;
     private final ObjectMapper objectMapper;
+    private final CodeRagProperties codeRagProperties;
 
     @Override
     public ImportCodeRepositoryResponse importRepository(ImportCodeRepositoryRequest request) {
@@ -67,12 +69,9 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
             for (Path filePath : scanResult.getFiles()) {
                 ParsedCodeFile parsed = codeChunkParser.parse(scanResult.getNormalizedRoot(), filePath);
                 summaryBuilder.recordParsedFile(parsed);
-                for (CodeChunk chunk : parsed.getChunks()) {
-                    chunk.setEmbedding(embeddingService.embed(codeChunkEmbeddingTextBuilder.build(parsed, chunk)));
-                    summaryBuilder.recordEmbeddedChunk();
-                }
                 parsedFiles.add(parsed);
             }
+            EmbeddingBatchStats embeddingStats = embedParsedChunks(parsedFiles, summaryBuilder);
             processingFiles = false;
             int fileCount = parsedFiles.size();
             int chunkCount = parsedFiles.stream()
@@ -88,8 +87,9 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
                         .build());
             });
             ImportQualitySummary summary = summaryBuilder.status(STATUS_READY).build();
-            log.info("Code repository import quality summary: repoId={}, repositoryName={}, summary={}",
-                    repository.getId(), repository.getName(), summary);
+            log.info("Code repository import quality summary: repoId={}, repositoryName={}, chunkCount={}, embeddingBatchSize={}, embeddingBatchCount={}, embeddingElapsedMs={}, summary={}",
+                    repository.getId(), repository.getName(), chunkCount, embeddingStats.batchSize(),
+                    embeddingStats.batchCount(), embeddingStats.elapsedMs(), summary);
             return ImportCodeRepositoryResponse.builder()
                     .repoId(repository.getId())
                     .fileCount(fileCount)
@@ -198,6 +198,39 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
         return repository;
     }
 
+    private EmbeddingBatchStats embedParsedChunks(List<ParsedCodeFile> parsedFiles,
+                                                  ImportQualitySummaryBuilder summaryBuilder) {
+        int batchSize = Math.max(1, codeRagProperties.getEmbeddingBatchSize());
+        List<EmbeddingTarget> targets = new ArrayList<>();
+        List<String> texts = new ArrayList<>();
+        for (ParsedCodeFile parsed : parsedFiles) {
+            if (parsed.getChunks() == null) {
+                continue;
+            }
+            for (CodeChunk chunk : parsed.getChunks()) {
+                targets.add(new EmbeddingTarget(chunk));
+                texts.add(codeChunkEmbeddingTextBuilder.build(parsed, chunk));
+            }
+        }
+
+        long started = System.currentTimeMillis();
+        int batchCount = 0;
+        for (int start = 0; start < texts.size(); start += batchSize) {
+            int end = Math.min(start + batchSize, texts.size());
+            List<float[]> embeddings = embeddingService.embedBatch(texts.subList(start, end));
+            if (embeddings.size() != end - start) {
+                throw new IllegalStateException("Embedding batch size mismatch: expected "
+                        + (end - start) + ", actual " + embeddings.size());
+            }
+            for (int i = 0; i < embeddings.size(); i++) {
+                targets.get(start + i).chunk().setEmbedding(embeddings.get(i));
+                summaryBuilder.recordEmbeddedChunk();
+            }
+            batchCount++;
+        }
+        return new EmbeddingBatchStats(batchSize, batchCount, System.currentTimeMillis() - started);
+    }
+
     private Map<String, Object> metadata(CodeChunk chunk) {
         if (chunk == null || !StringUtils.hasLength(chunk.getMetadata())) {
             return Map.of();
@@ -219,6 +252,12 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
             return e.getMessage();
         }
         return "代码库导入失败: " + (StringUtils.hasLength(e.getMessage()) ? e.getMessage() : e.getClass().getSimpleName());
+    }
+
+    private record EmbeddingTarget(CodeChunk chunk) {
+    }
+
+    private record EmbeddingBatchStats(int batchSize, int batchCount, long elapsedMs) {
     }
 
     private class ImportQualitySummaryBuilder {

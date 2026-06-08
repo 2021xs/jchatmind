@@ -12,6 +12,7 @@ import com.kama.jchatmind.model.response.CreateDocumentResponse;
 import com.kama.jchatmind.model.response.GetDocumentsResponse;
 import com.kama.jchatmind.model.vo.DocumentVO;
 import com.kama.jchatmind.mapper.ChunkBgeM3Mapper;
+import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.model.entity.ChunkBgeM3;
 import com.kama.jchatmind.service.DocumentFacadeService;
 import com.kama.jchatmind.service.DocumentStorageService;
@@ -41,6 +42,7 @@ public class DocumentFacadeServiceImpl implements DocumentFacadeService {
     private final MarkdownParserService markdownParserService;
     private final EmbeddingService embeddingService;
     private final ChunkBgeM3Mapper chunkBgeM3Mapper;
+    private final CodeRagProperties codeRagProperties;
 
     @Override
     public GetDocumentsResponse getDocuments() {
@@ -201,6 +203,31 @@ public class DocumentFacadeServiceImpl implements DocumentFacadeService {
         }
     }
 
+    private EmbeddingBatchResult embedKnowledgeTexts(List<String> texts) {
+        int batchSize = Math.max(1, codeRagProperties.getEmbeddingBatchSize());
+        List<float[]> allEmbeddings = new ArrayList<>();
+        long started = System.currentTimeMillis();
+        int batchCount = 0;
+        for (int start = 0; start < texts.size(); start += batchSize) {
+            int end = Math.min(start + batchSize, texts.size());
+            List<float[]> embeddings = embeddingService.embedBatch(texts.subList(start, end));
+            if (embeddings.size() != end - start) {
+                throw new IllegalStateException("Embedding batch size mismatch: expected "
+                        + (end - start) + ", actual " + embeddings.size());
+            }
+            allEmbeddings.addAll(embeddings);
+            batchCount++;
+        }
+        if (allEmbeddings.size() != texts.size()) {
+            throw new IllegalStateException("Embedding total size mismatch: expected "
+                    + texts.size() + ", actual " + allEmbeddings.size());
+        }
+        return new EmbeddingBatchResult(allEmbeddings, batchSize, batchCount, System.currentTimeMillis() - started);
+    }
+
+    private record EmbeddingBatchResult(List<float[]> embeddings, int batchSize, int batchCount, long elapsedMs) {
+    }
+
     /**
      * 处理 Markdown 文档，解析并生成 chunks
      */
@@ -223,9 +250,22 @@ public class DocumentFacadeServiceImpl implements DocumentFacadeService {
 
                 LocalDateTime now = LocalDateTime.now();
                 int chunkCount = 0;
+                List<MarkdownParserService.MarkdownSection> validSections = new ArrayList<>();
+                List<String> embeddingTexts = new ArrayList<>();
+                for (MarkdownParserService.MarkdownSection section : sections) {
+                    String title = section.getTitle();
+                    if (title == null || title.trim().isEmpty()) {
+                        continue;
+                    }
+                    validSections.add(section);
+                    embeddingTexts.add(title);
+                }
+                EmbeddingBatchResult embeddingBatchResult = embedKnowledgeTexts(embeddingTexts);
+                List<float[]> embeddings = embeddingBatchResult.embeddings();
+                int embeddingIndex = 0;
 
                 // 为每个章节生成 chunk
-                for (MarkdownParserService.MarkdownSection section : sections) {
+                for (MarkdownParserService.MarkdownSection section : validSections) {
                     String title = section.getTitle();
                     String content = section.getContent();
 
@@ -234,7 +274,7 @@ public class DocumentFacadeServiceImpl implements DocumentFacadeService {
                     }
 
                     // 对标题进行 embedding
-                    float[] embedding = embeddingService.embed(title);
+                    float[] embedding = embeddings.get(embeddingIndex++);
 
                     // 创建 ChunkBgeM3 实体
                     ChunkBgeM3 chunk = ChunkBgeM3.builder()
@@ -258,6 +298,8 @@ public class DocumentFacadeServiceImpl implements DocumentFacadeService {
                     }
                 }
                 log.info("Markdown 文档处理完成: documentId={}, 共生成 {} 个 chunks", documentId, chunkCount);
+                log.info("Markdown embedding batch completed: documentId={}, chunkCount={}, embeddingBatchSize={}, embeddingBatchCount={}, embeddingElapsedMs={}",
+                        documentId, chunkCount, embeddingBatchResult.batchSize(), embeddingBatchResult.batchCount(), embeddingBatchResult.elapsedMs());
             }
         } catch (Exception e) {
             log.error("处理 Markdown 文档失败: documentId={}", documentId, e);
