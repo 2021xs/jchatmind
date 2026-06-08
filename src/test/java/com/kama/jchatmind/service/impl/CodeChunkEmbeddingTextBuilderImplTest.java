@@ -57,12 +57,22 @@ class CodeChunkEmbeddingTextBuilderImplTest {
                         Map.of(
                                 "mapperClass", "VoucherOrderMapper",
                                 "sqlId", "selectExistingUserVoucherPairs",
-                                "sqlType", "SELECT"
+                                "mapperMethod", "selectExistingUserVoucherPairs",
+                                "sqlType", "SELECT",
+                                "statementType", "SELECT",
+                                "dynamicTags", List.of("where", "if"),
+                                "futureRetrievalHint", "existing user voucher pairs"
                         )));
 
         assertTrue(text.contains("This chunk is a MyBatis SQL statement."));
         assertTrue(text.contains("Mapper: VoucherOrderMapper."));
         assertTrue(text.contains("SQL id: selectExistingUserVoucherPairs."));
+        assertTrue(text.contains("metadata:\n"));
+        assertTrue(text.contains("dynamicTags: where, if"));
+        assertTrue(text.contains("futureRetrievalHint: existing user voucher pairs"));
+        assertTrue(text.contains("sqlId: selectExistingUserVoucherPairs"));
+        assertFalse(text.contains("mapperMethod:"));
+        assertFalse(text.contains("statementType:"));
         assertTrue(text.contains("select * from tb_voucher_order"));
         assertFalse(text.contains("tables:"));
         assertFalse(text.contains("Tables:"));
@@ -92,9 +102,10 @@ class CodeChunkEmbeddingTextBuilderImplTest {
 
         assertTrue(text.contains("This chunk is a Lua script."));
         assertTrue(text.contains("Redis commands: sismember."));
-        assertTrue(text.contains("script_name: seckill"));
-        assertTrue(text.contains("redis_commands: sismember"));
-        assertTrue(text.contains("redis_keys: KEYS[1]"));
+        assertTrue(text.contains("metadata:\n"));
+        assertTrue(text.contains("scriptName: seckill"));
+        assertTrue(text.contains("redisCommands: sismember"));
+        assertTrue(text.contains("redisKeys: KEYS[1]"));
         assertTrue(text.contains("return redis.call('sismember'"));
     }
 
@@ -117,10 +128,10 @@ class CodeChunkEmbeddingTextBuilderImplTest {
 
         assertTrue(text.contains("This chunk contains Java class members."));
         assertTrue(text.contains("Fields: SECKILL_SCRIPT, seckillOrderMode."));
-        assertTrue(text.contains("field_names: SECKILL_SCRIPT, seckillOrderMode"));
-        assertTrue(text.contains("field_types: DefaultRedisScript, String"));
-        assertTrue(text.contains("initializer_blocks: static"));
-        assertTrue(text.contains("literal_values: seckill.lua, hmdp.seckill.order-mode:async"));
+        assertTrue(text.contains("fields: SECKILL_SCRIPT, seckillOrderMode"));
+        assertTrue(text.contains("fieldTypes: DefaultRedisScript, String"));
+        assertTrue(text.contains("initializerKinds: static"));
+        assertTrue(text.contains("literalValues: seckill.lua, hmdp.seckill.order-mode:async"));
         assertTrue(text.contains("ClassPathResource(\"seckill.lua\")"));
     }
 
@@ -139,7 +150,8 @@ class CodeChunkEmbeddingTextBuilderImplTest {
         CodeRagProperties properties = new CodeRagProperties();
         properties.getEmbeddingMetadata().setEnabled(true);
         properties.getContextualPrefix().setEnabled(contextualPrefixEnabled);
-        return new CodeChunkEmbeddingTextBuilderImpl(objectMapper, properties, new CodeChunkContextBuilder());
+        return new CodeChunkEmbeddingTextBuilderImpl(objectMapper, properties, new CodeChunkContextBuilder(),
+                new CodeChunkEmbeddingMetadataSanitizer());
     }
 
     private ParsedCodeFile parsed(String relativePath, String fileType, String className) {

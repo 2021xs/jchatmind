@@ -9,27 +9,18 @@ import com.kama.jchatmind.service.CodeChunkEmbeddingTextBuilder;
 import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Component;
 
-import java.util.Collection;
-import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Component
 @AllArgsConstructor
 public class CodeChunkEmbeddingTextBuilderImpl implements CodeChunkEmbeddingTextBuilder {
     private static final int MAX_EMBED_TEXT_LENGTH = 8000;
-    private static final List<String> METADATA_KEYS = List.of(
-            "sqlId", "id", "tableName", "tables", "className", "methodName",
-            "method", "controller", "namespace", "sqlType", "configKey", "configKeys",
-            "javaType", "methods", "fileType", "packageName", "qualifiedClassName",
-            "signature", "returnType", "parameters", "annotations", "mapperClass",
-            "mapperMethod", "relatedSymbol", "apiPath", "httpMethod", "scriptName",
-            "redisCommands", "redisKeys", "redisArgs", "returnCodes",
-            "fields", "fieldTypes", "initializerKinds", "literalValues"
-    );
 
     private final ObjectMapper objectMapper;
     private final CodeRagProperties properties;
     private final CodeChunkContextBuilder codeChunkContextBuilder;
+    private final CodeChunkEmbeddingMetadataSanitizer metadataSanitizer;
 
     @Override
     public String build(ParsedCodeFile parsed, CodeChunk chunk) {
@@ -37,124 +28,16 @@ public class CodeChunkEmbeddingTextBuilderImpl implements CodeChunkEmbeddingText
             return buildLegacyText(parsed, chunk);
         }
         Map<String, Object> metadata = readMetadata(chunk.getMetadata());
-        String chunkType = nullToEmpty(chunk.getChunkType());
-        String text;
-        if ("CONTROLLER_API".equals(chunkType)) {
-            text = buildControllerApiText(parsed, chunk, metadata);
-        } else if ("SERVICE_METHOD".equals(chunkType) || "JAVA_METHOD".equals(chunkType)) {
-            text = buildMethodText(parsed, chunk, metadata);
-        } else if ("MAPPER_METHOD".equals(chunkType)) {
-            text = buildMapperMethodText(parsed, chunk, metadata);
-        } else if ("MYBATIS_SQL".equals(chunkType)) {
-            text = buildMyBatisSqlText(parsed, chunk, metadata);
-        } else if ("LUA_SCRIPT".equals(chunkType)) {
-            text = buildLuaScriptText(parsed, chunk, metadata);
-        } else if ("JAVA_CLASS_MEMBER".equals(chunkType)) {
-            text = buildJavaClassMemberText(parsed, chunk, metadata);
-        } else {
-            text = buildDefaultText(parsed, chunk, metadata);
-        }
-        return truncate(text);
+        return truncate(buildEmbeddingText(parsed, chunk, metadata));
     }
 
-    private String buildDefaultText(ParsedCodeFile parsed, CodeChunk chunk, Map<String, Object> metadata) {
+    private String buildEmbeddingText(ParsedCodeFile parsed, CodeChunk chunk, Map<String, Object> metadata) {
         StringBuilder sb = new StringBuilder();
         appendContext(sb, parsed, chunk, metadata);
-        append(sb, "file_path", parsed.getRelativePath());
-        append(sb, "file_type", parsed.getFileType());
-        append(sb, "package_name", parsed.getPackageName());
-        append(sb, "class_name", parsed.getClassName());
         append(sb, "chunk_type", chunk.getChunkType());
+        append(sb, "file_path", parsed.getRelativePath());
         append(sb, "symbol_name", chunk.getSymbolName());
-        append(sb, "api_path", chunk.getApiPath());
-        append(sb, "http_method", chunk.getHttpMethod());
-        append(sb, "start_line", chunk.getStartLine());
-        append(sb, "end_line", chunk.getEndLine());
-        appendMetadata(sb, metadata);
-        sb.append("content:\n").append(nullToEmpty(chunk.getContent()));
-        return sb.toString();
-    }
-
-    private String buildControllerApiText(ParsedCodeFile parsed, CodeChunk chunk, Map<String, Object> metadata) {
-        StringBuilder sb = new StringBuilder();
-        appendContext(sb, parsed, chunk, metadata);
-        append(sb, "chunk_type", chunk.getChunkType());
-        append(sb, "file_path", parsed.getRelativePath());
-        append(sb, "package_name", first(metadata.get("packageName"), parsed.getPackageName()));
-        append(sb, "class_name", first(metadata.get("className"), parsed.getClassName()));
-        append(sb, "method_name", metadata.get("methodName"));
-        append(sb, "signature", metadata.get("signature"));
-        append(sb, "http_method", first(metadata.get("httpMethod"), chunk.getHttpMethod()));
-        append(sb, "api_path", first(metadata.get("apiPath"), chunk.getApiPath()));
-        append(sb, "annotations", formatValue(metadata.get("annotations")));
-        sb.append("content:\n").append(nullToEmpty(chunk.getContent()));
-        return sb.toString();
-    }
-
-    private String buildMethodText(ParsedCodeFile parsed, CodeChunk chunk, Map<String, Object> metadata) {
-        StringBuilder sb = new StringBuilder();
-        appendContext(sb, parsed, chunk, metadata);
-        append(sb, "chunk_type", chunk.getChunkType());
-        append(sb, "file_path", parsed.getRelativePath());
-        append(sb, "class_name", first(metadata.get("className"), parsed.getClassName()));
-        append(sb, "method_name", metadata.get("methodName"));
-        append(sb, "signature", metadata.get("signature"));
-        append(sb, "annotations", formatValue(metadata.get("annotations")));
-        sb.append("content:\n").append(nullToEmpty(chunk.getContent()));
-        return sb.toString();
-    }
-
-    private String buildMapperMethodText(ParsedCodeFile parsed, CodeChunk chunk, Map<String, Object> metadata) {
-        StringBuilder sb = new StringBuilder();
-        appendContext(sb, parsed, chunk, metadata);
-        append(sb, "chunk_type", chunk.getChunkType());
-        append(sb, "file_path", parsed.getRelativePath());
-        append(sb, "class_name", first(metadata.get("className"), parsed.getClassName()));
-        append(sb, "method_name", metadata.get("methodName"));
-        append(sb, "signature", metadata.get("signature"));
-        append(sb, "related_sql_id", metadata.get("relatedSqlId"));
-        sb.append("content:\n").append(nullToEmpty(chunk.getContent()));
-        return sb.toString();
-    }
-
-    private String buildMyBatisSqlText(ParsedCodeFile parsed, CodeChunk chunk, Map<String, Object> metadata) {
-        StringBuilder sb = new StringBuilder();
-        appendContext(sb, parsed, chunk, metadata);
-        append(sb, "chunk_type", chunk.getChunkType());
-        append(sb, "file_path", parsed.getRelativePath());
-        append(sb, "namespace", metadata.get("namespace"));
-        append(sb, "mapper_class", metadata.get("mapperClass"));
-        append(sb, "mapper_method", metadata.get("mapperMethod"));
-        append(sb, "sql_id", metadata.get("sqlId"));
-        append(sb, "sql_type", metadata.get("sqlType"));
-        sb.append("content:\n").append(nullToEmpty(chunk.getContent()));
-        return sb.toString();
-    }
-
-    private String buildLuaScriptText(ParsedCodeFile parsed, CodeChunk chunk, Map<String, Object> metadata) {
-        StringBuilder sb = new StringBuilder();
-        appendContext(sb, parsed, chunk, metadata);
-        append(sb, "chunk_type", chunk.getChunkType());
-        append(sb, "file_path", parsed.getRelativePath());
-        append(sb, "script_name", metadata.get("scriptName"));
-        append(sb, "redis_commands", formatValue(metadata.get("redisCommands")));
-        append(sb, "redis_keys", formatValue(metadata.get("redisKeys")));
-        append(sb, "redis_args", formatValue(metadata.get("redisArgs")));
-        append(sb, "return_codes", formatValue(metadata.get("returnCodes")));
-        sb.append("content:\n").append(nullToEmpty(chunk.getContent()));
-        return sb.toString();
-    }
-
-    private String buildJavaClassMemberText(ParsedCodeFile parsed, CodeChunk chunk, Map<String, Object> metadata) {
-        StringBuilder sb = new StringBuilder();
-        appendContext(sb, parsed, chunk, metadata);
-        append(sb, "chunk_type", chunk.getChunkType());
-        append(sb, "file_path", parsed.getRelativePath());
-        append(sb, "class_name", first(metadata.get("className"), parsed.getClassName()));
-        append(sb, "field_names", formatValue(metadata.get("fields")));
-        append(sb, "field_types", formatValue(metadata.get("fieldTypes")));
-        append(sb, "initializer_blocks", formatValue(metadata.get("initializerKinds")));
-        append(sb, "literal_values", formatValue(metadata.get("literalValues")));
+        appendMetadata(sb, parsed, chunk, metadata);
         sb.append("content:\n").append(nullToEmpty(chunk.getContent()));
         return sb.toString();
     }
@@ -181,12 +64,26 @@ public class CodeChunkEmbeddingTextBuilderImpl implements CodeChunkEmbeddingText
         }
     }
 
-    private void appendMetadata(StringBuilder sb, Map<String, Object> metadata) {
-        for (String key : METADATA_KEYS) {
-            Object value = metadata.get(key);
-            if (value != null) {
-                append(sb, "metadata_" + key, formatValue(value));
-            }
+    private void appendMetadata(StringBuilder sb, ParsedCodeFile parsed, CodeChunk chunk, Map<String, Object> metadata) {
+        Map<String, Object> enrichedMetadata = new LinkedHashMap<>(metadata);
+        putIfPresent(enrichedMetadata, "fileType", parsed.getFileType());
+        putIfPresent(enrichedMetadata, "packageName", parsed.getPackageName());
+        putIfPresent(enrichedMetadata, "className", parsed.getClassName());
+        putIfPresent(enrichedMetadata, "apiPath", chunk.getApiPath());
+        putIfPresent(enrichedMetadata, "httpMethod", chunk.getHttpMethod());
+        var entries = metadataSanitizer.sanitize(chunk.getChunkType(), enrichedMetadata);
+        if (entries.isEmpty()) {
+            return;
+        }
+        sb.append("metadata:\n");
+        for (EmbeddingMetadataEntry entry : entries) {
+            append(sb, entry.key(), entry.value());
+        }
+    }
+
+    private void putIfPresent(Map<String, Object> metadata, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            metadata.putIfAbsent(key, value);
         }
     }
 
@@ -206,22 +103,6 @@ public class CodeChunkEmbeddingTextBuilderImpl implements CodeChunkEmbeddingText
         if (!text.isEmpty()) {
             sb.append(key).append(": ").append(text).append('\n');
         }
-    }
-
-    private String formatValue(Object value) {
-        if (value == null) {
-            return "";
-        }
-        if (value instanceof Collection<?>) {
-            Collection<?> collection = (Collection<?>) value;
-            return String.join(", ", collection.stream().map(String::valueOf).toList());
-        }
-        return String.valueOf(value);
-    }
-
-    private Object first(Object first, Object fallback) {
-        String value = first == null ? "" : String.valueOf(first).trim();
-        return value.isEmpty() ? fallback : first;
     }
 
     private String truncate(String text) {
