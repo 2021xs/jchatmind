@@ -4,7 +4,6 @@ import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.model.dto.CodeAnswerEvidenceResult;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
-import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.tool.ToolRegistry;
 import org.springframework.stereotype.Component;
 
@@ -14,16 +13,13 @@ import java.util.stream.Collectors;
 @Component
 public class CodeSearchTools implements Tool {
     private final CodeRagAnswerEvidenceService answerEvidenceService;
-    private final SseService sseService;
     private final ToolRegistry toolRegistry;
     private final CodeRagProperties codeRagProperties;
 
     public CodeSearchTools(CodeRagAnswerEvidenceService answerEvidenceService,
-                           SseService sseService,
                            ToolRegistry toolRegistry,
                            CodeRagProperties codeRagProperties) {
         this.answerEvidenceService = answerEvidenceService;
-        this.sseService = sseService;
         this.toolRegistry = toolRegistry;
         this.codeRagProperties = codeRagProperties;
     }

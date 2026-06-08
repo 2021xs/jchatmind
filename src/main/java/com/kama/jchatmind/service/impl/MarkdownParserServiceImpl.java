@@ -22,7 +22,6 @@ import java.util.List;
 public class MarkdownParserServiceImpl implements MarkdownParserService {
 
     private final Parser parser;
-    private String originalMarkdownContent;
 
     public MarkdownParserServiceImpl() {
         MutableDataSet options = new MutableDataSet();
@@ -33,14 +32,14 @@ public class MarkdownParserServiceImpl implements MarkdownParserService {
     public List<MarkdownSection> parseMarkdown(InputStream inputStream) {
         try {
             // 读取文件内容
-            originalMarkdownContent = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+            String originalMarkdownContent = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
             
             // 解析 Markdown
             Document document = parser.parse(originalMarkdownContent);
             
             // 提取标题和内容
             List<MarkdownSection> sections = new ArrayList<>();
-            extractSections(document, sections);
+            extractSections(document, sections, originalMarkdownContent);
             
             log.info("解析 Markdown 完成，共提取 {} 个章节", sections.size());
             return sections;
@@ -54,7 +53,7 @@ public class MarkdownParserServiceImpl implements MarkdownParserService {
      * 提取标题和内容
      * 只遍历文档的直接子节点，遇到任何标题就停止收集当前标题的内容
      */
-    private void extractSections(Document document, List<MarkdownSection> sections) {
+    private void extractSections(Document document, List<MarkdownSection> sections, String originalMarkdownContent) {
         // 收集文档的所有直接子节点（顶层节点）
         List<Node> topLevelNodes = new ArrayList<>();
         Node child = document.getFirstChild();
@@ -86,7 +85,7 @@ public class MarkdownParserServiceImpl implements MarkdownParserService {
                     }
                     
                     // 提取节点内容
-                    String content = extractNodeContent(nextNode);
+                    String content = extractNodeContent(nextNode, originalMarkdownContent);
                     if (content != null && !content.trim().isEmpty()) {
                         if (contentBuilder.length() > 0) {
                             contentBuilder.append("\n");
@@ -123,14 +122,14 @@ public class MarkdownParserServiceImpl implements MarkdownParserService {
     /**
      * 提取节点内容（保留格式，特别是表格）
      */
-    private String extractNodeContent(Node node) {
+    private String extractNodeContent(Node node, String originalMarkdownContent) {
         if (node == null) {
             return null;
         }
         
         // 对于表格，保留原始 Markdown 格式
         if (node instanceof TableBlock) {
-            return extractTableMarkdown(node);
+            return extractTableMarkdown(node, originalMarkdownContent);
         }
         
         // 对于其他节点，提取文本内容
@@ -140,7 +139,7 @@ public class MarkdownParserServiceImpl implements MarkdownParserService {
     /**
      * 提取表格的原始 Markdown 格式
      */
-    private String extractTableMarkdown(Node tableNode) {
+    private String extractTableMarkdown(Node tableNode, String originalMarkdownContent) {
         if (originalMarkdownContent == null) {
             return extractPlainText(tableNode);
         }
@@ -232,4 +231,3 @@ public class MarkdownParserServiceImpl implements MarkdownParserService {
         }
     }
 }
-

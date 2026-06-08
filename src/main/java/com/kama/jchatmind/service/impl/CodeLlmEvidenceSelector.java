@@ -7,15 +7,14 @@ import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.model.dto.CodeEvidenceCandidateCard;
 import com.kama.jchatmind.model.dto.CodeEvidenceSelectionResult;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
@@ -24,13 +23,16 @@ public class CodeLlmEvidenceSelector {
     private final ChatClientRegistry chatClientRegistry;
     private final CodeRagProperties properties;
     private final ObjectMapper objectMapper;
+    private final ExecutorService executor;
 
     public CodeLlmEvidenceSelector(ChatClientRegistry chatClientRegistry,
                                    CodeRagProperties properties,
-                                   ObjectMapper objectMapper) {
+                                   ObjectMapper objectMapper,
+                                   @Qualifier("codeEvidenceSelectorExecutor") ExecutorService executor) {
         this.chatClientRegistry = chatClientRegistry;
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.executor = executor;
     }
 
     public CodeEvidenceSelectionResult select(String query, List<CodeEvidenceCandidateCard> candidates) {
@@ -62,13 +64,16 @@ public class CodeLlmEvidenceSelector {
         if (chatClient == null) {
             throw new IllegalStateException("ChatClient not found for model: " + properties.getLlmSelector().getModel());
         }
-        ExecutorService executor = Executors.newSingleThreadExecutor();
+        Future<String> future = executor.submit(() -> chatClient.prompt().user(prompt).call().content());
         try {
-            Callable<String> task = () -> chatClient.prompt().user(prompt).call().content();
-            Future<String> future = executor.submit(task);
             return future.get(properties.getLlmSelector().getTimeoutMs(), TimeUnit.MILLISECONDS);
-        } finally {
-            executor.shutdownNow();
+        } catch (InterruptedException e) {
+            future.cancel(true);
+            Thread.currentThread().interrupt();
+            throw e;
+        } catch (Exception e) {
+            future.cancel(true);
+            throw e;
         }
     }
 

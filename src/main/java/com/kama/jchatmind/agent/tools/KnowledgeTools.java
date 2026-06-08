@@ -2,7 +2,6 @@ package com.kama.jchatmind.agent.tools;
 
 import com.kama.jchatmind.model.dto.RagSearchResult;
 import com.kama.jchatmind.service.RagService;
-import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.tool.ToolRegistry;
 import org.springframework.stereotype.Component;
 
@@ -13,12 +12,10 @@ import java.util.stream.Collectors;
 public class KnowledgeTools implements Tool {
 
     private final RagService ragService;
-    private final SseService sseService;
     private final ToolRegistry toolRegistry;
 
-    public KnowledgeTools(RagService ragService, SseService sseService, ToolRegistry toolRegistry) {
+    public KnowledgeTools(RagService ragService, ToolRegistry toolRegistry) {
         this.ragService = ragService;
-        this.sseService = sseService;
         this.toolRegistry = toolRegistry;
     }
 

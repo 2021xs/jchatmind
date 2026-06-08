@@ -123,7 +123,7 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
     @Override
     public void deleteRepository(String repoId) {
         if (!StringUtils.hasLength(repoId)) {
-            throw new BizException("repoId 涓嶈兘涓虹┖");
+            throw new BizException("repoId 不能为空");
         }
         transactionTemplate().executeWithoutResult(status -> {
             codeChunkMapper.deleteByRepoId(repoId);

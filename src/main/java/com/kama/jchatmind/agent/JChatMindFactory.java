@@ -63,8 +63,6 @@ public class JChatMindFactory {
     private final ToolCorrectionProperties toolCorrectionProperties;
     private final ToolFailureClassifier toolFailureClassifier;
 
-    private AgentDTO agentConfig;
-
     public JChatMindFactory(
             ChatClientRegistry chatClientRegistry,
             SseService sseService,
@@ -119,8 +117,7 @@ public class JChatMindFactory {
 
     private AgentDTO toAgentConfig(Agent agent) {
         try {
-            agentConfig = agentConverter.toDTO(agent);
-            return agentConfig;
+            return agentConverter.toDTO(agent);
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Failed to parse agent config", e);
         }
@@ -193,6 +190,7 @@ public class JChatMindFactory {
 
     private JChatMind buildAgentRuntime(
             Agent agent,
+            AgentDTO agentConfig,
             List<Message> memory,
             List<KnowledgeBaseDTO> knowledgeBases,
             List<ToolCallback> toolCallbacks,
@@ -252,6 +250,7 @@ public class JChatMindFactory {
 
         return buildAgentRuntime(
                 agent,
+                agentConfig,
                 memory,
                 knowledgeBases,
                 toolCallbacks,
