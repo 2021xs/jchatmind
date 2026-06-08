@@ -1,6 +1,7 @@
 package com.kama.jchatmind.exception;
 
 import com.kama.jchatmind.model.common.ApiResponse;
+import com.kama.jchatmind.model.response.ImportCodeRepositoryResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -16,6 +17,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BizException.class)
     public ApiResponse<Void> handleBizException(BizException e) {
         return ApiResponse.error(e.getMessage());
+    }
+
+    @ExceptionHandler(CodeRepositoryImportException.class)
+    public ApiResponse<ImportCodeRepositoryResponse> handleCodeRepositoryImportException(CodeRepositoryImportException e) {
+        return ApiResponse.error(e.getMessage(), e.getResponse());
     }
 
     /**

@@ -37,6 +37,10 @@ public class ApiResponse<T> {
         return new ApiResponse<>(ApiCode.ERROR.getCode(), message, null);
     }
 
+    public static <T> ApiResponse<T> error(String message, T data) {
+        return new ApiResponse<>(ApiCode.ERROR.getCode(), message, data);
+    }
+
     @Getter
     @AllArgsConstructor
     public enum ApiCode {

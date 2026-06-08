@@ -1,6 +1,7 @@
 package com.kama.jchatmind.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kama.jchatmind.exception.CodeRepositoryImportException;
 import com.kama.jchatmind.mapper.CodeChunkMapper;
 import com.kama.jchatmind.mapper.CodeFileMapper;
 import com.kama.jchatmind.mapper.CodeRepositoryMapper;
@@ -77,11 +78,17 @@ class CodeRepositoryServiceImplTest {
         request.setName("demo");
         request.setRootPath(tempDir.toString());
 
-        assertThrows(IllegalStateException.class, () -> service.importRepository(request));
+        CodeRepositoryImportException exception = assertThrows(CodeRepositoryImportException.class,
+                () -> service.importRepository(request));
 
         assertEquals(0, chunkMapper.deleteByRepoIdCount);
         assertEquals(0, fileMapper.deleteByRepoIdCount);
         assertEquals(List.of("IMPORTING", "FAILED"), repositoryMapper.updatedStatuses);
+        assertEquals("repo-1", exception.getResponse().getRepoId());
+        assertEquals("FAILED", exception.getResponse().getImportQualitySummary().getStatus());
+        assertEquals(1, exception.getResponse().getImportQualitySummary().getParsedFiles());
+        assertEquals(1, exception.getResponse().getImportQualitySummary().getFailedFiles());
+        assertEquals(0, exception.getResponse().getImportQualitySummary().getEmbeddedChunkCount());
     }
 
     @Test
@@ -239,9 +246,12 @@ class CodeRepositoryServiceImplTest {
         request.setName("demo");
         request.setRootPath(tempDir.toString());
 
-        assertThrows(IllegalStateException.class, () -> service.importRepository(request));
+        CodeRepositoryImportException exception = assertThrows(CodeRepositoryImportException.class,
+                () -> service.importRepository(request));
 
         assertEquals(List.of("IMPORTING", "FAILED"), repositoryMapper.updatedStatuses);
+        assertEquals("FAILED", exception.getResponse().getImportQualitySummary().getStatus());
+        assertEquals(1, exception.getResponse().getImportQualitySummary().getFailedFiles());
     }
 
     private static class FakeCodeRepositoryMapper implements CodeRepositoryMapper {

@@ -1,6 +1,7 @@
 package com.kama.jchatmind.service.impl;
 
 import com.kama.jchatmind.exception.BizException;
+import com.kama.jchatmind.exception.CodeRepositoryImportException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.mapper.CodeChunkMapper;
@@ -105,7 +106,12 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
             ImportQualitySummary summary = summaryBuilder.status(STATUS_FAILED).build();
             log.warn("Code repository import failed with quality summary: repoId={}, repositoryName={}, summary={}",
                     repository.getId(), repository.getName(), summary, e);
-            throw e;
+            throw new CodeRepositoryImportException(importFailureMessage(e), e,
+                    ImportCodeRepositoryResponse.builder()
+                            .repoId(repository.getId())
+                            .message(importFailureMessage(e))
+                            .importQualitySummary(summary)
+                            .build());
         }
     }
 
@@ -206,6 +212,13 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
 
     private boolean isTrue(Object value) {
         return Boolean.TRUE.equals(value) || "true".equalsIgnoreCase(String.valueOf(value));
+    }
+
+    private String importFailureMessage(RuntimeException e) {
+        if (e instanceof BizException && StringUtils.hasLength(e.getMessage())) {
+            return e.getMessage();
+        }
+        return "代码库导入失败: " + (StringUtils.hasLength(e.getMessage()) ? e.getMessage() : e.getClass().getSimpleName());
     }
 
     private class ImportQualitySummaryBuilder {
