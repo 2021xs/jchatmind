@@ -77,7 +77,7 @@ public class DataBaseTools implements Tool {
         try {
             List<String> rows = jdbcTemplate.query(validation.executableSql(), (ResultSet rs) -> formatRows(rs));
             String result = "Query result:\n" + String.join("\n", rows);
-            return truncate(result);
+            return truncateFormattedResult(result);
         } catch (Exception e) {
             log.error("Database query execution failed: {}", e.getMessage(), e);
             throw new IllegalStateException("Database query execution failed: " + e.getMessage(), e);
@@ -116,7 +116,7 @@ public class DataBaseTools implements Tool {
         return resultRows;
     }
 
-    private String truncate(String value) {
+    private String truncateFormattedResult(String value) {
         if (value == null || value.length() <= properties.getMaxResultLength()) {
             return value;
         }

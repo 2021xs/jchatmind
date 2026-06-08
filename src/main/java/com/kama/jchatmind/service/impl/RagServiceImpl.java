@@ -5,6 +5,7 @@ import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.model.dto.RagSearchResult;
 import com.kama.jchatmind.model.entity.ChunkBgeM3;
 import com.kama.jchatmind.service.RagService;
+import com.kama.jchatmind.util.PgVectorUtils;
 import lombok.Data;
 import org.springframework.stereotype.Service;
 import org.springframework.util.Assert;
@@ -61,7 +62,7 @@ public class RagServiceImpl implements RagService {
 
     @Override
     public List<RagSearchResult> similaritySearchWithMetadata(String kbId, String query) {
-        String queryEmbedding = toPgVector(doEmbed(query));
+        String queryEmbedding = PgVectorUtils.toLiteral(doEmbed(query));
         List<ChunkBgeM3> chunks = chunkBgeM3Mapper.similaritySearch(kbId, queryEmbedding, 3);
         return chunks.stream().map(this::toSearchResult).toList();
     }
@@ -96,13 +97,4 @@ public class RagServiceImpl implements RagService {
         return metadata.substring(firstQuote + 1, secondQuote);
     }
 
-    private String toPgVector(float[] v) {
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < v.length; i++) {
-            sb.append(v[i]);
-            if (i < v.length - 1) sb.append(",");
-        }
-        sb.append("]");
-        return sb.toString();
-    }
 }

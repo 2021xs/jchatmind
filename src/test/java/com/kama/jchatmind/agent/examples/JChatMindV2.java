@@ -186,14 +186,6 @@ public class JChatMindV2 extends JChatMindV1 {
                 .conversationHistory()
                 .get(toolExecutionResult.conversationHistory().size() - 1);
         
-        // 打印工具调用结果
-        String result = toolResponseMessage.getResponses()
-                .stream()
-                .map(resp -> "工具 " + resp.name() + " 的返回结果为：" + resp.responseData())
-                .collect(Collectors.joining("\n"));
-        
-//        log.info("工具调用结果：{}", result);
-        
         // 检查是否有终止工具调用
         if (toolResponseMessage.getResponses()
                 .stream()

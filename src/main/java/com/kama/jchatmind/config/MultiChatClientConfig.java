@@ -13,15 +13,7 @@ import io.micrometer.observation.ObservationRegistry;
 
 @Configuration
 public class MultiChatClientConfig {
-    @Bean("deepseek-chat")
-    public ChatClient deepSeekChatClient(
-            @Value("${jchatmind.ai.deepseek.official.api-key}") String apiKey,
-            @Value("${jchatmind.ai.deepseek.official.base-url}") String baseUrl,
-            @Value("${jchatmind.ai.deepseek.official.model}") String model) {
-        return buildDeepSeekClient(apiKey, baseUrl, model);
-    }
-
-    @Bean("deepseek-official-chat")
+    @Bean({"deepseek-official-chat", "deepseek-chat"})
     public ChatClient deepSeekOfficialChatClient(
             @Value("${jchatmind.ai.deepseek.official.api-key}") String apiKey,
             @Value("${jchatmind.ai.deepseek.official.base-url}") String baseUrl,

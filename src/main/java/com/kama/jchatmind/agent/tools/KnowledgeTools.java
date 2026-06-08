@@ -59,27 +59,6 @@ public class KnowledgeTools implements Tool {
                 + "metadata: " + nullToEmpty(result.getMetadata()) + "\n"
                 + "[content]\n"
                 + nullToEmpty(result.getContent());
-        /*
-        return """
-                [来源]
-                chunkId: %s
-                title: %s
-                sourceType: %s
-                sourceId: %s
-                score: %s
-                metadata: %s
-                [内容]
-                %s
-                """.formatted(
-                nullToEmpty(result.getChunkId()),
-                nullToEmpty(result.getTitle()),
-                nullToEmpty(result.getSourceType()),
-                nullToEmpty(result.getSourceId()),
-                result.getScore() == null ? "" : result.getScore(),
-                nullToEmpty(result.getMetadata()),
-                nullToEmpty(result.getContent())
-        );
-        */
     }
 
     private String nullToEmpty(String value) {

@@ -5,6 +5,7 @@ import com.kama.jchatmind.mapper.CodeChunkMapper;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.service.CodeSearchService;
 import com.kama.jchatmind.service.RagService;
+import com.kama.jchatmind.util.PgVectorUtils;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -32,7 +33,7 @@ public class CodeSearchServiceImpl implements CodeSearchService {
         } else {
             log.debug("code query embedding cache hit");
         }
-        List<CodeSearchResult> results = codeChunkMapper.similaritySearch(repoId, toPgVector(embedding), limit);
+        List<CodeSearchResult> results = codeChunkMapper.similaritySearch(repoId, PgVectorUtils.toLiteral(embedding), limit);
         results.forEach(this::markRawVector);
         log.info("code search completed: searchMode=RAW_VECTOR, repoId={}, topK={}, resultCount={}",
                 repoId, limit, results.size());
@@ -49,15 +50,4 @@ public class CodeSearchServiceImpl implements CodeSearchService {
         result.setRerankReasons("");
     }
 
-    private String toPgVector(float[] values) {
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < values.length; i++) {
-            sb.append(values[i]);
-            if (i < values.length - 1) {
-                sb.append(",");
-            }
-        }
-        sb.append("]");
-        return sb.toString();
-    }
 }
