@@ -192,8 +192,15 @@ class CodeChunkParserImplTest {
         CodeChunk missing = findChunkBySqlId(parsed, "missingInclude");
         CodeChunk circular = findChunkBySqlId(parsed, "circularInclude");
         assertTrue(missing.getContent().contains("Missing_Columns"));
-        assertTrue(metadata(missing).get("includeWarnings").toString().contains("unresolved include"));
-        assertTrue(metadata(circular).get("includeWarnings").toString().contains("circular include"));
+        Map<?, ?> missingMetadata = metadata(missing);
+        Map<?, ?> circularMetadata = metadata(circular);
+        assertTrue(missingMetadata.get("includeWarnings").toString().contains("unresolved include"));
+        assertEquals(true, missingMetadata.get("parserWarning"));
+        assertEquals("MYBATIS_XML_INCLUDE", missingMetadata.get("parserWarningType"));
+        assertTrue(missingMetadata.get("parserWarningMessage").toString().contains("unresolved include"));
+        assertTrue(circularMetadata.get("includeWarnings").toString().contains("circular include"));
+        assertEquals(true, circularMetadata.get("parserWarning"));
+        assertEquals("MYBATIS_XML_INCLUDE", circularMetadata.get("parserWarningType"));
         assertEquals(2, parsed.getChunks().stream().filter(chunk -> "MYBATIS_SQL".equals(chunk.getChunkType())).count());
     }
 
@@ -266,8 +273,36 @@ class CodeChunkParserImplTest {
         assertEquals(1, parsed.getChunks().size());
         CodeChunk chunk = parsed.getChunks().get(0);
         assertEquals("MYBATIS_XML", chunk.getChunkType());
-        assertTrue(metadata(chunk).get("parserFallback").toString().contains("true"));
+        Map<?, ?> metadata = metadata(chunk);
+        assertEquals(true, metadata.get("parserFallback"));
+        assertEquals("MYBATIS_XML", metadata.get("parserType"));
+        assertFalse(metadata.get("parserError").toString().isBlank());
+        assertEquals("MYBATIS_XML", metadata.get("fallbackChunkType"));
         assertFalse(chunk.getContent().isBlank());
+    }
+
+    @Test
+    void invalidJavaFallsBackToClassSummaryWithAlignedMetadata() throws Exception {
+        Path file = write("BrokenService.java", """
+                package com.demo;
+                import org.springframework.stereotype.Service;
+                @Service
+                public class BrokenService {
+                    public void broken(
+                }
+                """);
+
+        ParsedCodeFile parsed = parser.parse(tempDir, file);
+
+        assertEquals(1, parsed.getChunks().size());
+        CodeChunk chunk = parsed.getChunks().get(0);
+        assertEquals("CLASS_SUMMARY", chunk.getChunkType());
+        Map<?, ?> metadata = metadata(chunk);
+        assertEquals(true, metadata.get("parserFallback"));
+        assertEquals("JAVA_AST", metadata.get("parserType"));
+        assertFalse(metadata.get("parserError").toString().isBlank());
+        assertFalse(metadata.get("parserError").toString().contains("\tat "));
+        assertEquals("CLASS_SUMMARY", metadata.get("fallbackChunkType"));
     }
 
     @Test

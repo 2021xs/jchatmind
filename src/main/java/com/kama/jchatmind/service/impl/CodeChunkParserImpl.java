@@ -131,10 +131,13 @@ public class CodeChunkParserImpl implements CodeChunkParser {
             if (!chunks.isEmpty()) {
                 return chunks;
             }
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException e) {
+            log.warn("Failed to parse Java source with JavaParser AST, fallback to file-level chunk: error={}",
+                    shortError(e), e);
             // Fall back to the previous lightweight regex parser for incomplete Java files.
+            return parseJavaFallback(content, shortError(e));
         }
-        return parseJavaFallback(content);
+        return parseJavaFallback(content, "no top-level type parsed");
     }
 
     private List<CodeChunk> parseJavaType(String content, String packageName, TypeDeclaration<?> type) {
@@ -310,15 +313,18 @@ public class CodeChunkParserImpl implements CodeChunkParser {
                 .build();
     }
 
-    private List<CodeChunk> parseJavaFallback(String content) {
+    private List<CodeChunk> parseJavaFallback(String content, String parserError) {
         String javaType = resolveJavaType(content);
         String className = extractClassName(content);
-        return List.of(simpleChunk("CLASS_SUMMARY", className, content, 1, lineCount(content), Map.of(
-                "javaType", javaType,
-                "className", className == null ? "" : className,
-                "methods", extractMethodNames(content),
-                "parserFallback", true
-        )));
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("javaType", javaType);
+        metadata.put("className", className == null ? "" : className);
+        metadata.put("methods", extractMethodNames(content));
+        metadata.put("parserFallback", true);
+        metadata.put("parserType", "JAVA_AST");
+        metadata.put("parserError", empty(parserError));
+        metadata.put("fallbackChunkType", "CLASS_SUMMARY");
+        return List.of(simpleChunk("CLASS_SUMMARY", className, content, 1, lineCount(content), metadata));
     }
 
     private List<CodeChunk> parseMyBatisXml(String content, String fileName) {
@@ -328,22 +334,14 @@ public class CodeChunkParserImpl implements CodeChunkParser {
             document = parseXmlDocument(content);
         } catch (Exception e) {
             log.warn("Failed to parse MyBatis mapper XML with secure XML parser: fileName={}, error={}", fileName, e.getMessage());
-            chunks.add(simpleChunk("MYBATIS_XML", fileName, content, 1, lineCount(content), Map.of(
-                    "fileName", fileName,
-                    "parserFallback", true,
-                    "parserError", e.getMessage() == null ? "" : e.getMessage()
-            )));
+            chunks.add(myBatisXmlFallbackChunk(fileName, content, shortError(e)));
             return chunks;
         }
 
         Element mapper = document.getDocumentElement();
         if (mapper == null || !"mapper".equals(mapper.getTagName())) {
             log.warn("MyBatis mapper XML root is not <mapper>: fileName={}", fileName);
-            chunks.add(simpleChunk("MYBATIS_XML", fileName, content, 1, lineCount(content), Map.of(
-                    "fileName", fileName,
-                    "parserFallback", true,
-                    "parserError", "root element is not mapper"
-            )));
+            chunks.add(myBatisXmlFallbackChunk(fileName, content, "root element is not mapper"));
             return chunks;
         }
 
@@ -407,6 +405,11 @@ public class CodeChunkParserImpl implements CodeChunkParser {
         metadata.put("includeRefs", new ArrayList<>(includeRefs));
         metadata.put("includeExpanded", includeWarnings.isEmpty());
         metadata.put("includeWarnings", includeWarnings);
+        if (!includeWarnings.isEmpty()) {
+            metadata.put("parserWarning", true);
+            metadata.put("parserWarningType", "MYBATIS_XML_INCLUDE");
+            metadata.put("parserWarningMessage", includeWarnings.get(0));
+        }
         metadata.put("relatedSymbol", relatedSymbol);
         List<SymbolMetadata> symbols = new ArrayList<>();
         symbols.add(new SymbolMetadata(sqlId, sqlId, "SQL_ID", normalizedValues(sqlId, mapperClass, namespace, fullSqlId)));
@@ -445,6 +448,16 @@ public class CodeChunkParserImpl implements CodeChunkParser {
         builder.setEntityResolver((publicId, systemId) -> new InputSource(new java.io.StringReader("")));
         String sanitized = XML_DOCTYPE_PATTERN.matcher(content).replaceFirst("");
         return builder.parse(new ByteArrayInputStream(sanitized.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private CodeChunk myBatisXmlFallbackChunk(String fileName, String content, String parserError) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("fileName", fileName);
+        metadata.put("parserFallback", true);
+        metadata.put("parserType", "MYBATIS_XML");
+        metadata.put("parserError", empty(parserError));
+        metadata.put("fallbackChunkType", "MYBATIS_XML");
+        return simpleChunk("MYBATIS_XML", fileName, content, 1, lineCount(content), metadata);
     }
 
     private void secureXmlFeature(DocumentBuilderFactory factory, String feature, boolean enabled) {
@@ -1012,6 +1025,17 @@ public class CodeChunkParserImpl implements CodeChunkParser {
 
     private String empty(String value) {
         return value == null ? "" : value;
+    }
+
+    private String shortError(Throwable throwable) {
+        if (throwable == null) {
+            return "";
+        }
+        String type = throwable.getClass().getSimpleName();
+        String message = throwable.getMessage();
+        String value = isBlank(message) ? type : type + ": " + message;
+        value = value.replaceAll("\\s+", " ").trim();
+        return value.length() > 240 ? value.substring(0, 240) : value;
     }
 
     private boolean isBlank(String value) {

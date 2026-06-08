@@ -1,9 +1,12 @@
 package com.kama.jchatmind.service.impl;
 
 import com.kama.jchatmind.exception.BizException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.mapper.CodeChunkMapper;
 import com.kama.jchatmind.mapper.CodeFileMapper;
 import com.kama.jchatmind.mapper.CodeRepositoryMapper;
+import com.kama.jchatmind.model.dto.ImportQualitySummary;
 import com.kama.jchatmind.model.dto.ParsedCodeFile;
 import com.kama.jchatmind.model.entity.CodeChunk;
 import com.kama.jchatmind.model.entity.CodeFile;
@@ -17,6 +20,7 @@ import com.kama.jchatmind.service.CodeFileScanner;
 import com.kama.jchatmind.service.CodeRepositoryService;
 import com.kama.jchatmind.service.EmbeddingService;
 import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -26,9 +30,11 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @AllArgsConstructor
+@Slf4j
 public class CodeRepositoryServiceImpl implements CodeRepositoryService {
     private static final String STATUS_IMPORTING = "IMPORTING";
     private static final String STATUS_READY = "READY";
@@ -42,6 +48,7 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
     private final CodeChunkEmbeddingTextBuilder codeChunkEmbeddingTextBuilder;
     private final EmbeddingService embeddingService;
     private final PlatformTransactionManager transactionManager;
+    private final ObjectMapper objectMapper;
 
     @Override
     public ImportCodeRepositoryResponse importRepository(ImportCodeRepositoryRequest request) {
@@ -53,14 +60,19 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
         String normalizedRoot = scanResult.getNormalizedRoot().toString().replace("\\", "/");
         CodeRepository repository = markImporting(request.getName(), normalizedRoot);
         List<ParsedCodeFile> parsedFiles = new ArrayList<>();
+        ImportQualitySummaryBuilder summaryBuilder = new ImportQualitySummaryBuilder(scanResult.getFiles().size());
+        boolean processingFiles = true;
         try {
             for (Path filePath : scanResult.getFiles()) {
                 ParsedCodeFile parsed = codeChunkParser.parse(scanResult.getNormalizedRoot(), filePath);
+                summaryBuilder.recordParsedFile(parsed);
                 for (CodeChunk chunk : parsed.getChunks()) {
                     chunk.setEmbedding(embeddingService.embed(codeChunkEmbeddingTextBuilder.build(parsed, chunk)));
+                    summaryBuilder.recordEmbeddedChunk();
                 }
                 parsedFiles.add(parsed);
             }
+            processingFiles = false;
             int fileCount = parsedFiles.size();
             int chunkCount = parsedFiles.stream()
                     .mapToInt(parsed -> parsed.getChunks() == null ? 0 : parsed.getChunks().size())
@@ -74,15 +86,25 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
                         .status(STATUS_READY)
                         .build());
             });
+            ImportQualitySummary summary = summaryBuilder.status(STATUS_READY).build();
+            log.info("Code repository import quality summary: repoId={}, repositoryName={}, summary={}",
+                    repository.getId(), repository.getName(), summary);
             return ImportCodeRepositoryResponse.builder()
                     .repoId(repository.getId())
                     .fileCount(fileCount)
                     .chunkCount(chunkCount)
                     .truncated(scanResult.isTruncated())
                     .message(scanResult.getMessage())
+                    .importQualitySummary(summary)
                     .build();
         } catch (RuntimeException e) {
+            if (processingFiles) {
+                summaryBuilder.recordFailedFile();
+            }
             markFailed(repository.getId());
+            ImportQualitySummary summary = summaryBuilder.status(STATUS_FAILED).build();
+            log.warn("Code repository import failed with quality summary: repoId={}, repositoryName={}, summary={}",
+                    repository.getId(), repository.getName(), summary, e);
             throw e;
         }
     }
@@ -168,6 +190,104 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
                 .build();
         codeRepositoryMapper.insert(repository);
         return repository;
+    }
+
+    private Map<String, Object> metadata(CodeChunk chunk) {
+        if (chunk == null || !StringUtils.hasLength(chunk.getMetadata())) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(chunk.getMetadata(), new TypeReference<>() {
+            });
+        } catch (Exception e) {
+            return Map.of();
+        }
+    }
+
+    private boolean isTrue(Object value) {
+        return Boolean.TRUE.equals(value) || "true".equalsIgnoreCase(String.valueOf(value));
+    }
+
+    private class ImportQualitySummaryBuilder {
+        private final int totalFiles;
+        private int parsedFiles;
+        private int fallbackFiles;
+        private int javaFallbackCount;
+        private int xmlFallbackCount;
+        private int includeWarningCount;
+        private int failedFiles;
+        private int chunkCount;
+        private int embeddedChunkCount;
+        private String status = STATUS_IMPORTING;
+
+        private ImportQualitySummaryBuilder(int totalFiles) {
+            this.totalFiles = totalFiles;
+        }
+
+        private void recordParsedFile(ParsedCodeFile parsed) {
+            parsedFiles++;
+            if (parsed == null || parsed.getChunks() == null) {
+                return;
+            }
+            chunkCount += parsed.getChunks().size();
+            boolean fallbackFile = false;
+            boolean javaFallbackFile = false;
+            boolean xmlFallbackFile = false;
+            for (CodeChunk chunk : parsed.getChunks()) {
+                Map<String, Object> metadata = metadata(chunk);
+                if (isTrue(metadata.get("parserFallback"))) {
+                    fallbackFile = true;
+                    if ("JAVA_AST".equals(metadata.get("parserType"))) {
+                        javaFallbackFile = true;
+                    }
+                    if ("MYBATIS_XML".equals(metadata.get("parserType"))) {
+                        xmlFallbackFile = true;
+                    }
+                }
+                if (isTrue(metadata.get("parserWarning"))
+                        && "MYBATIS_XML_INCLUDE".equals(metadata.get("parserWarningType"))) {
+                    includeWarningCount++;
+                }
+            }
+            if (fallbackFile) {
+                fallbackFiles++;
+            }
+            if (javaFallbackFile) {
+                javaFallbackCount++;
+            }
+            if (xmlFallbackFile) {
+                xmlFallbackCount++;
+            }
+        }
+
+        private void recordEmbeddedChunk() {
+            embeddedChunkCount++;
+        }
+
+        private void recordFailedFile() {
+            failedFiles++;
+        }
+
+        private ImportQualitySummaryBuilder status(String status) {
+            this.status = status;
+            return this;
+        }
+
+        private ImportQualitySummary build() {
+            return ImportQualitySummary.builder()
+                    .totalFiles(totalFiles)
+                    .scannedFiles(totalFiles)
+                    .parsedFiles(parsedFiles)
+                    .fallbackFiles(fallbackFiles)
+                    .javaFallbackCount(javaFallbackCount)
+                    .xmlFallbackCount(xmlFallbackCount)
+                    .includeWarningCount(includeWarningCount)
+                    .failedFiles(failedFiles)
+                    .chunkCount(chunkCount)
+                    .embeddedChunkCount(embeddedChunkCount)
+                    .status(status)
+                    .build();
+        }
     }
 
 }
