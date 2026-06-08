@@ -8,13 +8,13 @@ import com.kama.jchatmind.model.dto.CodeEvidenceCandidateCard;
 import com.kama.jchatmind.model.dto.CodeEvidenceSelectionResult;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
@@ -23,12 +23,12 @@ public class CodeLlmEvidenceSelector {
     private final ChatClientRegistry chatClientRegistry;
     private final CodeRagProperties properties;
     private final ObjectMapper objectMapper;
-    private final ExecutorService executor;
+    private final AsyncTaskExecutor executor;
 
     public CodeLlmEvidenceSelector(ChatClientRegistry chatClientRegistry,
                                    CodeRagProperties properties,
                                    ObjectMapper objectMapper,
-                                   @Qualifier("codeEvidenceSelectorExecutor") ExecutorService executor) {
+                                   @Qualifier("codeEvidenceSelectorExecutor") AsyncTaskExecutor executor) {
         this.chatClientRegistry = chatClientRegistry;
         this.properties = properties;
         this.objectMapper = objectMapper;

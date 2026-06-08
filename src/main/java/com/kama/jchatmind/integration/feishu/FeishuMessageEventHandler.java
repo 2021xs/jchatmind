@@ -3,8 +3,8 @@ package com.kama.jchatmind.integration.feishu;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -14,7 +14,6 @@ import java.util.concurrent.Executor;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class FeishuMessageEventHandler {
 
     static final String MESSAGE_RECEIVE_EVENT = "im.message.receive_v1";
@@ -26,6 +25,14 @@ public class FeishuMessageEventHandler {
     private final Executor taskExecutor;
     private final Map<String, Long> processedMessageIds = new ConcurrentHashMap<>();
     private final Map<String, Long> processedMessageFingerprints = new ConcurrentHashMap<>();
+
+    public FeishuMessageEventHandler(ObjectMapper objectMapper,
+                                     FeishuBotService botService,
+                                     @Qualifier("taskExecutor") Executor taskExecutor) {
+        this.objectMapper = objectMapper;
+        this.botService = botService;
+        this.taskExecutor = taskExecutor;
+    }
 
     public void handle(String eventType, JsonNode root) {
         if (!MESSAGE_RECEIVE_EVENT.equals(eventType)) {

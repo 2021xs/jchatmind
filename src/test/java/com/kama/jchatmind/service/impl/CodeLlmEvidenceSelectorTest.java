@@ -6,10 +6,10 @@ import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.model.dto.CodeEvidenceCandidateCard;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.core.task.AsyncTaskExecutor;
 
 import java.util.List;
 import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -30,7 +30,7 @@ class CodeLlmEvidenceSelectorTest {
     void timeoutCancelsSharedExecutorTaskAndFallsBackToCandidateOrder() throws Exception {
         ChatClientRegistry registry = mock(ChatClientRegistry.class);
         ChatClient chatClient = mock(ChatClient.class);
-        ExecutorService executor = mock(ExecutorService.class);
+        AsyncTaskExecutor executor = mock(AsyncTaskExecutor.class);
         Future<String> future = mock(Future.class);
         CodeRagProperties properties = new CodeRagProperties();
         properties.getLlmSelector().setTimeoutMs(10);

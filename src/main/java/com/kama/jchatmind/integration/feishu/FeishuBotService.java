@@ -5,6 +5,7 @@ import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -72,7 +73,7 @@ public class FeishuBotService {
                             FeishuRepoResolver repoResolver,
                             FeishuCardMessageClient cardMessageClient,
                             FeishuAgentCommandService agentCommandService,
-                            Executor taskExecutor) {
+                            @Qualifier("taskExecutor") Executor taskExecutor) {
         this(commandParser, messageClient, codeRagAnswerEvidenceService, repoResolver, cardMessageClient, agentCommandService,
                 taskExecutor, Clock.systemDefaultZone(), AGENT_TEST_UPDATE_DELAY_MILLIS);
     }
