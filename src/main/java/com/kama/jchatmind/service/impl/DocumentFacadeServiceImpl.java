@@ -16,7 +16,7 @@ import com.kama.jchatmind.model.entity.ChunkBgeM3;
 import com.kama.jchatmind.service.DocumentFacadeService;
 import com.kama.jchatmind.service.DocumentStorageService;
 import com.kama.jchatmind.service.MarkdownParserService;
-import com.kama.jchatmind.service.RagService;
+import com.kama.jchatmind.service.EmbeddingService;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -39,7 +39,7 @@ public class DocumentFacadeServiceImpl implements DocumentFacadeService {
     private final DocumentConverter documentConverter;
     private final DocumentStorageService documentStorageService;
     private final MarkdownParserService markdownParserService;
-    private final RagService ragService;
+    private final EmbeddingService embeddingService;
     private final ChunkBgeM3Mapper chunkBgeM3Mapper;
 
     @Override
@@ -234,7 +234,7 @@ public class DocumentFacadeServiceImpl implements DocumentFacadeService {
                     }
 
                     // 对标题进行 embedding
-                    float[] embedding = ragService.embed(title);
+                    float[] embedding = embeddingService.embed(title);
 
                     // 创建 ChunkBgeM3 实体
                     ChunkBgeM3 chunk = ChunkBgeM3.builder()

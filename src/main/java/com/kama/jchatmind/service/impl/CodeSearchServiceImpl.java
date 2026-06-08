@@ -4,7 +4,7 @@ import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.mapper.CodeChunkMapper;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.service.CodeSearchService;
-import com.kama.jchatmind.service.RagService;
+import com.kama.jchatmind.service.EmbeddingService;
 import com.kama.jchatmind.util.PgVectorUtils;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,7 +16,7 @@ import java.util.List;
 @AllArgsConstructor
 @Slf4j
 public class CodeSearchServiceImpl implements CodeSearchService {
-    private final RagService ragService;
+    private final EmbeddingService embeddingService;
     private final CodeChunkMapper codeChunkMapper;
     private final CodeQueryEmbeddingCache embeddingCache;
     private final CodeRagProperties properties;
@@ -28,7 +28,7 @@ public class CodeSearchServiceImpl implements CodeSearchService {
         float[] embedding = embeddingCache.get(query);
         if (embedding == null) {
             log.debug("code query embedding cache miss");
-            embedding = ragService.embed(query);
+            embedding = embeddingService.embed(query);
             embeddingCache.put(query, embedding);
         } else {
             log.debug("code query embedding cache hit");

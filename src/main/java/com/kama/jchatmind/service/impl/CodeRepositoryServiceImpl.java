@@ -15,7 +15,7 @@ import com.kama.jchatmind.service.CodeChunkEmbeddingTextBuilder;
 import com.kama.jchatmind.service.CodeChunkParser;
 import com.kama.jchatmind.service.CodeFileScanner;
 import com.kama.jchatmind.service.CodeRepositoryService;
-import com.kama.jchatmind.service.RagService;
+import com.kama.jchatmind.service.EmbeddingService;
 import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -40,7 +40,7 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
     private final CodeFileScanner codeFileScanner;
     private final CodeChunkParser codeChunkParser;
     private final CodeChunkEmbeddingTextBuilder codeChunkEmbeddingTextBuilder;
-    private final RagService ragService;
+    private final EmbeddingService embeddingService;
     private final PlatformTransactionManager transactionManager;
 
     @Override
@@ -57,7 +57,7 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
             for (Path filePath : scanResult.getFiles()) {
                 ParsedCodeFile parsed = codeChunkParser.parse(scanResult.getNormalizedRoot(), filePath);
                 for (CodeChunk chunk : parsed.getChunks()) {
-                    chunk.setEmbedding(ragService.embed(codeChunkEmbeddingTextBuilder.build(parsed, chunk)));
+                    chunk.setEmbedding(embeddingService.embed(codeChunkEmbeddingTextBuilder.build(parsed, chunk)));
                 }
                 parsedFiles.add(parsed);
             }

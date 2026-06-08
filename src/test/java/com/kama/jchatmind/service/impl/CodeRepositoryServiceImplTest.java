@@ -5,7 +5,6 @@ import com.kama.jchatmind.mapper.CodeFileMapper;
 import com.kama.jchatmind.mapper.CodeRepositoryMapper;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.model.dto.ParsedCodeFile;
-import com.kama.jchatmind.model.dto.RagSearchResult;
 import com.kama.jchatmind.model.entity.CodeChunk;
 import com.kama.jchatmind.model.entity.CodeFile;
 import com.kama.jchatmind.model.entity.CodeRepository;
@@ -13,7 +12,7 @@ import com.kama.jchatmind.model.request.ImportCodeRepositoryRequest;
 import com.kama.jchatmind.service.CodeChunkEmbeddingTextBuilder;
 import com.kama.jchatmind.service.CodeChunkParser;
 import com.kama.jchatmind.service.CodeFileScanner;
-import com.kama.jchatmind.service.RagService;
+import com.kama.jchatmind.service.EmbeddingService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -55,21 +54,8 @@ class CodeRepositoryServiceImplTest {
                         .build()))
                 .build();
         CodeChunkEmbeddingTextBuilder textBuilder = (parsed, chunk) -> chunk.getContent();
-        RagService failingRagService = new RagService() {
-            @Override
-            public float[] embed(String text) {
-                throw new IllegalStateException("embedding down");
-            }
-
-            @Override
-            public List<String> similaritySearch(String kbId, String title) {
-                return List.of();
-            }
-
-            @Override
-            public List<RagSearchResult> similaritySearchWithMetadata(String kbId, String query) {
-                return List.of();
-            }
+        EmbeddingService failingEmbeddingService = text -> {
+            throw new IllegalStateException("embedding down");
         };
 
         CodeRepositoryServiceImpl service = new CodeRepositoryServiceImpl(
@@ -79,7 +65,7 @@ class CodeRepositoryServiceImplTest {
                 scanner,
                 parser,
                 textBuilder,
-                failingRagService,
+                failingEmbeddingService,
                 new NoopTransactionManager()
         );
 
@@ -111,7 +97,7 @@ class CodeRepositoryServiceImplTest {
                 rootPath -> new CodeFileScanner.ScanResult(rootPath, List.of(), false, "ok"),
                 (rootPath, filePath) -> ParsedCodeFile.builder().chunks(List.of()).build(),
                 (parsed, chunk) -> "",
-                new SuccessfulRagService(),
+                new SuccessfulEmbeddingService(),
                 new NoopTransactionManager()
         );
 
@@ -225,20 +211,10 @@ class CodeRepositoryServiceImplTest {
         }
     }
 
-    private static class SuccessfulRagService implements RagService {
+    private static class SuccessfulEmbeddingService implements EmbeddingService {
         @Override
         public float[] embed(String text) {
             return new float[]{1.0f};
-        }
-
-        @Override
-        public List<String> similaritySearch(String kbId, String title) {
-            return List.of();
-        }
-
-        @Override
-        public List<RagSearchResult> similaritySearchWithMetadata(String kbId, String query) {
-            return List.of();
         }
     }
 }

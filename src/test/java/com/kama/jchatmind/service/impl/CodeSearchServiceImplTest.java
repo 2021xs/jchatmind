@@ -3,7 +3,7 @@ package com.kama.jchatmind.service.impl;
 import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.mapper.CodeChunkMapper;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
-import com.kama.jchatmind.service.RagService;
+import com.kama.jchatmind.service.EmbeddingService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -21,7 +21,7 @@ import static org.mockito.ArgumentMatchers.any;
 @ExtendWith(MockitoExtension.class)
 class CodeSearchServiceImplTest {
     @Mock
-    private RagService ragService;
+    private EmbeddingService embeddingService;
     @Mock
     private CodeChunkMapper codeChunkMapper;
     @Mock
@@ -30,13 +30,13 @@ class CodeSearchServiceImplTest {
     @Test
     void searchEmbedsQueryAndCallsPgvectorMapper() {
         CodeRagProperties properties = new CodeRagProperties();
-        CodeSearchServiceImpl service = new CodeSearchServiceImpl(ragService, codeChunkMapper, embeddingCache, properties);
+        CodeSearchServiceImpl service = new CodeSearchServiceImpl(embeddingService, codeChunkMapper, embeddingCache, properties);
         CodeSearchResult hit = CodeSearchResult.builder()
                 .chunkId("chunk-1")
                 .score(0.8)
                 .build();
         when(embeddingCache.get("query")).thenReturn(null);
-        when(ragService.embed("query")).thenReturn(new float[]{0.1f, 0.2f});
+        when(embeddingService.embed("query")).thenReturn(new float[]{0.1f, 0.2f});
         when(codeChunkMapper.similaritySearch("repo", "[0.1,0.2]", 5)).thenReturn(List.of(hit));
 
         List<CodeSearchResult> results = service.search("repo", "query", 5);
@@ -51,7 +51,7 @@ class CodeSearchServiceImplTest {
     void searchClampsTopKToAnswerEvidenceRawTopK() {
         CodeRagProperties properties = new CodeRagProperties();
         properties.getAnswerEvidence().setRawTopK(50);
-        CodeSearchServiceImpl service = new CodeSearchServiceImpl(ragService, codeChunkMapper, embeddingCache, properties);
+        CodeSearchServiceImpl service = new CodeSearchServiceImpl(embeddingService, codeChunkMapper, embeddingCache, properties);
         when(embeddingCache.get("query")).thenReturn(new float[]{0.1f});
         when(codeChunkMapper.similaritySearch("repo", "[0.1]", 50)).thenReturn(List.of());
 

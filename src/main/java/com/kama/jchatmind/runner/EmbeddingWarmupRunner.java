@@ -1,7 +1,7 @@
 package com.kama.jchatmind.runner;
 
 import com.kama.jchatmind.config.CodeRagProperties;
-import com.kama.jchatmind.service.RagService;
+import com.kama.jchatmind.service.EmbeddingService;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
 @AllArgsConstructor
 public class EmbeddingWarmupRunner {
     private final CodeRagProperties properties;
-    private final RagService ragService;
+    private final EmbeddingService embeddingService;
 
     @EventListener(ApplicationReadyEvent.class)
     public void warmup() {
@@ -25,7 +25,7 @@ public class EmbeddingWarmupRunner {
         long started = System.nanoTime();
         log.info("embedding warm-up started, model={}, prompt={}", model, prompt);
         try {
-            float[] embedding = ragService.embed(prompt);
+            float[] embedding = embeddingService.embed(prompt);
             long latencyMs = elapsedMs(started);
             log.info("embedding warm-up success, model={}, prompt={}, dimensions={}, latency_ms={}",
                     model, prompt, embedding == null ? 0 : embedding.length, latencyMs);

@@ -1,55 +1,29 @@
 package com.kama.jchatmind.service.impl;
 
 import com.kama.jchatmind.mapper.ChunkBgeM3Mapper;
-import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.model.dto.RagSearchResult;
 import com.kama.jchatmind.model.entity.ChunkBgeM3;
+import com.kama.jchatmind.service.EmbeddingService;
 import com.kama.jchatmind.service.RagService;
 import com.kama.jchatmind.util.PgVectorUtils;
-import lombok.Data;
 import org.springframework.stereotype.Service;
-import org.springframework.util.Assert;
-import org.springframework.web.reactive.function.client.WebClient;
 
 import java.util.List;
-import java.util.Map;
 
 @Service
 public class RagServiceImpl implements RagService {
 
-    // 封装本地的模型调用
-    private final WebClient webClient;
     private final ChunkBgeM3Mapper chunkBgeM3Mapper;
-    private final CodeRagProperties codeRagProperties;
+    private final EmbeddingService embeddingService;
 
-    public RagServiceImpl(WebClient.Builder builder, ChunkBgeM3Mapper chunkBgeM3Mapper, CodeRagProperties codeRagProperties) {
-        this.webClient = builder.baseUrl(codeRagProperties.getEmbeddingBaseUrl()).build();
+    public RagServiceImpl(ChunkBgeM3Mapper chunkBgeM3Mapper, EmbeddingService embeddingService) {
         this.chunkBgeM3Mapper = chunkBgeM3Mapper;
-        this.codeRagProperties = codeRagProperties;
-    }
-
-    @Data
-    private static class EmbeddingResponse {
-        private float[] embedding;
-    }
-
-    private float[] doEmbed(String text) {
-        EmbeddingResponse resp = webClient.post()
-                .uri("/api/embeddings")
-                .bodyValue(Map.of(
-                        "model", codeRagProperties.getEmbeddingModel(),
-                        "prompt", text
-                ))
-                .retrieve()
-                .bodyToMono(EmbeddingResponse.class)
-                .block();
-        Assert.notNull(resp, "Embedding response cannot be null");
-        return resp.getEmbedding();
+        this.embeddingService = embeddingService;
     }
 
     @Override
     public float[] embed(String text) {
-        return doEmbed(text);
+        return embeddingService.embed(text);
     }
 
     @Override
@@ -62,7 +36,7 @@ public class RagServiceImpl implements RagService {
 
     @Override
     public List<RagSearchResult> similaritySearchWithMetadata(String kbId, String query) {
-        String queryEmbedding = PgVectorUtils.toLiteral(doEmbed(query));
+        String queryEmbedding = PgVectorUtils.toLiteral(embeddingService.embed(query));
         List<ChunkBgeM3> chunks = chunkBgeM3Mapper.similaritySearch(kbId, queryEmbedding, 3);
         return chunks.stream().map(this::toSearchResult).toList();
     }
