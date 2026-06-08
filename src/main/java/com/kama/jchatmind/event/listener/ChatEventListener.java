@@ -4,10 +4,13 @@ import com.kama.jchatmind.agent.JChatMind;
 import com.kama.jchatmind.agent.JChatMindFactory;
 import com.kama.jchatmind.event.ChatEvent;
 import lombok.AllArgsConstructor;
-import org.springframework.context.event.EventListener;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
+@Slf4j
 @Component
 @AllArgsConstructor
 public class ChatEventListener {
@@ -15,10 +18,15 @@ public class ChatEventListener {
     private final JChatMindFactory jChatMindFactory;
 
     @Async("taskExecutor")
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void handle(ChatEvent event) {
-        // 创建一个 Agent 实例处理聊天事件
-        JChatMind jChatMind = jChatMindFactory.create(event.getAgentId(), event.getSessionId(), event.getUserMessageId());
-        jChatMind.run();
+        try {
+            JChatMind jChatMind = jChatMindFactory.create(
+                    event.getAgentId(), event.getSessionId(), event.getUserMessageId());
+            jChatMind.run();
+        } catch (Exception e) {
+            log.error("Async chat event handling failed: sessionId={}, agentId={}, userMessageId={}",
+                    event.getSessionId(), event.getAgentId(), event.getUserMessageId(), e);
+        }
     }
 }

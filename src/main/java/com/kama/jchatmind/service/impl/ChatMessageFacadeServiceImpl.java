@@ -16,6 +16,7 @@ import com.kama.jchatmind.service.ChatMessageFacadeService;
 import lombok.AllArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -78,6 +79,7 @@ public class ChatMessageFacadeServiceImpl implements ChatMessageFacadeService {
     }
 
     @Override
+    @Transactional
     public CreateChatMessageResponse createChatMessage(CreateChatMessageRequest request) {
         ChatMessage chatMessage = doCreateChatMessage(request);
         // 发布聊天通知事件

@@ -35,7 +35,8 @@ public class AgentRunFailureHandler {
                 "errorMessage", truncate(errorMessage)
         ));
         eventPublisher.complete(sessionId, taskId);
-        log.error("Error running agent", error);
+        log.error("Error running agent: taskId={}, sessionId={}, stepId={}",
+                taskId, sessionId, currentStep == null ? null : currentStep.getId(), error);
     }
 
     private Map<String, Object> payload(Object... keyValues) {
