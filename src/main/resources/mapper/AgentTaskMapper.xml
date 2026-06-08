@@ -94,6 +94,33 @@
         WHERE id = CAST(#{id} AS uuid)
     </update>
 
+    <select id="selectActiveRunningBySessionId" resultMap="BaseResultMap">
+        SELECT id,
+               session_id,
+               agent_id,
+               user_message_id,
+               status,
+               goal,
+               finish_reason,
+               model_name,
+               max_steps,
+               actual_steps,
+               tool_call_count,
+               latency_ms,
+               trace_id,
+               heartbeat_at,
+               started_at,
+               finished_at,
+               updated_at,
+               error_message
+        FROM agent_task
+        WHERE session_id = CAST(#{sessionId} AS uuid)
+          AND status = 'RUNNING'
+          AND COALESCE(heartbeat_at, updated_at, started_at) &gt;= #{staleBefore}
+        ORDER BY started_at DESC
+        LIMIT 1
+    </select>
+
     <select id="selectStaleRunningBefore" resultMap="BaseResultMap">
         SELECT id,
                session_id,

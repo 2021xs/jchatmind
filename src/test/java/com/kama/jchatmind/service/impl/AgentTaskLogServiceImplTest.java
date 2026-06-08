@@ -1,6 +1,8 @@
 package com.kama.jchatmind.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kama.jchatmind.config.AgentObservabilityProperties;
+import com.kama.jchatmind.exception.AgentAlreadyRunningException;
 import com.kama.jchatmind.mapper.AgentStepMapper;
 import com.kama.jchatmind.mapper.AgentTaskMapper;
 import com.kama.jchatmind.mapper.ToolCallLogMapper;
@@ -23,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -64,6 +67,43 @@ class AgentTaskLogServiceImplTest {
         assertEquals(2, update.getActualSteps());
         assertEquals(0, update.getToolCallCount());
         assertTrue(update.getLatencyMs() >= 0);
+    }
+
+    @Test
+    void startTaskRejectsActiveRunningTaskForSameSession() {
+        AgentTaskLogServiceImpl service = service();
+        when(agentTaskMapper.selectActiveRunningBySessionId(any(), any())).thenReturn(AgentTask.builder()
+                .id("running-task")
+                .status(AgentTaskLogService.STATUS_RUNNING)
+                .build());
+
+        AgentAlreadyRunningException error = assertThrows(AgentAlreadyRunningException.class,
+                () -> service.startTask("session-1", "agent-1", "message-1", "goal"));
+
+        assertEquals("running-task", error.getRunningTaskId());
+        assertEquals(AgentAlreadyRunningException.USER_MESSAGE, error.getMessage());
+        verify(agentTaskMapper, never()).insert(any());
+    }
+
+    @Test
+    void startTaskAllowsSessionWhenNoActiveRunningTaskExists() {
+        AgentTaskLogServiceImpl service = service();
+        when(agentTaskMapper.selectActiveRunningBySessionId(any(), any())).thenReturn(null);
+
+        AgentTask task = service.startTask("session-1", "agent-1", "message-1", "goal");
+
+        assertEquals(AgentTaskLogService.STATUS_RUNNING, task.getStatus());
+        verify(agentTaskMapper).insert(any());
+    }
+
+    @Test
+    void nonRunningTasksDoNotBlockBecauseMapperQueryOnlyReturnsRunningTasks() {
+        AgentTaskLogServiceImpl service = service();
+        when(agentTaskMapper.selectActiveRunningBySessionId(any(), any())).thenReturn(null);
+
+        service.startTask("session-1", "agent-1", "message-1", "goal");
+
+        verify(agentTaskMapper).insert(any());
     }
 
     @Test
@@ -233,6 +273,7 @@ class AgentTaskLogServiceImplTest {
     }
 
     private AgentTaskLogServiceImpl service() {
-        return new AgentTaskLogServiceImpl(agentTaskMapper, agentStepMapper, toolCallLogMapper, new ObjectMapper());
+        return new AgentTaskLogServiceImpl(agentTaskMapper, agentStepMapper, toolCallLogMapper,
+                new ObjectMapper(), new AgentObservabilityProperties());
     }
 }

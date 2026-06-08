@@ -1,6 +1,8 @@
 package com.kama.jchatmind.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kama.jchatmind.config.AgentObservabilityProperties;
+import com.kama.jchatmind.exception.AgentAlreadyRunningException;
 import com.kama.jchatmind.mapper.AgentStepMapper;
 import com.kama.jchatmind.mapper.AgentTaskMapper;
 import com.kama.jchatmind.mapper.ToolCallLogMapper;
@@ -9,6 +11,7 @@ import com.kama.jchatmind.model.entity.AgentTask;
 import com.kama.jchatmind.model.entity.ToolCallLog;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +22,7 @@ import java.util.List;
 
 @Service
 @AllArgsConstructor
+@Slf4j
 public class AgentTaskLogServiceImpl implements AgentTaskLogService {
     private static final int MAX_TEXT_LENGTH = 4000;
 
@@ -26,6 +30,7 @@ public class AgentTaskLogServiceImpl implements AgentTaskLogService {
     private final AgentStepMapper agentStepMapper;
     private final ToolCallLogMapper toolCallLogMapper;
     private final ObjectMapper objectMapper;
+    private final AgentObservabilityProperties observabilityProperties;
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -38,6 +43,14 @@ public class AgentTaskLogServiceImpl implements AgentTaskLogService {
     public AgentTask startTask(String sessionId, String agentId, String userMessageId, String goal,
                                String modelName, Integer maxSteps, String traceId) {
         LocalDateTime now = LocalDateTime.now();
+        LocalDateTime staleBefore = now.minusMinutes(
+                Math.max(1, observabilityProperties.getStaleRunningThresholdMinutes()));
+        AgentTask runningTask = agentTaskMapper.selectActiveRunningBySessionId(sessionId, staleBefore);
+        if (runningTask != null) {
+            log.warn("Rejected duplicate Agent start: sessionId={}, agentId={}, userMessageId={}, runningTaskId={}",
+                    sessionId, agentId, userMessageId, runningTask.getId());
+            throw new AgentAlreadyRunningException(runningTask.getId());
+        }
         AgentTask task = AgentTask.builder()
                 .sessionId(sessionId)
                 .agentId(agentId)

@@ -2,6 +2,7 @@ package com.kama.jchatmind.mapper;
 
 import com.kama.jchatmind.model.entity.AgentTask;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -13,6 +14,9 @@ public interface AgentTaskMapper {
     AgentTask selectById(String id);
 
     int updateById(AgentTask agentTask);
+
+    AgentTask selectActiveRunningBySessionId(@Param("sessionId") String sessionId,
+                                             @Param("staleBefore") LocalDateTime staleBefore);
 
     List<AgentTask> selectStaleRunningBefore(LocalDateTime staleBefore);
 }

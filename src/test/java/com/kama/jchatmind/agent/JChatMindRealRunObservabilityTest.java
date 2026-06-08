@@ -1,6 +1,7 @@
 package com.kama.jchatmind.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kama.jchatmind.config.AgentObservabilityProperties;
 import com.kama.jchatmind.config.ToolCorrectionProperties;
 import com.kama.jchatmind.converter.ChatMessageConverter;
 import com.kama.jchatmind.mapper.AgentStepMapper;
@@ -51,7 +52,8 @@ class JChatMindRealRunObservabilityTest {
                 agentTaskMapper,
                 agentStepMapper,
                 toolCallLogMapper,
-                new ObjectMapper()
+                new ObjectMapper(),
+                new AgentObservabilityProperties()
         );
         assignTaskIds(agentTaskMapper);
         assignStepIds(agentStepMapper);
