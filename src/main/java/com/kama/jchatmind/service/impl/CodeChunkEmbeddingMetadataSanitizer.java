@@ -18,10 +18,11 @@ public class CodeChunkEmbeddingMetadataSanitizer {
     private static final int MAX_COLLECTION_ITEMS = 20;
     private static final int MAX_VALUE_LENGTH = 600;
     private static final int MAX_COLLECTION_ITEM_LENGTH = 160;
-    private static final int MAX_TOTAL_METADATA_LENGTH = 3000;
 
     private static final Set<String> EXCLUDED_KEYS = Set.of(
-            "startLine", "endLine", "includeExpanded", "includeWarnings"
+            "startLine", "endLine", "includeExpanded", "includeWarnings",
+            "fileName", "fileType", "packageName", "className", "qualifiedClassName",
+            "apiPath", "httpMethod"
     );
     private static final List<String> SENSITIVE_KEY_PARTS = List.of(
             "password", "secret", "token", "credential", "authorization", "privatekey", "accesskey"
@@ -35,7 +36,7 @@ public class CodeChunkEmbeddingMetadataSanitizer {
         Map<String, Object> metadata = new LinkedHashMap<>(source);
         applyChunkTypeAliases(chunkType, metadata);
 
-        List<EmbeddingMetadataEntry> candidates = metadata.entrySet().stream()
+        return metadata.entrySet().stream()
                 .filter(entry -> shouldKeep(entry.getKey()))
                 .map(entry -> new EmbeddingMetadataEntry(entry.getKey(), formatValue(entry.getValue())))
                 .filter(entry -> !entry.value().isBlank())
@@ -43,18 +44,6 @@ public class CodeChunkEmbeddingMetadataSanitizer {
                         .thenComparing(EmbeddingMetadataEntry::key))
                 .limit(MAX_ENTRIES)
                 .toList();
-
-        List<EmbeddingMetadataEntry> result = new ArrayList<>();
-        int totalLength = 0;
-        for (EmbeddingMetadataEntry entry : candidates) {
-            int entryLength = entry.key().length() + entry.value().length() + 2;
-            if (totalLength + entryLength > MAX_TOTAL_METADATA_LENGTH) {
-                continue;
-            }
-            result.add(entry);
-            totalLength += entryLength;
-        }
-        return result;
     }
 
     private void applyChunkTypeAliases(String chunkType, Map<String, Object> metadata) {

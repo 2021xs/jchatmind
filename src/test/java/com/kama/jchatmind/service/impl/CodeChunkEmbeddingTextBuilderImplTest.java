@@ -16,8 +16,8 @@ class CodeChunkEmbeddingTextBuilderImplTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
-    void controllerApiContextContainsApiMetadata() throws Exception {
-        CodeChunkEmbeddingTextBuilderImpl builder = builder(true);
+    void controllerApiUsesIdentityMetadataAndContentSections() throws Exception {
+        CodeChunkEmbeddingTextBuilderImpl builder = builder();
         String text = builder.build(parsed("src/main/java/demo/VoucherOrderController.java", "JAVA", "VoucherOrderController"),
                 chunk("CONTROLLER_API", "demo.VoucherOrderController#querySeckillResult", """
                         public Result querySeckillResult(Long orderId) {
@@ -30,27 +30,28 @@ class CodeChunkEmbeddingTextBuilderImplTest {
                         "apiPath", "/voucher-order/seckill/result/{orderId}"
                 )));
 
-        assertTrue(text.contains("context:\nThis chunk is a Spring Controller API method."));
-        assertTrue(text.contains("It represents an HTTP entry point."));
-        assertTrue(text.contains("API: GET /voucher-order/seckill/result/{orderId}."));
-        assertTrue(text.indexOf("context:") < text.indexOf("content:"));
+        assertTrue(text.startsWith("identity:\n"));
+        assertTrue(text.contains("class_name: VoucherOrderController"));
+        assertTrue(text.contains("api_path: /voucher-order/seckill/result/{orderId}"));
+        assertTrue(text.contains("metadata:\nmethodName: querySeckillResult"));
+        assertFalse(text.contains("context:"));
     }
 
     @Test
-    void serviceMethodContextContainsBusinessLogicHint() throws Exception {
-        CodeChunkEmbeddingTextBuilderImpl builder = builder(true);
+    void serviceMethodKeepsIdentitySeparateFromMetadata() throws Exception {
+        CodeChunkEmbeddingTextBuilderImpl builder = builder();
         String text = builder.build(parsed("src/main/java/demo/VoucherOrderServiceImpl.java", "JAVA", "VoucherOrderServiceImpl"),
                 chunk("SERVICE_METHOD", "demo.VoucherOrderServiceImpl#createVoucherOrder", "void createVoucherOrder() {}",
                         Map.of("className", "VoucherOrderServiceImpl", "methodName", "createVoucherOrder")));
 
-        assertTrue(text.contains("This chunk is a service-layer method."));
-        assertTrue(text.contains("Method: createVoucherOrder."));
-        assertTrue(text.contains("business logic"));
+        assertTrue(text.contains("class_name: VoucherOrderServiceImpl"));
+        assertTrue(text.contains("methodName: createVoucherOrder"));
+        assertFalse(text.contains("className: VoucherOrderServiceImpl"));
     }
 
     @Test
     void myBatisSqlContextContainsMapperSqlAndStatementContentWithoutTablesMetadata() throws Exception {
-        CodeChunkEmbeddingTextBuilderImpl builder = builder(true);
+        CodeChunkEmbeddingTextBuilderImpl builder = builder();
         String text = builder.build(parsed("src/main/resources/mapper/VoucherOrderMapper.xml", "MYBATIS_XML", ""),
                 chunk("MYBATIS_SQL", "VoucherOrderMapper#selectExistingUserVoucherPairs",
                         "<select id=\"selectExistingUserVoucherPairs\">select * from tb_voucher_order</select>",
@@ -64,9 +65,6 @@ class CodeChunkEmbeddingTextBuilderImplTest {
                                 "futureRetrievalHint", "existing user voucher pairs"
                         )));
 
-        assertTrue(text.contains("This chunk is a MyBatis SQL statement."));
-        assertTrue(text.contains("Mapper: VoucherOrderMapper."));
-        assertTrue(text.contains("SQL id: selectExistingUserVoucherPairs."));
         assertTrue(text.contains("metadata:\n"));
         assertTrue(text.contains("dynamicTags: where, if"));
         assertTrue(text.contains("futureRetrievalHint: existing user voucher pairs"));
@@ -80,17 +78,18 @@ class CodeChunkEmbeddingTextBuilderImplTest {
 
     @Test
     void configContextContainsConfigurationHints() throws Exception {
-        CodeChunkEmbeddingTextBuilderImpl builder = builder(true);
+        CodeChunkEmbeddingTextBuilderImpl builder = builder();
         String text = builder.build(parsed("src/main/resources/application.yaml", "CONFIG", ""),
                 chunk("CONFIG", "application.yaml", "spring:\n  datasource:\n    url: jdbc:postgresql://localhost/db", Map.of()));
 
-        assertTrue(text.contains("This chunk is an application configuration file."));
-        assertTrue(text.contains("configuration, yaml, properties, settings"));
+        assertTrue(text.contains("identity:\n"));
+        assertTrue(text.contains("file_type: CONFIG"));
+        assertTrue(text.contains("content:\nspring:"));
     }
 
     @Test
     void luaScriptContextContainsRedisMetadata() throws Exception {
-        CodeChunkEmbeddingTextBuilderImpl builder = builder(true);
+        CodeChunkEmbeddingTextBuilderImpl builder = builder();
         String text = builder.build(parsed("src/main/resources/lua/seckill.lua", "LUA_SCRIPT", ""),
                 chunk("LUA_SCRIPT", "seckill.lua", "return redis.call('sismember', KEYS[1], ARGV[1])", Map.of(
                         "scriptName", "seckill",
@@ -100,8 +99,6 @@ class CodeChunkEmbeddingTextBuilderImplTest {
                         "returnCodes", List.of("0", "1")
                 )));
 
-        assertTrue(text.contains("This chunk is a Lua script."));
-        assertTrue(text.contains("Redis commands: sismember."));
         assertTrue(text.contains("metadata:\n"));
         assertTrue(text.contains("scriptName: seckill"));
         assertTrue(text.contains("redisCommands: sismember"));
@@ -111,7 +108,7 @@ class CodeChunkEmbeddingTextBuilderImplTest {
 
     @Test
     void javaClassMemberContextContainsFieldAndInitializerMetadata() throws Exception {
-        CodeChunkEmbeddingTextBuilderImpl builder = builder(true);
+        CodeChunkEmbeddingTextBuilderImpl builder = builder();
         String text = builder.build(parsed("src/main/java/demo/VoucherOrderServiceImpl.java", "JAVA", "VoucherOrderServiceImpl"),
                 chunk("JAVA_CLASS_MEMBER", "demo.VoucherOrderServiceImpl#classMembers", """
                         private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
@@ -126,8 +123,6 @@ class CodeChunkEmbeddingTextBuilderImplTest {
                         "literalValues", List.of("seckill.lua", "hmdp.seckill.order-mode:async")
                 )));
 
-        assertTrue(text.contains("This chunk contains Java class members."));
-        assertTrue(text.contains("Fields: SECKILL_SCRIPT, seckillOrderMode."));
         assertTrue(text.contains("fields: SECKILL_SCRIPT, seckillOrderMode"));
         assertTrue(text.contains("fieldTypes: DefaultRedisScript, String"));
         assertTrue(text.contains("initializerKinds: static"));
@@ -136,8 +131,8 @@ class CodeChunkEmbeddingTextBuilderImplTest {
     }
 
     @Test
-    void disabledContextualPrefixDoesNotEmitContext() throws Exception {
-        CodeChunkEmbeddingTextBuilderImpl builder = builder(false);
+    void doesNotEmitContextPrefix() throws Exception {
+        CodeChunkEmbeddingTextBuilderImpl builder = builder();
         String text = builder.build(parsed("src/main/java/demo/UserService.java", "JAVA", "UserService"),
                 chunk("SERVICE_METHOD", "demo.UserService#login", "void login() {}", Map.of("methodName", "login")));
 
@@ -146,12 +141,11 @@ class CodeChunkEmbeddingTextBuilderImplTest {
         assertTrue(text.contains("content:\nvoid login() {}"));
     }
 
-    private CodeChunkEmbeddingTextBuilderImpl builder(boolean contextualPrefixEnabled) {
+    private CodeChunkEmbeddingTextBuilderImpl builder() {
         CodeRagProperties properties = new CodeRagProperties();
         properties.getEmbeddingMetadata().setEnabled(true);
-        properties.getContextualPrefix().setEnabled(contextualPrefixEnabled);
-        return new CodeChunkEmbeddingTextBuilderImpl(objectMapper, properties, new CodeChunkContextBuilder(),
-                new CodeChunkEmbeddingMetadataSanitizer());
+        return new CodeChunkEmbeddingTextBuilderImpl(objectMapper, properties,
+                new CodeChunkEmbeddingMetadataSanitizer(), new CodeChunkEmbeddingTextFormatter());
     }
 
     private ParsedCodeFile parsed(String relativePath, String fileType, String className) {

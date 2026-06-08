@@ -16,16 +16,17 @@ class CodeChunkEmbeddingMetadataSanitizerTest {
     @Test
     void removesEmptySensitiveAndLowValueFields() {
         Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("className", "OrderService");
         metadata.put("emptyText", " ");
         metadata.put("emptyList", List.of());
         metadata.put("startLine", 10);
         metadata.put("includeExpanded", true);
         metadata.put("apiToken", "do-not-embed");
+        metadata.put("className", "DuplicateIdentity");
+        metadata.put("apiPath", "/duplicate");
 
         List<EmbeddingMetadataEntry> entries = sanitizer.sanitize("SERVICE_METHOD", metadata);
 
-        assertEquals(List.of(new EmbeddingMetadataEntry("className", "OrderService")), entries);
+        assertTrue(entries.isEmpty());
     }
 
     @Test
@@ -65,25 +66,5 @@ class CodeChunkEmbeddingMetadataSanitizerTest {
                 new EmbeddingMetadataEntry("aKey", "first"),
                 new EmbeddingMetadataEntry("zKey", "last")
         ), entries);
-    }
-
-    @Test
-    void metadataBudgetKeepsRetrievalFieldsAndBoundsOutput() {
-        Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("zLargeField1", "a".repeat(600));
-        metadata.put("zLargeField2", "b".repeat(600));
-        metadata.put("zLargeField3", "c".repeat(600));
-        metadata.put("zLargeField4", "d".repeat(600));
-        metadata.put("zLargeField5", "e".repeat(600));
-        metadata.put("zLargeField6", "f".repeat(600));
-        metadata.put("normalizedSymbols", List.of("important retrieval symbol"));
-
-        List<EmbeddingMetadataEntry> entries = sanitizer.sanitize("SERVICE_METHOD", metadata);
-        int renderedLength = entries.stream()
-                .mapToInt(entry -> entry.key().length() + entry.value().length() + 2)
-                .sum();
-
-        assertTrue(entries.contains(new EmbeddingMetadataEntry("normalizedSymbols", "important retrieval symbol")));
-        assertTrue(renderedLength <= 3000);
     }
 }

@@ -77,9 +77,6 @@ jchatmind:
       ttl-minutes: 30
     embedding-metadata:
       enabled: true
-    contextual-prefix:
-      # Embedding-time structured context prefix. Requires repository re-import to affect vectors.
-      enabled: true
     llm-selector:
       # Tests may disable this to verify fallback; normal Agent flow keeps selector on.
       enabled: true

@@ -183,7 +183,7 @@ GET /health
 Run focused baseline tests before changing core behavior:
 
 ```powershell
-.\mvnw.cmd "-Dtest=CodeChunkParserImplTest,CodeChunkEmbeddingTextBuilderImplTest,CodeChunkContextBuilderTest" test
+.\mvnw.cmd "-Dtest=CodeChunkParserImplTest,CodeChunkEmbeddingMetadataSanitizerTest,CodeChunkEmbeddingTextFormatterTest,CodeChunkEmbeddingTextBuilderImplTest" test
 .\mvnw.cmd "-Dtest=SqlSafetyValidatorTest,ToolSafetyPolicyTest" test
 .\mvnw.cmd "-Dtest=CodeRagAnswerEvidenceServiceImplTest,CodeRepositoryServiceImplTest,CodeSearchServiceImplTest" test
 .\mvnw.cmd "-Dtest=InMemoryToolRegistryTest,AgentTaskLogServiceImplTest,JChatMindRealRunObservabilityTest,ConversationContextCompressorTest" test

@@ -19,7 +19,6 @@ public class CodeRagProperties {
     private EmbeddingWarmup embeddingWarmup = new EmbeddingWarmup();
     private EmbeddingCache embeddingCache = new EmbeddingCache();
     private EmbeddingMetadata embeddingMetadata = new EmbeddingMetadata();
-    private ContextualPrefix contextualPrefix = new ContextualPrefix();
     private LlmSelector llmSelector = new LlmSelector();
     private AnswerEvidence answerEvidence = new AnswerEvidence();
 
@@ -39,11 +38,6 @@ public class CodeRagProperties {
     @Data
     public static class EmbeddingMetadata {
         private boolean enabled = false;
-    }
-
-    @Data
-    public static class ContextualPrefix {
-        private boolean enabled = true;
     }
 
     @Data
