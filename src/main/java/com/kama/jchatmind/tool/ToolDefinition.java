@@ -1,5 +1,6 @@
 package com.kama.jchatmind.tool;
 
+import com.kama.jchatmind.agent.tools.ToolType;
 import lombok.Builder;
 import lombok.Data;
 import lombok.Singular;
@@ -12,6 +13,8 @@ import java.util.Set;
 @Builder
 public class ToolDefinition {
     private String toolName;
+    private String description;
+    private ToolType type;
     private boolean enabled;
     private int maxResultLength;
     private boolean allowInAgent;

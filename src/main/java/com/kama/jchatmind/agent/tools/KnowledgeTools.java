@@ -20,16 +20,6 @@ public class KnowledgeTools implements Tool {
     }
 
     @Override
-    public String getName() {
-        return "knowledgeQuery";
-    }
-
-    @Override
-    public String getDescription() {
-        return "用于从知识库执行语义检索（RAG）。输入知识库 ID 和查询文本，返回与查询最相关的内容片段。";
-    }
-
-    @Override
     public ToolType getType() {
         return ToolType.FIXED;
     }

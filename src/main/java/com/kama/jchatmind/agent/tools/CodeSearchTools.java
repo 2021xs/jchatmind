@@ -25,16 +25,6 @@ public class CodeSearchTools implements Tool {
     }
 
     @Override
-    public String getName() {
-        return "searchProjectCode";
-    }
-
-    @Override
-    public String getDescription() {
-        return "Search imported Java backend project code chunks. Returns related code snippets and possible related paths, not an exact static call graph.";
-    }
-
-    @Override
     public ToolType getType() {
         return ToolType.OPTIONAL;
     }

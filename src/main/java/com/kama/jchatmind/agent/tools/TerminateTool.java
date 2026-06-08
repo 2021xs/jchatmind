@@ -6,16 +6,6 @@ import org.springframework.stereotype.Component;
 public class TerminateTool implements Tool {
 
     @Override
-    public String getName() {
-        return "terminate";
-    }
-
-    @Override
-    public String getDescription() {
-        return "结束当前 Agent 任务；仅在任务已经完成时调用。";
-    }
-
-    @Override
     public ToolType getType() {
         return ToolType.FIXED;
     }

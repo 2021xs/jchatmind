@@ -1,6 +1,12 @@
 package com.kama.jchatmind.tool;
 
 import com.kama.jchatmind.agent.tools.DataBaseTools;
+import com.kama.jchatmind.agent.tools.CodeSearchTools;
+import com.kama.jchatmind.agent.tools.KnowledgeTools;
+import com.kama.jchatmind.agent.tools.TerminateTool;
+import com.kama.jchatmind.config.CodeRagProperties;
+import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
+import com.kama.jchatmind.service.RagService;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.ResultSetExtractor;
@@ -22,6 +28,12 @@ class ToolSafetyPolicyTest {
     @Test
     void registryShouldRejectUnknownDisabledAndUnauthorizedTools() {
         InMemoryToolRegistry registry = new InMemoryToolRegistry();
+        registry.initialize(List.of(
+                new KnowledgeTools(mock(RagService.class), registry),
+                new CodeSearchTools(mock(CodeRagAnswerEvidenceService.class), registry, new CodeRagProperties()),
+                new DataBaseTools(mock(JdbcTemplate.class)),
+                new TerminateTool()
+        ));
 
         assertFalse(registry.canExposeToAgent("notExistingTool"));
         assertFalse(registry.isAllowedForRuntime("databaseQuery", List.of("searchProjectCode")));

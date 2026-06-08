@@ -37,19 +37,6 @@ public class DataBaseTools implements Tool {
     }
 
     @Override
-    public String getName() {
-        return "databaseQuery";
-    }
-
-    @Override
-    public String getDescription() {
-        return "Read-only PostgreSQL database query tool. Allows one safe SELECT statement only. "
-                + "Use PostgreSQL syntax; do not use MySQL-only statements such as SHOW TABLES, DATABASE(), "
-                + "COLUMN_TYPE, or COLUMN_COMMENT. Use this tool only when the user explicitly asks about "
-                + "database schema, fields, records, or SQL query results, or when code evidence cannot explain persistence behavior.";
-    }
-
-    @Override
     public ToolType getType() {
         return ToolType.OPTIONAL;
     }

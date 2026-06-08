@@ -29,6 +29,7 @@ class ToolMetadataConsistencyTest {
                 new DataBaseTools(mock(JdbcTemplate.class)),
                 new TerminateTool()
         );
+        registry.initialize(tools);
 
         for (Tool tool : tools) {
             Method toolMethod = annotatedToolMethod(tool);
@@ -36,6 +37,7 @@ class ToolMetadataConsistencyTest {
                     toolMethod.getAnnotation(org.springframework.ai.tool.annotation.Tool.class);
 
             assertEquals(tool.getName(), annotation.name(), tool.getClass().getSimpleName());
+            assertEquals(tool.getDescription(), annotation.description(), tool.getClass().getSimpleName());
             assertTrue(registry.find(tool.getName()).isPresent(), tool.getName());
             assertTrue(registry.canExposeToAgent(tool.getName()), tool.getName());
         }
