@@ -69,6 +69,7 @@ jchatmind:
     embedding-base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
     embedding-model: ${OLLAMA_EMBEDDING_MODEL:bge-m3}
     embedding-batch-size: ${CODE_RAG_EMBEDDING_BATCH_SIZE:16}
+    include-sql-files: ${CODE_RAG_INCLUDE_SQL_FILES:false}
     embedding-warmup:
       enabled: true
       prompt: warmup code rag embedding

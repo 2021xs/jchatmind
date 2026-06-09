@@ -17,6 +17,7 @@ public class CodeRagProperties {
     private String embeddingBaseUrl = "http://localhost:11434";
     private String embeddingModel = "bge-m3";
     private int embeddingBatchSize = 16;
+    private boolean includeSqlFiles = false;
     private EmbeddingWarmup embeddingWarmup = new EmbeddingWarmup();
     private EmbeddingCache embeddingCache = new EmbeddingCache();
     private EmbeddingMetadata embeddingMetadata = new EmbeddingMetadata();

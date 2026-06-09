@@ -173,10 +173,66 @@ class CodeRepositoryServiceImplTest {
         assertEquals(1, summary.getXmlFallbackCount());
         assertEquals(0, summary.getIncludeWarningCount());
         assertEquals(0, summary.getFailedFiles());
+        assertEquals(0, summary.getSkippedFiles());
+        assertEquals(0, summary.getSkippedSqlFiles());
         assertEquals(2, summary.getChunkCount());
         assertEquals(2, summary.getEmbeddedChunkCount());
         assertEquals("READY", summary.getStatus());
         assertEquals(List.of("IMPORTING", "READY"), repositoryMapper.updatedStatuses);
+    }
+
+    @Test
+    void importRepositoryReportsSkippedStandaloneSqlFilesWithoutEmbeddingThem() throws Exception {
+        Path javaFile = tempDir.resolve("DemoService.java");
+        Files.writeString(javaFile, "class DemoService {}");
+        RecordingEmbeddingService embeddingService = new RecordingEmbeddingService();
+        CodeFileScanner scanner = rootPath -> new CodeFileScanner.ScanResult(
+                rootPath,
+                List.of(javaFile),
+                false,
+                "ok",
+                1,
+                List.of("src/main/resources/db/hmdp.sql"));
+
+        CodeRepositoryServiceImpl service = new CodeRepositoryServiceImpl(
+                new FakeCodeRepositoryMapper(),
+                new FakeCodeFileMapper(),
+                new FakeCodeChunkMapper(),
+                scanner,
+                (rootPath, filePath) -> ParsedCodeFile.builder()
+                        .relativePath("DemoService.java")
+                        .fileType("JAVA")
+                        .className("DemoService")
+                        .chunks(List.of(CodeChunk.builder()
+                                .chunkType("CLASS_SUMMARY")
+                                .symbolName("DemoService")
+                                .content("class DemoService {}")
+                                .build()))
+                        .build(),
+                (parsed, chunk) -> chunk.getContent(),
+                embeddingService,
+                new NoopTransactionManager(),
+                new ObjectMapper(),
+                codeRagProperties(16)
+        );
+
+        ImportCodeRepositoryRequest request = new ImportCodeRepositoryRequest();
+        request.setName("demo");
+        request.setRootPath(tempDir.toString());
+
+        ImportCodeRepositoryResponse response = service.importRepository(request);
+
+        ImportQualitySummary summary = response.getImportQualitySummary();
+        assertEquals(1, summary.getTotalFiles());
+        assertEquals(1, summary.getScannedFiles());
+        assertEquals(1, summary.getParsedFiles());
+        assertEquals(1, summary.getSkippedFiles());
+        assertEquals(1, summary.getSkippedSqlFiles());
+        assertEquals(1, summary.getChunkCount());
+        assertEquals(1, summary.getEmbeddedChunkCount());
+        assertEquals(0, summary.getFailedFiles());
+        assertEquals("READY", summary.getStatus());
+        assertEquals(List.of(1), embeddingService.batchSizes);
     }
 
     @Test

@@ -18,6 +18,8 @@ public class ImportQualitySummary {
      */
     private Integer includeWarningCount;
     private Integer failedFiles;
+    private Integer skippedFiles;
+    private Integer skippedSqlFiles;
     private Integer chunkCount;
     private Integer embeddedChunkCount;
     private String status;

@@ -150,6 +150,22 @@ class CodeChunkParserImplTest {
     }
 
     @Test
+    void parserStillSupportsStandaloneSqlFileWhenScannerIncludesIt() throws Exception {
+        Path file = write("schema.sql", """
+                create table tb_user(id bigint);
+                insert into tb_user(id) values (1);
+                """);
+
+        ParsedCodeFile parsed = parser.parse(tempDir, file);
+
+        assertEquals("SQL_FILE", parsed.getFileType());
+        assertEquals(1, parsed.getChunks().size());
+        CodeChunk chunk = parsed.getChunks().get(0);
+        assertEquals("SQL_FILE", chunk.getChunkType());
+        assertEquals("schema.sql", chunk.getSymbolName());
+    }
+
+    @Test
     void expandsNestedIncludesAndRecordsIncludeRefs() throws Exception {
         Path file = write("OrderMapper.xml", """
                 <mapper namespace="com.demo.OrderMapper">

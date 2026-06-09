@@ -28,6 +28,8 @@ public class CodeFileScannerImpl implements CodeFileScanner {
         validateRoot(normalizedRoot);
 
         List<Path> result = new ArrayList<>();
+        int skippedSqlFileCount = 0;
+        List<String> skippedSqlFilePaths = new ArrayList<>();
         boolean truncated = false;
         try (Stream<Path> paths = Files.walk(normalizedRoot)) {
             java.util.Iterator<Path> iterator = paths.iterator();
@@ -47,6 +49,13 @@ public class CodeFileScannerImpl implements CodeFileScanner {
                 if (isUnderIgnoredDirectory(normalizedRoot, normalized)) {
                     continue;
                 }
+                if (!properties.isIncludeSqlFiles() && isStandaloneSqlFile(normalized)) {
+                    skippedSqlFileCount++;
+                    if (skippedSqlFilePaths.size() < 5) {
+                        skippedSqlFilePaths.add(normalizedRoot.relativize(normalized).toString().replace('\\', '/'));
+                    }
+                    continue;
+                }
                 if (!isSupportedFile(normalized)) {
                     continue;
                 }
@@ -62,7 +71,7 @@ public class CodeFileScannerImpl implements CodeFileScanner {
         String message = truncated
                 ? "达到 max-files-per-import 限制，已停止扫描，结果可能不完整"
                 : "代码库扫描完成";
-        return new ScanResult(normalizedRoot, result, truncated, message);
+        return new ScanResult(normalizedRoot, result, truncated, message, skippedSqlFileCount, skippedSqlFilePaths);
     }
 
     private void validateRoot(Path normalizedRoot) {
@@ -103,5 +112,9 @@ public class CodeFileScannerImpl implements CodeFileScanner {
                 || lower.equals("application.yml")
                 || lower.equals("application.yaml")
                 || lower.equals("application.properties");
+    }
+
+    private boolean isStandaloneSqlFile(Path file) {
+        return file.getFileName().toString().toLowerCase().endsWith(".sql");
     }
 }

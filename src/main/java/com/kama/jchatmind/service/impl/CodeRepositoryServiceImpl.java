@@ -66,7 +66,8 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
         CodeFileScanner.ScanResult scanResult = codeFileScanner.scan(Path.of(request.getRootPath()));
         String normalizedRoot = scanResult.getNormalizedRoot().toString().replace("\\", "/");
         CodeRepository repository = markImporting(request.getName(), normalizedRoot);
-        ImportQualitySummaryBuilder summaryBuilder = new ImportQualitySummaryBuilder(scanResult.getFiles().size());
+        ImportQualitySummaryBuilder summaryBuilder = new ImportQualitySummaryBuilder(
+                scanResult.getFiles().size(), scanResult.getSkippedSqlFileCount());
         ImportRuntimeStats runtimeStats = new ImportRuntimeStats(Math.max(1, codeRagProperties.getEmbeddingBatchSize()));
         long importStarted = System.currentTimeMillis();
         List<EmbeddingTarget> embeddingBuffer = new ArrayList<>();
@@ -89,10 +90,10 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
                         .build()));
             ImportQualitySummary summary = summaryBuilder.status(STATUS_READY).build();
             long totalElapsedMs = System.currentTimeMillis() - importStarted;
-            log.info("Code repository import quality summary: repoId={}, repositoryName={}, summary={}, embeddingBatchSize={}, embeddingBatchCount={}, embeddingElapsedMs={}, dbWriteElapsedMs={}, totalElapsedMs={}",
-                    repository.getId(), repository.getName(), summary, runtimeStats.batchSize(),
-                    runtimeStats.batchCount(), runtimeStats.embeddingElapsedMs(), runtimeStats.dbWriteElapsedMs(),
-                    totalElapsedMs);
+            log.info("Code repository import quality summary: repoId={}, repositoryName={}, summary={}, skippedSqlFilePaths={}, embeddingBatchSize={}, embeddingBatchCount={}, embeddingElapsedMs={}, dbWriteElapsedMs={}, totalElapsedMs={}",
+                    repository.getId(), repository.getName(), summary, scanResult.getSkippedSqlFilePaths(),
+                    runtimeStats.batchSize(), runtimeStats.batchCount(), runtimeStats.embeddingElapsedMs(),
+                    runtimeStats.dbWriteElapsedMs(), totalElapsedMs);
             return ImportCodeRepositoryResponse.builder()
                     .repoId(repository.getId())
                     .fileCount(summary.getParsedFiles())
@@ -109,10 +110,10 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
             ImportQualitySummary summary = summaryBuilder.status(STATUS_FAILED).build();
             cleanupImportedIndex(repository.getId());
             long totalElapsedMs = System.currentTimeMillis() - importStarted;
-            log.warn("Code repository import failed with quality summary: repoId={}, repositoryName={}, summary={}, embeddingBatchSize={}, embeddingBatchCount={}, embeddingElapsedMs={}, dbWriteElapsedMs={}, totalElapsedMs={}",
-                    repository.getId(), repository.getName(), summary, runtimeStats.batchSize(),
-                    runtimeStats.batchCount(), runtimeStats.embeddingElapsedMs(), runtimeStats.dbWriteElapsedMs(),
-                    totalElapsedMs, e);
+            log.warn("Code repository import failed with quality summary: repoId={}, repositoryName={}, summary={}, skippedSqlFilePaths={}, embeddingBatchSize={}, embeddingBatchCount={}, embeddingElapsedMs={}, dbWriteElapsedMs={}, totalElapsedMs={}",
+                    repository.getId(), repository.getName(), summary, scanResult.getSkippedSqlFilePaths(),
+                    runtimeStats.batchSize(), runtimeStats.batchCount(), runtimeStats.embeddingElapsedMs(),
+                    runtimeStats.dbWriteElapsedMs(), totalElapsedMs, e);
             throw new CodeRepositoryImportException(importFailureMessage(e), e,
                     ImportCodeRepositoryResponse.builder()
                             .repoId(repository.getId())
@@ -488,6 +489,7 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
 
     private class ImportQualitySummaryBuilder {
         private final int totalFiles;
+        private final int skippedSqlFiles;
         private int parsedFiles;
         private int fallbackFiles;
         private int javaFallbackCount;
@@ -498,8 +500,9 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
         private int embeddedChunkCount;
         private String status = STATUS_IMPORTING;
 
-        private ImportQualitySummaryBuilder(int totalFiles) {
+        private ImportQualitySummaryBuilder(int totalFiles, int skippedSqlFiles) {
             this.totalFiles = totalFiles;
+            this.skippedSqlFiles = skippedSqlFiles;
         }
 
         private void recordParsedFile(ParsedCodeFile parsed) {
@@ -561,6 +564,8 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
                     .xmlFallbackCount(xmlFallbackCount)
                     .includeWarningCount(includeWarningCount)
                     .failedFiles(failedFiles)
+                    .skippedFiles(skippedSqlFiles)
+                    .skippedSqlFiles(skippedSqlFiles)
                     .chunkCount(chunkCount)
                     .embeddedChunkCount(embeddedChunkCount)
                     .status(status)
