@@ -28,9 +28,13 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 
@@ -75,9 +79,9 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
                 summaryBuilder.recordParsedFile(parsed);
                 CodeFile codeFile = persistCodeFile(repository, parsed, runtimeStats);
                 addChunksToEmbeddingBuffer(repository, codeFile, parsed, embeddingBuffer);
-                flushFullEmbeddingBatches(embeddingBuffer, summaryBuilder, runtimeStats);
+                flushFullEmbeddingBatches(repository, embeddingBuffer, summaryBuilder, runtimeStats);
             }
-            flushRemainingEmbeddingBatch(embeddingBuffer, summaryBuilder, runtimeStats);
+            flushRemainingEmbeddingBatch(repository, embeddingBuffer, summaryBuilder, runtimeStats);
             transactionTemplate().executeWithoutResult(status ->
                 codeRepositoryMapper.updateById(CodeRepository.builder()
                         .id(repository.getId())
@@ -212,23 +216,26 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
         }
     }
 
-    private void flushFullEmbeddingBatches(List<EmbeddingTarget> embeddingBuffer,
+    private void flushFullEmbeddingBatches(CodeRepository repository,
+                                           List<EmbeddingTarget> embeddingBuffer,
                                            ImportQualitySummaryBuilder summaryBuilder,
                                            ImportRuntimeStats runtimeStats) {
         while (embeddingBuffer.size() >= runtimeStats.batchSize()) {
-            flushEmbeddingBatch(embeddingBuffer, runtimeStats.batchSize(), summaryBuilder, runtimeStats);
+            flushEmbeddingBatch(repository, embeddingBuffer, runtimeStats.batchSize(), summaryBuilder, runtimeStats);
         }
     }
 
-    private void flushRemainingEmbeddingBatch(List<EmbeddingTarget> embeddingBuffer,
+    private void flushRemainingEmbeddingBatch(CodeRepository repository,
+                                              List<EmbeddingTarget> embeddingBuffer,
                                               ImportQualitySummaryBuilder summaryBuilder,
                                               ImportRuntimeStats runtimeStats) {
         if (!embeddingBuffer.isEmpty()) {
-            flushEmbeddingBatch(embeddingBuffer, embeddingBuffer.size(), summaryBuilder, runtimeStats);
+            flushEmbeddingBatch(repository, embeddingBuffer, embeddingBuffer.size(), summaryBuilder, runtimeStats);
         }
     }
 
-    private void flushEmbeddingBatch(List<EmbeddingTarget> embeddingBuffer,
+    private void flushEmbeddingBatch(CodeRepository repository,
+                                     List<EmbeddingTarget> embeddingBuffer,
                                      int batchSize,
                                      ImportQualitySummaryBuilder summaryBuilder,
                                      ImportRuntimeStats runtimeStats) {
@@ -237,9 +244,16 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
                 .map(target -> codeChunkEmbeddingTextBuilder.build(target.parsed(), target.chunk()))
                 .toList();
         long embeddingStarted = System.currentTimeMillis();
-        List<float[]> embeddings = embeddingService.embedBatch(texts);
+        List<float[]> embeddings;
+        try {
+            embeddings = embeddingService.embedBatch(texts);
+            runtimeStats.recordBatch();
+        } catch (RuntimeException e) {
+            runtimeStats.addEmbeddingElapsed(System.currentTimeMillis() - embeddingStarted);
+            diagnoseEmbeddingBatchFailure(repository, batch, texts, runtimeStats, e);
+            throw e;
+        }
         runtimeStats.addEmbeddingElapsed(System.currentTimeMillis() - embeddingStarted);
-        runtimeStats.recordBatch();
         if (embeddings.size() != batch.size()) {
             throw new IllegalStateException("Embedding batch size mismatch: expected "
                     + batch.size() + ", actual " + embeddings.size());
@@ -260,6 +274,64 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
             summaryBuilder.recordEmbeddedChunk();
         }
         embeddingBuffer.subList(0, batchSize).clear();
+    }
+
+    private void diagnoseEmbeddingBatchFailure(CodeRepository repository,
+                                               List<EmbeddingTarget> batch,
+                                               List<String> texts,
+                                               ImportRuntimeStats runtimeStats,
+                                               RuntimeException batchFailure) {
+        int nextBatchNumber = runtimeStats.batchCount() + 1;
+        log.warn("Code RAG embedding batch failed, start single-item diagnostic retry: repoId={}, repositoryName={}, batchNumber={}, batchSize={}, error={}",
+                repository.getId(), repository.getName(), nextBatchNumber, batch.size(), batchFailure.getMessage());
+        boolean singleFailureFound = false;
+        for (int i = 0; i < batch.size(); i++) {
+            EmbeddingTarget target = batch.get(i);
+            String text = texts.get(i);
+            log.warn("Code RAG embedding failed batch item summary: repoId={}, repositoryName={}, batchNumber={}, batchIndex={}, {}",
+                    repository.getId(), repository.getName(), nextBatchNumber, i, diagnosticSummary(target, text));
+            try {
+                long singleStarted = System.currentTimeMillis();
+                List<float[]> single = embeddingService.embedBatch(List.of(text));
+                runtimeStats.addEmbeddingElapsed(System.currentTimeMillis() - singleStarted);
+                if (single.size() != 1) {
+                    singleFailureFound = true;
+                    log.warn("Code RAG embedding single diagnostic size mismatch: repoId={}, repositoryName={}, batchNumber={}, batchIndex={}, expected=1, actual={}, {}",
+                            repository.getId(), repository.getName(), nextBatchNumber, i, single.size(), diagnosticSummary(target, text));
+                }
+            } catch (RuntimeException singleFailure) {
+                singleFailureFound = true;
+                log.warn("Code RAG embedding single diagnostic failed: repoId={}, repositoryName={}, batchNumber={}, batchIndex={}, singleFailure={}, {}",
+                        repository.getId(), repository.getName(), nextBatchNumber, i, singleFailure.getMessage(),
+                        diagnosticSummary(target, text), singleFailure);
+            }
+        }
+        if (!singleFailureFound) {
+            log.warn("Code RAG embedding batch-level failure: all single-item diagnostic retries succeeded, repoId={}, repositoryName={}, batchNumber={}, batchSize={}, batchFailure={}",
+                    repository.getId(), repository.getName(), nextBatchNumber, batch.size(), batchFailure.getMessage());
+        }
+    }
+
+    private String diagnosticSummary(EmbeddingTarget target, String text) {
+        CodeChunk chunk = target.chunk();
+        ParsedCodeFile parsed = target.parsed();
+        Map<String, Object> metadata = metadata(chunk);
+        return "filePath=" + safe(parsed.getRelativePath())
+                + ", fileType=" + safe(parsed.getFileType())
+                + ", className=" + safe(parsed.getClassName())
+                + ", chunkType=" + safe(chunk.getChunkType())
+                + ", symbolName=" + safe(chunk.getSymbolName())
+                + ", apiPath=" + safe(chunk.getApiPath())
+                + ", httpMethod=" + safe(chunk.getHttpMethod())
+                + ", statementId=" + firstPresent(metadata, "sqlId", "statementId", "SQL_ID")
+                + ", fallbackChunkType=" + firstPresent(metadata, "fallbackChunkType")
+                + ", textLength=" + text.length()
+                + ", textHash=" + sha256Prefix(text)
+                + ", blank=" + !StringUtils.hasText(text)
+                + ", hasControlChars=" + hasControlChars(text)
+                + ", hasInvalidSurrogate=" + hasInvalidSurrogate(text)
+                + ", maxLineLength=" + maxLineLength(text)
+                + ", preview=" + summarize(text, 200);
     }
 
     private void cleanupImportedIndex(String repoId) {
@@ -287,6 +359,82 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
 
     private boolean isTrue(Object value) {
         return Boolean.TRUE.equals(value) || "true".equalsIgnoreCase(String.valueOf(value));
+    }
+
+    private String firstPresent(Map<String, Object> metadata, String... keys) {
+        for (String key : keys) {
+            Object value = metadata.get(key);
+            if (value != null && StringUtils.hasText(String.valueOf(value))) {
+                return String.valueOf(value);
+            }
+        }
+        return "";
+    }
+
+    private String safe(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private static String summarize(String value, int maxChars) {
+        if (value == null) {
+            return "";
+        }
+        String normalized = value.replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
+                .replaceAll("\\s+", " ").trim();
+        if (normalized.length() <= maxChars) {
+            return normalized;
+        }
+        return normalized.substring(0, Math.max(0, maxChars)) + "...[truncated]";
+    }
+
+    private static String sha256Prefix(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(value.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hash).substring(0, 12);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 digest is unavailable", e);
+        }
+    }
+
+    private static boolean hasControlChars(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            if (Character.isISOControl(ch) && ch != '\n' && ch != '\r' && ch != '\t') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasInvalidSurrogate(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            if (Character.isHighSurrogate(ch)) {
+                if (i + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(i + 1))) {
+                    return true;
+                }
+                i++;
+            } else if (Character.isLowSurrogate(ch)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int maxLineLength(String value) {
+        int max = 0;
+        int current = 0;
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            if (ch == '\n' || ch == '\r') {
+                max = Math.max(max, current);
+                current = 0;
+            } else {
+                current++;
+            }
+        }
+        return Math.max(max, current);
     }
 
     private String importFailureMessage(RuntimeException e) {

@@ -20,6 +20,9 @@ import com.kama.jchatmind.service.CodeFileScanner;
 import com.kama.jchatmind.service.EmbeddingService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
@@ -32,7 +35,9 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.assertj.core.api.Assertions.assertThat;
 
+@ExtendWith(OutputCaptureExtension.class)
 class CodeRepositoryServiceImplTest {
 
     @TempDir
@@ -437,6 +442,106 @@ class CodeRepositoryServiceImplTest {
         assertEquals("FAILED", exception.getResponse().getImportQualitySummary().getStatus());
     }
 
+    @Test
+    void batchEmbeddingFailureRetriesSingleItemsForDiagnosticsAndLogsFailingChunk(CapturedOutput output) throws Exception {
+        Path sourceFile = tempDir.resolve("DemoService.java");
+        Files.writeString(sourceFile, "class DemoService {}");
+
+        FakeCodeRepositoryMapper repositoryMapper = new FakeCodeRepositoryMapper();
+        FakeCodeFileMapper fileMapper = new FakeCodeFileMapper();
+        FakeCodeChunkMapper chunkMapper = new FakeCodeChunkMapper();
+        DiagnosticEmbeddingService embeddingService = new DiagnosticEmbeddingService(1);
+
+        CodeRepositoryServiceImpl service = new CodeRepositoryServiceImpl(
+                repositoryMapper,
+                fileMapper,
+                chunkMapper,
+                rootPath -> new CodeFileScanner.ScanResult(rootPath, List.of(sourceFile), false, "ok"),
+                (rootPath, filePath) -> ParsedCodeFile.builder()
+                        .relativePath("DemoService.java")
+                        .fileType("JAVA")
+                        .className("DemoService")
+                        .chunks(List.of(
+                                CodeChunk.builder().chunkType("CLASS_SUMMARY").symbolName("DemoService#one").content("one").metadata("{}").build(),
+                                CodeChunk.builder().chunkType("CLASS_SUMMARY").symbolName("DemoService#two").content("two").metadata("{}").build()
+                        ))
+                        .build(),
+                (parsed, chunk) -> chunk.getContent(),
+                embeddingService,
+                new NoopTransactionManager(),
+                new ObjectMapper(),
+                codeRagProperties(2)
+        );
+
+        ImportCodeRepositoryRequest request = new ImportCodeRepositoryRequest();
+        request.setName("demo");
+        request.setRootPath(tempDir.toString());
+
+        CodeRepositoryImportException exception = assertThrows(CodeRepositoryImportException.class,
+                () -> service.importRepository(request));
+
+        assertEquals(List.of(2, 1, 1), embeddingService.batchSizes);
+        assertEquals("FAILED", exception.getResponse().getImportQualitySummary().getStatus());
+        assertEquals(2, chunkMapper.deleteByRepoIdCount);
+        assertEquals(2, fileMapper.deleteByRepoIdCount);
+        assertThat(output.getOut())
+                .contains("Code RAG embedding batch failed, start single-item diagnostic retry")
+                .contains("batchNumber=1")
+                .contains("batchIndex=1")
+                .contains("symbolName=DemoService#two")
+                .contains("textLength=3")
+                .contains("textHash=")
+                .contains("preview=two")
+                .contains("Code RAG embedding single diagnostic failed");
+    }
+
+    @Test
+    void batchEmbeddingFailureLogsBatchLevelFailureWhenSingleDiagnosticsSucceed(CapturedOutput output) throws Exception {
+        Path sourceFile = tempDir.resolve("DemoService.java");
+        Files.writeString(sourceFile, "class DemoService {}");
+
+        FakeCodeRepositoryMapper repositoryMapper = new FakeCodeRepositoryMapper();
+        FakeCodeFileMapper fileMapper = new FakeCodeFileMapper();
+        FakeCodeChunkMapper chunkMapper = new FakeCodeChunkMapper();
+        BatchOnlyFailingEmbeddingService embeddingService = new BatchOnlyFailingEmbeddingService();
+
+        CodeRepositoryServiceImpl service = new CodeRepositoryServiceImpl(
+                repositoryMapper,
+                fileMapper,
+                chunkMapper,
+                rootPath -> new CodeFileScanner.ScanResult(rootPath, List.of(sourceFile), false, "ok"),
+                (rootPath, filePath) -> ParsedCodeFile.builder()
+                        .relativePath("DemoService.java")
+                        .fileType("JAVA")
+                        .className("DemoService")
+                        .chunks(List.of(
+                                CodeChunk.builder().chunkType("CLASS_SUMMARY").symbolName("DemoService#one").content("one").metadata("{}").build(),
+                                CodeChunk.builder().chunkType("CLASS_SUMMARY").symbolName("DemoService#two").content("two").metadata("{}").build()
+                        ))
+                        .build(),
+                (parsed, chunk) -> chunk.getContent(),
+                embeddingService,
+                new NoopTransactionManager(),
+                new ObjectMapper(),
+                codeRagProperties(2)
+        );
+
+        ImportCodeRepositoryRequest request = new ImportCodeRepositoryRequest();
+        request.setName("demo");
+        request.setRootPath(tempDir.toString());
+
+        CodeRepositoryImportException exception = assertThrows(CodeRepositoryImportException.class,
+                () -> service.importRepository(request));
+
+        assertEquals(List.of(2, 1, 1), embeddingService.batchSizes);
+        assertEquals("FAILED", exception.getResponse().getImportQualitySummary().getStatus());
+        assertEquals(2, chunkMapper.deleteByRepoIdCount);
+        assertEquals(2, fileMapper.deleteByRepoIdCount);
+        assertThat(output.getOut())
+                .contains("Code RAG embedding batch-level failure")
+                .contains("all single-item diagnostic retries succeeded");
+    }
+
     private static class FakeCodeRepositoryMapper implements CodeRepositoryMapper {
         private final List<String> updatedStatuses = new ArrayList<>();
         private List<String> calls = new ArrayList<>();
@@ -605,6 +710,51 @@ class CodeRepositoryServiceImplTest {
                 result.add(new float[]{next++});
             }
             return result;
+        }
+    }
+
+    private static class DiagnosticEmbeddingService implements EmbeddingService {
+        private final List<Integer> batchSizes = new ArrayList<>();
+        private final int failingSingleIndex;
+        private int singleIndex;
+
+        private DiagnosticEmbeddingService(int failingSingleIndex) {
+            this.failingSingleIndex = failingSingleIndex;
+        }
+
+        @Override
+        public float[] embed(String text) {
+            throw new AssertionError("Code RAG import should use embedBatch");
+        }
+
+        @Override
+        public List<float[]> embedBatch(List<String> texts) {
+            batchSizes.add(texts.size());
+            if (texts.size() > 1) {
+                throw new IllegalStateException("batch down");
+            }
+            if (singleIndex++ == failingSingleIndex) {
+                throw new IllegalStateException("single down");
+            }
+            return List.of(new float[]{1.0f});
+        }
+    }
+
+    private static class BatchOnlyFailingEmbeddingService implements EmbeddingService {
+        private final List<Integer> batchSizes = new ArrayList<>();
+
+        @Override
+        public float[] embed(String text) {
+            throw new AssertionError("Code RAG import should use embedBatch");
+        }
+
+        @Override
+        public List<float[]> embedBatch(List<String> texts) {
+            batchSizes.add(texts.size());
+            if (texts.size() > 1) {
+                throw new IllegalStateException("batch down");
+            }
+            return List.of(new float[]{1.0f});
         }
     }
 
