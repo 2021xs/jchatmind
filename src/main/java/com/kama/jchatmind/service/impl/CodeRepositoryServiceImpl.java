@@ -62,81 +62,59 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
         CodeFileScanner.ScanResult scanResult = codeFileScanner.scan(Path.of(request.getRootPath()));
         String normalizedRoot = scanResult.getNormalizedRoot().toString().replace("\\", "/");
         CodeRepository repository = markImporting(request.getName(), normalizedRoot);
-        List<ParsedCodeFile> parsedFiles = new ArrayList<>();
         ImportQualitySummaryBuilder summaryBuilder = new ImportQualitySummaryBuilder(scanResult.getFiles().size());
-        boolean processingFiles = true;
+        ImportRuntimeStats runtimeStats = new ImportRuntimeStats(Math.max(1, codeRagProperties.getEmbeddingBatchSize()));
+        long importStarted = System.currentTimeMillis();
+        List<EmbeddingTarget> embeddingBuffer = new ArrayList<>();
+        boolean parsingFile = false;
         try {
             for (Path filePath : scanResult.getFiles()) {
+                parsingFile = true;
                 ParsedCodeFile parsed = codeChunkParser.parse(scanResult.getNormalizedRoot(), filePath);
+                parsingFile = false;
                 summaryBuilder.recordParsedFile(parsed);
-                parsedFiles.add(parsed);
+                CodeFile codeFile = persistCodeFile(repository, parsed, runtimeStats);
+                addChunksToEmbeddingBuffer(repository, codeFile, parsed, embeddingBuffer);
+                flushFullEmbeddingBatches(embeddingBuffer, summaryBuilder, runtimeStats);
             }
-            EmbeddingBatchStats embeddingStats = embedParsedChunks(parsedFiles, summaryBuilder);
-            processingFiles = false;
-            int fileCount = parsedFiles.size();
-            int chunkCount = parsedFiles.stream()
-                    .mapToInt(parsed -> parsed.getChunks() == null ? 0 : parsed.getChunks().size())
-                    .sum();
-            transactionTemplate().executeWithoutResult(status -> {
-                codeChunkMapper.deleteByRepoId(repository.getId());
-                codeFileMapper.deleteByRepoId(repository.getId());
-                persistParsedFiles(repository, parsedFiles);
+            flushRemainingEmbeddingBatch(embeddingBuffer, summaryBuilder, runtimeStats);
+            transactionTemplate().executeWithoutResult(status ->
                 codeRepositoryMapper.updateById(CodeRepository.builder()
                         .id(repository.getId())
                         .status(STATUS_READY)
-                        .build());
-            });
+                        .build()));
             ImportQualitySummary summary = summaryBuilder.status(STATUS_READY).build();
-            log.info("Code repository import quality summary: repoId={}, repositoryName={}, chunkCount={}, embeddingBatchSize={}, embeddingBatchCount={}, embeddingElapsedMs={}, summary={}",
-                    repository.getId(), repository.getName(), chunkCount, embeddingStats.batchSize(),
-                    embeddingStats.batchCount(), embeddingStats.elapsedMs(), summary);
+            long totalElapsedMs = System.currentTimeMillis() - importStarted;
+            log.info("Code repository import quality summary: repoId={}, repositoryName={}, summary={}, embeddingBatchSize={}, embeddingBatchCount={}, embeddingElapsedMs={}, dbWriteElapsedMs={}, totalElapsedMs={}",
+                    repository.getId(), repository.getName(), summary, runtimeStats.batchSize(),
+                    runtimeStats.batchCount(), runtimeStats.embeddingElapsedMs(), runtimeStats.dbWriteElapsedMs(),
+                    totalElapsedMs);
             return ImportCodeRepositoryResponse.builder()
                     .repoId(repository.getId())
-                    .fileCount(fileCount)
-                    .chunkCount(chunkCount)
+                    .fileCount(summary.getParsedFiles())
+                    .chunkCount(summary.getChunkCount())
                     .truncated(scanResult.isTruncated())
                     .message(scanResult.getMessage())
                     .importQualitySummary(summary)
                     .build();
         } catch (RuntimeException e) {
-            if (processingFiles) {
+            if (parsingFile) {
                 summaryBuilder.recordFailedFile();
             }
             markFailed(repository.getId());
             ImportQualitySummary summary = summaryBuilder.status(STATUS_FAILED).build();
-            log.warn("Code repository import failed with quality summary: repoId={}, repositoryName={}, summary={}",
-                    repository.getId(), repository.getName(), summary, e);
+            cleanupImportedIndex(repository.getId());
+            long totalElapsedMs = System.currentTimeMillis() - importStarted;
+            log.warn("Code repository import failed with quality summary: repoId={}, repositoryName={}, summary={}, embeddingBatchSize={}, embeddingBatchCount={}, embeddingElapsedMs={}, dbWriteElapsedMs={}, totalElapsedMs={}",
+                    repository.getId(), repository.getName(), summary, runtimeStats.batchSize(),
+                    runtimeStats.batchCount(), runtimeStats.embeddingElapsedMs(), runtimeStats.dbWriteElapsedMs(),
+                    totalElapsedMs, e);
             throw new CodeRepositoryImportException(importFailureMessage(e), e,
                     ImportCodeRepositoryResponse.builder()
                             .repoId(repository.getId())
                             .message(importFailureMessage(e))
                             .importQualitySummary(summary)
                             .build());
-        }
-    }
-
-    private void persistParsedFiles(CodeRepository repository, List<ParsedCodeFile> parsedFiles) {
-        for (ParsedCodeFile parsed : parsedFiles) {
-            CodeFile codeFile = CodeFile.builder()
-                    .repoId(repository.getId())
-                    .filePath(parsed.getRelativePath())
-                    .fileType(parsed.getFileType())
-                    .packageName(parsed.getPackageName())
-                    .className(parsed.getClassName())
-                    .checksum(parsed.getChecksum())
-                    .createdAt(LocalDateTime.now())
-                    .updatedAt(LocalDateTime.now())
-                    .build();
-            codeFileMapper.insert(codeFile);
-
-            for (CodeChunk chunk : parsed.getChunks()) {
-                chunk.setRepoId(repository.getId());
-                chunk.setFileId(codeFile.getId());
-                if (chunk.getCreatedAt() == null) {
-                    chunk.setCreatedAt(LocalDateTime.now());
-                }
-                codeChunkMapper.insert(chunk);
-            }
         }
     }
 
@@ -184,6 +162,8 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
             existing.setLanguage("java");
             existing.setStatus(STATUS_IMPORTING);
             codeRepositoryMapper.updateById(existing);
+            codeChunkMapper.deleteByRepoId(existing.getId());
+            codeFileMapper.deleteByRepoId(existing.getId());
             return existing;
         }
         CodeRepository repository = CodeRepository.builder()
@@ -198,37 +178,99 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
         return repository;
     }
 
-    private EmbeddingBatchStats embedParsedChunks(List<ParsedCodeFile> parsedFiles,
-                                                  ImportQualitySummaryBuilder summaryBuilder) {
-        int batchSize = Math.max(1, codeRagProperties.getEmbeddingBatchSize());
-        List<EmbeddingTarget> targets = new ArrayList<>();
-        List<String> texts = new ArrayList<>();
-        for (ParsedCodeFile parsed : parsedFiles) {
-            if (parsed.getChunks() == null) {
-                continue;
+    private CodeFile persistCodeFile(CodeRepository repository, ParsedCodeFile parsed, ImportRuntimeStats runtimeStats) {
+        CodeFile codeFile = CodeFile.builder()
+                .repoId(repository.getId())
+                .filePath(parsed.getRelativePath())
+                .fileType(parsed.getFileType())
+                .packageName(parsed.getPackageName())
+                .className(parsed.getClassName())
+                .checksum(parsed.getChecksum())
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .build();
+        long started = System.currentTimeMillis();
+        transactionTemplate().executeWithoutResult(status -> codeFileMapper.insert(codeFile));
+        runtimeStats.addDbWriteElapsed(System.currentTimeMillis() - started);
+        return codeFile;
+    }
+
+    private void addChunksToEmbeddingBuffer(CodeRepository repository,
+                                            CodeFile codeFile,
+                                            ParsedCodeFile parsed,
+                                            List<EmbeddingTarget> embeddingBuffer) {
+        if (parsed.getChunks() == null) {
+            return;
+        }
+        for (CodeChunk chunk : parsed.getChunks()) {
+            chunk.setRepoId(repository.getId());
+            chunk.setFileId(codeFile.getId());
+            if (chunk.getCreatedAt() == null) {
+                chunk.setCreatedAt(LocalDateTime.now());
             }
-            for (CodeChunk chunk : parsed.getChunks()) {
-                targets.add(new EmbeddingTarget(chunk));
-                texts.add(codeChunkEmbeddingTextBuilder.build(parsed, chunk));
-            }
+            embeddingBuffer.add(new EmbeddingTarget(parsed, chunk));
+        }
+    }
+
+    private void flushFullEmbeddingBatches(List<EmbeddingTarget> embeddingBuffer,
+                                           ImportQualitySummaryBuilder summaryBuilder,
+                                           ImportRuntimeStats runtimeStats) {
+        while (embeddingBuffer.size() >= runtimeStats.batchSize()) {
+            flushEmbeddingBatch(embeddingBuffer, runtimeStats.batchSize(), summaryBuilder, runtimeStats);
+        }
+    }
+
+    private void flushRemainingEmbeddingBatch(List<EmbeddingTarget> embeddingBuffer,
+                                              ImportQualitySummaryBuilder summaryBuilder,
+                                              ImportRuntimeStats runtimeStats) {
+        if (!embeddingBuffer.isEmpty()) {
+            flushEmbeddingBatch(embeddingBuffer, embeddingBuffer.size(), summaryBuilder, runtimeStats);
+        }
+    }
+
+    private void flushEmbeddingBatch(List<EmbeddingTarget> embeddingBuffer,
+                                     int batchSize,
+                                     ImportQualitySummaryBuilder summaryBuilder,
+                                     ImportRuntimeStats runtimeStats) {
+        List<EmbeddingTarget> batch = new ArrayList<>(embeddingBuffer.subList(0, batchSize));
+        List<String> texts = batch.stream()
+                .map(target -> codeChunkEmbeddingTextBuilder.build(target.parsed(), target.chunk()))
+                .toList();
+        long embeddingStarted = System.currentTimeMillis();
+        List<float[]> embeddings = embeddingService.embedBatch(texts);
+        runtimeStats.addEmbeddingElapsed(System.currentTimeMillis() - embeddingStarted);
+        runtimeStats.recordBatch();
+        if (embeddings.size() != batch.size()) {
+            throw new IllegalStateException("Embedding batch size mismatch: expected "
+                    + batch.size() + ", actual " + embeddings.size());
+        }
+        for (int i = 0; i < embeddings.size(); i++) {
+            batch.get(i).chunk().setEmbedding(embeddings.get(i));
         }
 
-        long started = System.currentTimeMillis();
-        int batchCount = 0;
-        for (int start = 0; start < texts.size(); start += batchSize) {
-            int end = Math.min(start + batchSize, texts.size());
-            List<float[]> embeddings = embeddingService.embedBatch(texts.subList(start, end));
-            if (embeddings.size() != end - start) {
-                throw new IllegalStateException("Embedding batch size mismatch: expected "
-                        + (end - start) + ", actual " + embeddings.size());
-            }
-            for (int i = 0; i < embeddings.size(); i++) {
-                targets.get(start + i).chunk().setEmbedding(embeddings.get(i));
-                summaryBuilder.recordEmbeddedChunk();
-            }
-            batchCount++;
+        long dbStarted = System.currentTimeMillis();
+        List<CodeChunk> chunks = batch.stream().map(EmbeddingTarget::chunk).toList();
+        Integer inserted = transactionTemplate().execute(status -> codeChunkMapper.insertBatch(chunks));
+        runtimeStats.addDbWriteElapsed(System.currentTimeMillis() - dbStarted);
+        if (inserted == null || inserted != chunks.size()) {
+            throw new IllegalStateException("Code chunk batch insert size mismatch: expected "
+                    + chunks.size() + ", actual " + inserted);
         }
-        return new EmbeddingBatchStats(batchSize, batchCount, System.currentTimeMillis() - started);
+        for (int i = 0; i < embeddings.size(); i++) {
+            summaryBuilder.recordEmbeddedChunk();
+        }
+        embeddingBuffer.subList(0, batchSize).clear();
+    }
+
+    private void cleanupImportedIndex(String repoId) {
+        try {
+            transactionTemplate().executeWithoutResult(status -> {
+                codeChunkMapper.deleteByRepoId(repoId);
+                codeFileMapper.deleteByRepoId(repoId);
+            });
+        } catch (RuntimeException cleanupError) {
+            log.error("Failed to cleanup partial Code RAG import index: repoId={}", repoId, cleanupError);
+        }
     }
 
     private Map<String, Object> metadata(CodeChunk chunk) {
@@ -254,10 +296,46 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
         return "代码库导入失败: " + (StringUtils.hasLength(e.getMessage()) ? e.getMessage() : e.getClass().getSimpleName());
     }
 
-    private record EmbeddingTarget(CodeChunk chunk) {
+    private record EmbeddingTarget(ParsedCodeFile parsed, CodeChunk chunk) {
     }
 
-    private record EmbeddingBatchStats(int batchSize, int batchCount, long elapsedMs) {
+    private static class ImportRuntimeStats {
+        private final int batchSize;
+        private int batchCount;
+        private long embeddingElapsedMs;
+        private long dbWriteElapsedMs;
+
+        private ImportRuntimeStats(int batchSize) {
+            this.batchSize = batchSize;
+        }
+
+        private int batchSize() {
+            return batchSize;
+        }
+
+        private int batchCount() {
+            return batchCount;
+        }
+
+        private long embeddingElapsedMs() {
+            return embeddingElapsedMs;
+        }
+
+        private long dbWriteElapsedMs() {
+            return dbWriteElapsedMs;
+        }
+
+        private void recordBatch() {
+            batchCount++;
+        }
+
+        private void addEmbeddingElapsed(long elapsedMs) {
+            embeddingElapsedMs += elapsedMs;
+        }
+
+        private void addDbWriteElapsed(long elapsedMs) {
+            dbWriteElapsedMs += elapsedMs;
+        }
     }
 
     private class ImportQualitySummaryBuilder {

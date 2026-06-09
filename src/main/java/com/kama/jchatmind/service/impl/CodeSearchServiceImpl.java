@@ -1,14 +1,18 @@
 package com.kama.jchatmind.service.impl;
 
 import com.kama.jchatmind.config.CodeRagProperties;
+import com.kama.jchatmind.exception.BizException;
 import com.kama.jchatmind.mapper.CodeChunkMapper;
+import com.kama.jchatmind.mapper.CodeRepositoryMapper;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
+import com.kama.jchatmind.model.entity.CodeRepository;
 import com.kama.jchatmind.service.CodeSearchService;
 import com.kama.jchatmind.service.EmbeddingService;
 import com.kama.jchatmind.util.PgVectorUtils;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.util.List;
 
@@ -16,13 +20,17 @@ import java.util.List;
 @AllArgsConstructor
 @Slf4j
 public class CodeSearchServiceImpl implements CodeSearchService {
+    private static final String STATUS_READY = "READY";
+
     private final EmbeddingService embeddingService;
     private final CodeChunkMapper codeChunkMapper;
+    private final CodeRepositoryMapper codeRepositoryMapper;
     private final CodeQueryEmbeddingCache embeddingCache;
     private final CodeRagProperties properties;
 
     @Override
     public List<CodeSearchResult> search(String repoId, String query, int topK) {
+        ensureReadyRepository(repoId);
         int maxTopK = Math.max(20, properties.getAnswerEvidence().getRawTopK());
         int limit = Math.max(1, Math.min(topK <= 0 ? 5 : topK, maxTopK));
         float[] embedding = embeddingCache.get(query);
@@ -38,6 +46,19 @@ public class CodeSearchServiceImpl implements CodeSearchService {
         log.info("code search completed: searchMode=RAW_VECTOR, repoId={}, topK={}, resultCount={}",
                 repoId, limit, results.size());
         return results;
+    }
+
+    private void ensureReadyRepository(String repoId) {
+        if (!StringUtils.hasLength(repoId)) {
+            throw new BizException("repoId 不能为空");
+        }
+        CodeRepository repository = codeRepositoryMapper.selectById(repoId);
+        if (repository == null) {
+            throw new BizException("代码仓库不存在: " + repoId);
+        }
+        if (!STATUS_READY.equals(repository.getStatus())) {
+            throw new BizException("当前代码仓库尚未导入完成或导入失败，无法检索: status=" + repository.getStatus());
+        }
     }
 
     private void markRawVector(CodeSearchResult result) {

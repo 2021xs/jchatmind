@@ -22,6 +22,26 @@
          #{createdAt})
     </insert>
 
+    <insert id="insertBatch">
+        INSERT INTO code_chunk
+        (repo_id, file_id, chunk_type, symbol_name, api_path, http_method, start_line, end_line, content, metadata, embedding, created_at)
+        VALUES
+        <foreach collection="chunks" item="chunk" separator=",">
+            (CAST(#{chunk.repoId} AS uuid),
+             CAST(#{chunk.fileId} AS uuid),
+             #{chunk.chunkType},
+             #{chunk.symbolName},
+             #{chunk.apiPath},
+             #{chunk.httpMethod},
+             #{chunk.startLine},
+             #{chunk.endLine},
+             #{chunk.content},
+             CAST(#{chunk.metadata} AS jsonb),
+             #{chunk.embedding}::vector,
+             #{chunk.createdAt})
+        </foreach>
+    </insert>
+
     <delete id="deleteByRepoId">
         DELETE FROM code_chunk WHERE repo_id = CAST(#{repoId} AS uuid)
     </delete>

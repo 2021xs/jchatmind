@@ -39,7 +39,7 @@ class CodeRepositoryServiceImplTest {
     Path tempDir;
 
     @Test
-    void embeddingFailureKeepsExistingChunksUntilReplacementTransaction() throws Exception {
+    void embeddingFailureCleansPartialImportedIndex() throws Exception {
         Path sourceFile = tempDir.resolve("DemoService.java");
         Files.writeString(sourceFile, "class DemoService {}");
 
@@ -81,13 +81,13 @@ class CodeRepositoryServiceImplTest {
         CodeRepositoryImportException exception = assertThrows(CodeRepositoryImportException.class,
                 () -> service.importRepository(request));
 
-        assertEquals(0, chunkMapper.deleteByRepoIdCount);
-        assertEquals(0, fileMapper.deleteByRepoIdCount);
+        assertEquals(2, chunkMapper.deleteByRepoIdCount);
+        assertEquals(2, fileMapper.deleteByRepoIdCount);
         assertEquals(List.of("IMPORTING", "FAILED"), repositoryMapper.updatedStatuses);
         assertEquals("repo-1", exception.getResponse().getRepoId());
         assertEquals("FAILED", exception.getResponse().getImportQualitySummary().getStatus());
         assertEquals(1, exception.getResponse().getImportQualitySummary().getParsedFiles());
-        assertEquals(1, exception.getResponse().getImportQualitySummary().getFailedFiles());
+        assertEquals(0, exception.getResponse().getImportQualitySummary().getFailedFiles());
         assertEquals(0, exception.getResponse().getImportQualitySummary().getEmbeddedChunkCount());
     }
 
@@ -253,7 +253,7 @@ class CodeRepositoryServiceImplTest {
 
         assertEquals(List.of("IMPORTING", "FAILED"), repositoryMapper.updatedStatuses);
         assertEquals("FAILED", exception.getResponse().getImportQualitySummary().getStatus());
-        assertEquals(1, exception.getResponse().getImportQualitySummary().getFailedFiles());
+        assertEquals(0, exception.getResponse().getImportQualitySummary().getFailedFiles());
     }
 
     @Test
@@ -296,10 +296,145 @@ class CodeRepositoryServiceImplTest {
         assertEquals(List.of(3, 1), embeddingService.batchSizes);
         assertEquals(4, response.getImportQualitySummary().getEmbeddedChunkCount());
         assertEquals(4, chunkMapper.insertedChunks.size());
+        assertEquals(List.of(3, 1), chunkMapper.batchInsertSizes);
         assertEquals(1.0f, chunkMapper.insertedChunks.get(0).getEmbedding()[0]);
         assertEquals(2.0f, chunkMapper.insertedChunks.get(1).getEmbedding()[0]);
         assertEquals(3.0f, chunkMapper.insertedChunks.get(2).getEmbedding()[0]);
         assertEquals(4.0f, chunkMapper.insertedChunks.get(3).getEmbedding()[0]);
+    }
+
+    @Test
+    void importRepositoryFlushesOnlyFullBatchesAndFlushesRemainingChunksAtEnd() throws Exception {
+        Path firstFile = tempDir.resolve("First.java");
+        Path secondFile = tempDir.resolve("Second.java");
+        Path thirdFile = tempDir.resolve("Third.java");
+        Files.writeString(firstFile, "class First {}");
+        Files.writeString(secondFile, "class Second {}");
+        Files.writeString(thirdFile, "class Third {}");
+
+        FakeCodeFileMapper fileMapper = new FakeCodeFileMapper();
+        FakeCodeChunkMapper chunkMapper = new FakeCodeChunkMapper();
+        RecordingEmbeddingService embeddingService = new RecordingEmbeddingService();
+
+        CodeRepositoryServiceImpl service = new CodeRepositoryServiceImpl(
+                new FakeCodeRepositoryMapper(),
+                fileMapper,
+                chunkMapper,
+                rootPath -> new CodeFileScanner.ScanResult(rootPath, List.of(firstFile, secondFile, thirdFile), false, "ok"),
+                (rootPath, filePath) -> ParsedCodeFile.builder()
+                        .relativePath(filePath.getFileName().toString())
+                        .fileType("JAVA")
+                        .className(filePath.getFileName().toString())
+                        .chunks(List.of(
+                                CodeChunk.builder().chunkType("CLASS_SUMMARY").content(filePath.getFileName() + "-1").metadata("{}").build(),
+                                CodeChunk.builder().chunkType("CLASS_SUMMARY").content(filePath.getFileName() + "-2").metadata("{}").build()
+                        ))
+                        .build(),
+                (parsed, chunk) -> parsed.getRelativePath() + ":" + chunk.getContent(),
+                embeddingService,
+                new NoopTransactionManager(),
+                new ObjectMapper(),
+                codeRagProperties(3)
+        );
+
+        ImportCodeRepositoryRequest request = new ImportCodeRepositoryRequest();
+        request.setName("demo");
+        request.setRootPath(tempDir.toString());
+
+        ImportCodeRepositoryResponse response = service.importRepository(request);
+
+        assertEquals(List.of(3, 3), embeddingService.batchSizes);
+        assertEquals(List.of(3, 3), chunkMapper.batchInsertSizes);
+        assertEquals(3, fileMapper.insertedFiles.size());
+        assertEquals(6, chunkMapper.insertedChunks.size());
+        assertEquals(6, response.getImportQualitySummary().getEmbeddedChunkCount());
+        assertEquals("READY", response.getImportQualitySummary().getStatus());
+    }
+
+    @Test
+    void importRepositoryFailsAndCleansWhenEmbeddingResponseSizeMismatches() throws Exception {
+        Path sourceFile = tempDir.resolve("DemoService.java");
+        Files.writeString(sourceFile, "class DemoService {}");
+
+        FakeCodeRepositoryMapper repositoryMapper = new FakeCodeRepositoryMapper();
+        FakeCodeFileMapper fileMapper = new FakeCodeFileMapper();
+        FakeCodeChunkMapper chunkMapper = new FakeCodeChunkMapper();
+
+        CodeRepositoryServiceImpl service = new CodeRepositoryServiceImpl(
+                repositoryMapper,
+                fileMapper,
+                chunkMapper,
+                rootPath -> new CodeFileScanner.ScanResult(rootPath, List.of(sourceFile), false, "ok"),
+                (rootPath, filePath) -> ParsedCodeFile.builder()
+                        .relativePath("DemoService.java")
+                        .fileType("JAVA")
+                        .className("DemoService")
+                        .chunks(List.of(
+                                CodeChunk.builder().chunkType("CLASS_SUMMARY").content("one").metadata("{}").build(),
+                                CodeChunk.builder().chunkType("CLASS_SUMMARY").content("two").metadata("{}").build()
+                        ))
+                        .build(),
+                (parsed, chunk) -> chunk.getContent(),
+                new MismatchedEmbeddingService(),
+                new NoopTransactionManager(),
+                new ObjectMapper(),
+                codeRagProperties(2)
+        );
+
+        ImportCodeRepositoryRequest request = new ImportCodeRepositoryRequest();
+        request.setName("demo");
+        request.setRootPath(tempDir.toString());
+
+        CodeRepositoryImportException exception = assertThrows(CodeRepositoryImportException.class,
+                () -> service.importRepository(request));
+
+        assertEquals(List.of("IMPORTING", "FAILED"), repositoryMapper.updatedStatuses);
+        assertEquals(2, chunkMapper.deleteByRepoIdCount);
+        assertEquals(2, fileMapper.deleteByRepoIdCount);
+        assertEquals(0, exception.getResponse().getImportQualitySummary().getEmbeddedChunkCount());
+        assertEquals("FAILED", exception.getResponse().getImportQualitySummary().getStatus());
+    }
+
+    @Test
+    void importRepositoryFailsAndCleansWhenChunkBatchPersistFails() throws Exception {
+        Path sourceFile = tempDir.resolve("DemoService.java");
+        Files.writeString(sourceFile, "class DemoService {}");
+
+        FakeCodeRepositoryMapper repositoryMapper = new FakeCodeRepositoryMapper();
+        FakeCodeFileMapper fileMapper = new FakeCodeFileMapper();
+        FakeCodeChunkMapper chunkMapper = new FakeCodeChunkMapper();
+        chunkMapper.failBatchInsert = true;
+
+        CodeRepositoryServiceImpl service = new CodeRepositoryServiceImpl(
+                repositoryMapper,
+                fileMapper,
+                chunkMapper,
+                rootPath -> new CodeFileScanner.ScanResult(rootPath, List.of(sourceFile), false, "ok"),
+                (rootPath, filePath) -> ParsedCodeFile.builder()
+                        .relativePath("DemoService.java")
+                        .fileType("JAVA")
+                        .className("DemoService")
+                        .chunks(List.of(CodeChunk.builder().chunkType("CLASS_SUMMARY").content("one").metadata("{}").build()))
+                        .build(),
+                (parsed, chunk) -> chunk.getContent(),
+                new SuccessfulEmbeddingService(),
+                new NoopTransactionManager(),
+                new ObjectMapper(),
+                codeRagProperties(2)
+        );
+
+        ImportCodeRepositoryRequest request = new ImportCodeRepositoryRequest();
+        request.setName("demo");
+        request.setRootPath(tempDir.toString());
+
+        CodeRepositoryImportException exception = assertThrows(CodeRepositoryImportException.class,
+                () -> service.importRepository(request));
+
+        assertEquals(List.of("IMPORTING", "FAILED"), repositoryMapper.updatedStatuses);
+        assertEquals(2, chunkMapper.deleteByRepoIdCount);
+        assertEquals(2, fileMapper.deleteByRepoIdCount);
+        assertEquals(0, exception.getResponse().getImportQualitySummary().getEmbeddedChunkCount());
+        assertEquals("FAILED", exception.getResponse().getImportQualitySummary().getStatus());
     }
 
     private static class FakeCodeRepositoryMapper implements CodeRepositoryMapper {
@@ -348,9 +483,13 @@ class CodeRepositoryServiceImplTest {
     private static class FakeCodeFileMapper implements CodeFileMapper {
         private int deleteByRepoIdCount;
         private List<String> calls = new ArrayList<>();
+        private final List<CodeFile> insertedFiles = new ArrayList<>();
+        private int nextId = 1;
 
         @Override
         public int insert(CodeFile codeFile) {
+            codeFile.setId("file-" + nextId++);
+            insertedFiles.add(codeFile);
             return 1;
         }
 
@@ -366,11 +505,23 @@ class CodeRepositoryServiceImplTest {
         private int deleteByRepoIdCount;
         private List<String> calls = new ArrayList<>();
         private final List<CodeChunk> insertedChunks = new ArrayList<>();
+        private final List<Integer> batchInsertSizes = new ArrayList<>();
+        private boolean failBatchInsert;
 
         @Override
         public int insert(CodeChunk codeChunk) {
             insertedChunks.add(codeChunk);
             return 1;
+        }
+
+        @Override
+        public int insertBatch(List<CodeChunk> chunks) {
+            if (failBatchInsert) {
+                throw new IllegalStateException("chunk insert down");
+            }
+            batchInsertSizes.add(chunks.size());
+            insertedChunks.addAll(chunks);
+            return chunks.size();
         }
 
         @Override
@@ -422,6 +573,18 @@ class CodeRepositoryServiceImplTest {
         @Override
         public List<float[]> embedBatch(List<String> texts) {
             throw new IllegalStateException("embedding down");
+        }
+    }
+
+    private static class MismatchedEmbeddingService implements EmbeddingService {
+        @Override
+        public float[] embed(String text) {
+            throw new AssertionError("Code RAG import should use embedBatch");
+        }
+
+        @Override
+        public List<float[]> embedBatch(List<String> texts) {
+            return List.of(new float[]{1.0f});
         }
     }
 

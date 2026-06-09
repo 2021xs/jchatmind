@@ -11,6 +11,8 @@ import java.util.List;
 public interface CodeChunkMapper {
     int insert(CodeChunk codeChunk);
 
+    int insertBatch(@Param("chunks") List<CodeChunk> chunks);
+
     int deleteByRepoId(String repoId);
 
     List<CodeSearchResult> similaritySearch(
