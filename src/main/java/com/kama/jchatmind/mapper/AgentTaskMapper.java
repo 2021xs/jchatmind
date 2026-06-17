@@ -19,4 +19,9 @@ public interface AgentTaskMapper {
                                              @Param("staleBefore") LocalDateTime staleBefore);
 
     List<AgentTask> selectStaleRunningBefore(LocalDateTime staleBefore);
+
+    List<AgentTask> selectRecent(@Param("limit") int limit);
+
+    List<AgentTask> selectRecentBySessionId(@Param("sessionId") String sessionId,
+                                            @Param("limit") int limit);
 }

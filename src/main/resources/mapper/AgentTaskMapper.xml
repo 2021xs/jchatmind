@@ -144,4 +144,53 @@
         WHERE status = 'RUNNING'
           AND COALESCE(heartbeat_at, updated_at, started_at) &lt; #{staleBefore}
     </select>
+
+    <select id="selectRecent" resultMap="BaseResultMap">
+        SELECT id,
+               session_id,
+               agent_id,
+               user_message_id,
+               status,
+               goal,
+               finish_reason,
+               model_name,
+               max_steps,
+               actual_steps,
+               tool_call_count,
+               latency_ms,
+               trace_id,
+               heartbeat_at,
+               started_at,
+               finished_at,
+               updated_at,
+               error_message
+        FROM agent_task
+        ORDER BY started_at DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectRecentBySessionId" resultMap="BaseResultMap">
+        SELECT id,
+               session_id,
+               agent_id,
+               user_message_id,
+               status,
+               goal,
+               finish_reason,
+               model_name,
+               max_steps,
+               actual_steps,
+               tool_call_count,
+               latency_ms,
+               trace_id,
+               heartbeat_at,
+               started_at,
+               finished_at,
+               updated_at,
+               error_message
+        FROM agent_task
+        WHERE session_id = CAST(#{sessionId} AS uuid)
+        ORDER BY started_at DESC
+        LIMIT #{limit}
+    </select>
 </mapper>

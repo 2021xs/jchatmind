@@ -1,0 +1,275 @@
+@import "tailwindcss";
+
+:root {
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  color: #1f2933;
+  background: #f5f7fb;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button {
+  font: inherit;
+}
+
+.console-shell {
+  min-height: 100vh;
+  padding: 20px;
+}
+
+.console-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.console-title.ant-typography {
+  margin: 0 0 4px;
+}
+
+.context-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.context-select {
+  width: 230px;
+}
+
+.context-select.wide {
+  width: 320px;
+}
+
+.console-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(240px, 0.9fr) minmax(360px, 1.5fr) minmax(300px, 1fr);
+  gap: 14px;
+  min-height: calc(100vh - 164px);
+}
+
+.panel {
+  min-height: 0;
+  background: #ffffff;
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+  padding: 14px;
+  overflow: auto;
+}
+
+.panel-focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.16);
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.panel-header .ant-typography {
+  margin: 0;
+}
+
+.list-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  margin-bottom: 8px;
+  border: 1px solid #e5eaf0;
+  border-radius: 8px;
+  background: #ffffff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.list-row:hover,
+.list-row.selected {
+  border-color: #2563eb;
+  background: #f8fbff;
+}
+
+.row-title,
+.row-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-title {
+  font-weight: 600;
+  color: #1f2933;
+}
+
+.row-subtitle {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.binding-hint,
+.chat-context,
+.empty-line {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.binding-hint {
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-context {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.message-list {
+  flex: 1;
+  min-height: 280px;
+  overflow: auto;
+  padding: 2px 2px 12px;
+}
+
+.message-bubble {
+  max-width: 88%;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  border: 1px solid #e5eaf0;
+  background: #ffffff;
+}
+
+.message-bubble.role-user {
+  margin-left: auto;
+  background: #edf6ff;
+  border-color: #bfdbfe;
+}
+
+.message-bubble.role-assistant {
+  background: #f8fafc;
+}
+
+.message-bubble.role-tool {
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
+.message-role {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.message-content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+.composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid #e5eaf0;
+}
+
+.trace-panel {
+  min-width: 0;
+}
+
+.trace-body {
+  display: grid;
+  gap: 16px;
+}
+
+.trace-run,
+.event-row,
+.tool-row {
+  padding: 10px;
+  margin-top: 8px;
+  border: 1px solid #e5eaf0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.trace-summary,
+.tool-summary {
+  margin-top: 6px;
+  color: #52606d;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.tool-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.tool-name {
+  font-weight: 600;
+}
+
+.event-row pre {
+  margin: 8px 0 0;
+  max-height: 130px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: #52606d;
+  font-size: 12px;
+}
+
+@media (max-width: 1320px) {
+  .console-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .console-shell {
+    padding: 12px;
+  }
+
+  .console-header,
+  .context-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .context-select,
+  .context-select.wide {
+    width: 100%;
+  }
+
+  .console-grid,
+  .composer {
+    grid-template-columns: 1fr;
+  }
+}

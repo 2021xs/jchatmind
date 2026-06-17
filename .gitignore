@@ -1,6 +1,12 @@
 HELP.md
 target/
 logs/
+node_modules/
+web-console/node_modules/
+web-console/dist/
+web-console/.env
+web-console/.env.*
+!web-console/.env.example
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/

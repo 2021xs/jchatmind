@@ -123,4 +123,30 @@
         WHERE task_id = CAST(#{taskId} AS uuid)
           AND status = 'RUNNING'
     </select>
+
+    <select id="selectByTaskId" resultMap="BaseResultMap">
+        SELECT id,
+               task_id,
+               step_id,
+               tool_name,
+               actual_tool_name,
+               tool_call_id,
+               arguments_json::text AS arguments_json,
+               result_summary,
+               status,
+               latency_ms,
+               error_message,
+               error_type,
+               blocked_by_policy,
+               argument_truncated,
+               result_truncated,
+               retry_count,
+               started_at,
+               finished_at,
+               created_at,
+               updated_at
+        FROM tool_call_log
+        WHERE task_id = CAST(#{taskId} AS uuid)
+        ORDER BY started_at ASC, created_at ASC
+    </select>
 </mapper>
