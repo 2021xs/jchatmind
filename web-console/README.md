@@ -18,9 +18,11 @@ The frontend uses relative backend paths by default:
 ```env
 VITE_JCHATMIND_API_BASE_URL=/api
 VITE_JCHATMIND_SSE_BASE_URL=/sse
+VITE_JCHATMIND_DEV_PROXY_TARGET=http://127.0.0.1:8080
 ```
 
 For separated frontend/backend development, set these variables in a local `.env` file. Do not commit local `.env` files.
+The dev proxy target is only used by Vite during `npm run dev`.
 
 ## Commands
 
