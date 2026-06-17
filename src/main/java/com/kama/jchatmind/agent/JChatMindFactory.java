@@ -9,6 +9,7 @@ import com.kama.jchatmind.converter.ChatMessageConverter;
 import com.kama.jchatmind.converter.KnowledgeBaseConverter;
 import com.kama.jchatmind.mapper.AgentMapper;
 import com.kama.jchatmind.mapper.KnowledgeBaseMapper;
+import com.kama.jchatmind.mcp.adapter.McpToolCallbackAdapter;
 import com.kama.jchatmind.model.dto.AgentDTO;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.dto.KnowledgeBaseDTO;
@@ -29,6 +30,7 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.aop.support.AopUtils;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -62,6 +64,7 @@ public class JChatMindFactory {
     private final ConversationContextCompressor conversationContextCompressor;
     private final ToolCorrectionProperties toolCorrectionProperties;
     private final ToolFailureClassifier toolFailureClassifier;
+    private final ObjectProvider<McpToolCallbackAdapter> mcpToolCallbackAdapterProvider;
 
     public JChatMindFactory(
             ChatClientRegistry chatClientRegistry,
@@ -81,7 +84,8 @@ public class JChatMindFactory {
             ToolRegistry toolRegistry,
             ConversationContextCompressor conversationContextCompressor,
             ToolCorrectionProperties toolCorrectionProperties,
-            ToolFailureClassifier toolFailureClassifier
+            ToolFailureClassifier toolFailureClassifier,
+            ObjectProvider<McpToolCallbackAdapter> mcpToolCallbackAdapterProvider
     ) {
         this.chatClientRegistry = chatClientRegistry;
         this.sseService = sseService;
@@ -101,6 +105,7 @@ public class JChatMindFactory {
         this.conversationContextCompressor = conversationContextCompressor;
         this.toolCorrectionProperties = toolCorrectionProperties;
         this.toolFailureClassifier = toolFailureClassifier;
+        this.mcpToolCallbackAdapterProvider = mcpToolCallbackAdapterProvider;
     }
 
     private Agent loadAgent(String agentId) {
@@ -177,7 +182,23 @@ public class JChatMindFactory {
                     .getToolCallbacks();
             callbacks.addAll(Arrays.asList(toolCallbacks));
         }
+        McpToolCallbackAdapter mcpToolCallbackAdapter = mcpToolCallbackAdapterProvider.getIfAvailable();
+        if (mcpToolCallbackAdapter != null) {
+            callbacks.addAll(mcpToolCallbackAdapter.toolCallbacks());
+        }
         return callbacks;
+    }
+
+    private List<String> resolveRuntimeToolNames(List<Tool> runtimeTools) {
+        List<String> runtimeToolNames = runtimeTools.stream()
+                .map(Tool::getName)
+                .map(toolRegistry::canonicalName)
+                .collect(Collectors.toCollection(ArrayList::new));
+        McpToolCallbackAdapter mcpToolCallbackAdapter = mcpToolCallbackAdapterProvider.getIfAvailable();
+        if (mcpToolCallbackAdapter != null) {
+            runtimeToolNames.addAll(mcpToolCallbackAdapter.exposedToolNames());
+        }
+        return runtimeToolNames.stream().distinct().toList();
     }
 
     private Object resolveToolTarget(Tool tool) {
@@ -242,11 +263,7 @@ public class JChatMindFactory {
         List<KnowledgeBaseDTO> knowledgeBases = resolveRuntimeKnowledgeBases(agentConfig);
         List<Tool> runtimeTools = resolveRuntimeTools(agentConfig);
         List<ToolCallback> toolCallbacks = buildToolCallbacks(runtimeTools);
-        List<String> runtimeToolNames = runtimeTools.stream()
-                .map(Tool::getName)
-                .map(toolRegistry::canonicalName)
-                .distinct()
-                .toList();
+        List<String> runtimeToolNames = resolveRuntimeToolNames(runtimeTools);
 
         return buildAgentRuntime(
                 agent,
