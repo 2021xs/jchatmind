@@ -25,4 +25,20 @@ public class McpExternalToolPolicy {
     public boolean isToolAllowedByRisk(McpToolRiskLevel riskLevel) {
         return riskLevel == McpToolRiskLevel.READ_ONLY || riskLevel == McpToolRiskLevel.NETWORK_READ;
     }
+
+    public boolean canAutoAttachResource(ExternalMcpServerType serverType,
+                                         McpToolRiskLevel riskLevel,
+                                         boolean configuredAutoAttachAllowed) {
+        return configuredAutoAttachAllowed
+                && isSupportedServerType(serverType)
+                && isReadOnlyRisk(riskLevel);
+    }
+
+    public boolean canUsePrompt(ExternalMcpServerType serverType, McpToolRiskLevel riskLevel) {
+        return isSupportedServerType(serverType) && isReadOnlyRisk(riskLevel);
+    }
+
+    public boolean isReadOnlyRisk(McpToolRiskLevel riskLevel) {
+        return riskLevel == McpToolRiskLevel.READ_ONLY;
+    }
 }

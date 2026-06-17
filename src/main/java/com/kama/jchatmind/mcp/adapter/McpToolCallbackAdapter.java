@@ -88,11 +88,20 @@ public class McpToolCallbackAdapter {
                         System.currentTimeMillis() - started, truncated.truncated());
                 return truncated.value();
             } catch (RuntimeException e) {
-                auditLogger.failure(traceId, registration, e.getMessage(),
+                String failure = "External MCP tool call failed: " + safeMessage(e);
+                TruncatedValue truncated = truncate(failure, properties.getMaxResultLength());
+                auditLogger.failure(traceId, registration, truncated.value(),
                         System.currentTimeMillis() - started, "MCP_TOOL_CALL_FAILED");
-                throw e;
+                return truncated.value();
             }
         }
+    }
+
+    private String safeMessage(RuntimeException e) {
+        if (e == null || e.getMessage() == null || e.getMessage().isBlank()) {
+            return "unknown external MCP tool error";
+        }
+        return e.getMessage();
     }
 
     private TruncatedValue truncate(String value, int maxLength) {

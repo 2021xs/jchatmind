@@ -37,6 +37,16 @@ class ExternalMcpRegistryAndPolicyTest {
     }
 
     @Test
+    void enabledServerRequiresAtLeastOneExplicitAllowList() {
+        McpClientProperties properties = new McpClientProperties();
+        ExternalMcpServerProperties server = server("docs", ExternalMcpServerType.DOCS, true);
+        properties.setServers(List.of(server));
+
+        assertThrows(IllegalStateException.class,
+                () -> new ExternalMcpServerRegistry(properties).enabledServers());
+    }
+
+    @Test
     void unsupportedServerTypesAreRejectedForFirstVersion() {
         for (ExternalMcpServerType type : List.of(
                 ExternalMcpServerType.FILESYSTEM,

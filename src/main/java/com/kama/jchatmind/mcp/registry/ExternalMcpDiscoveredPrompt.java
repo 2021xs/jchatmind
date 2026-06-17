@@ -8,4 +8,5 @@ import lombok.Data;
 public class ExternalMcpDiscoveredPrompt {
     private String name;
     private String description;
+    private java.util.List<String> requiredArguments;
 }

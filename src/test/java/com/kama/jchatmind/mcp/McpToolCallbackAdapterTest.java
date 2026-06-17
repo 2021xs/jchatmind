@@ -55,6 +55,37 @@ class McpToolCallbackAdapterTest {
         assertEquals(List.of("start", "success:true"), auditLogger.events);
     }
 
+    @Test
+    void callbackMapsExternalMcpFailureToReadableToolResult() {
+        McpClientProperties properties = new McpClientProperties();
+        properties.setMaxResultLength(64);
+        ExternalMcpServerProperties server = server();
+        properties.setServers(List.of(server));
+        RecordingAuditLogger auditLogger = new RecordingAuditLogger();
+        ExternalMcpToolRegistry registry = new ExternalMcpToolRegistry(
+                new ExternalMcpServerRegistry(properties),
+                ignored -> List.of(ExternalMcpDiscoveredTool.builder()
+                        .name("search_docs")
+                        .description("Search docs")
+                        .inputSchema("{\"type\":\"object\"}")
+                        .build()),
+                new McpExternalToolPolicy());
+
+        McpToolCallbackAdapter adapter = new McpToolCallbackAdapter(
+                registry,
+                (tool, argumentsJson) -> {
+                    throw new IllegalStateException("server unavailable");
+                },
+                auditLogger,
+                properties);
+
+        String result = adapter.toolCallbacks().get(0).call("{\"query\":\"java\"}");
+
+        assertTrue(result.contains("External MCP tool call failed"));
+        assertTrue(result.contains("server unavailable"));
+        assertEquals(List.of("start", "failure"), auditLogger.events);
+    }
+
     private ExternalMcpServerProperties server() {
         ExternalMcpToolProperties tool = new ExternalMcpToolProperties();
         tool.setName("search_docs");

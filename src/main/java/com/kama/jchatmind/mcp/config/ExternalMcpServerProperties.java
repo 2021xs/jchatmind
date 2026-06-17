@@ -14,4 +14,6 @@ public class ExternalMcpServerProperties {
     private String url;
     private boolean enabled = false;
     private List<ExternalMcpToolProperties> allowedTools = new ArrayList<>();
+    private List<ExternalMcpResourceProperties> allowedResources = new ArrayList<>();
+    private List<ExternalMcpPromptProperties> allowedPrompts = new ArrayList<>();
 }

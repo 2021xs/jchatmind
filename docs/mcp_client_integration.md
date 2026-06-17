@@ -1,34 +1,14 @@
-# MCP Client Integration 第一版
+# MCP Client / Host V1
 
-## 目标
+## 范围
 
-本分支把 JChatMind 作为 MCP Host / MCP Client 接入外部 MCP Server。第一版只面向外部信息获取能力：
+当前实现把 JChatMind 作为 MCP Host / Client 接入外部 MCP Server 提供的 tools、resources、prompts。
 
-- DOCS：官方文档、框架文档检索。
-- GITHUB：issue、PR、commit、branch、repo 元信息等只读查询。
-- BROWSER：打开网页、读取网页正文、页面搜索等只读网页访问。
+本轮不实现 JChatMind MCP Server Gateway，也不把本地 `CodeSearchTools`、`DataBaseTools`、`KnowledgeTools` 暴露成 MCP Server。现有 Agent REST API、SSE 协议和本地 `ToolRegistry` 保持不变。
 
-第一版不接入文件系统 MCP、数据库 MCP、shell 执行 MCP，也不把本项目本地工具暴露成 MCP Server。
+## 默认安全
 
-## 默认关闭
-
-MCP client 集成默认关闭：
-
-```yaml
-jchatmind:
-  mcp:
-    client:
-      enabled: false
-```
-
-启用建议使用 `mcp` profile 或环境变量：
-
-```powershell
-$env:JCHATMIND_MCP_CLIENT_ENABLED="true"
-.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=mcp"
-```
-
-Spring AI MCP client auto configuration 也默认关闭，避免未配置时自动连接外部 server：
+MCP Client 默认关闭。`application-mcp.yaml` 中 Spring AI MCP Client 和 JChatMind MCP Client 都需要显式环境变量启用：
 
 ```yaml
 spring:
@@ -37,11 +17,21 @@ spring:
       client:
         enabled: false
         initialized: false
+
+jchatmind:
+  mcp:
+    client:
+      enabled: false
+      servers: []
 ```
+
+示例 DOCS / BROWSER / GITHUB server 只作为注释示例存在，并且 server 默认 disabled。不要提交 token、密钥、本地绝对路径、私有 URL 或个人配置。
+
+V1 只允许显式配置的 `DOCS`、`GITHUB`、`BROWSER` 类型。`FILESYSTEM`、`DATABASE`、`SHELL` 和写操作能力不默认接入，也不会根据 server name、url、command、tool/resource/prompt description 做安全推断。
 
 ## 配置模型
 
-配置前缀为 `jchatmind.mcp.client`。
+配置前缀是 `jchatmind.mcp.client`。
 
 ```yaml
 jchatmind:
@@ -51,96 +41,114 @@ jchatmind:
       max-result-length: 6000
       audit-enabled: true
       servers:
-        - name: spring-docs
+        - name: context7-docs
           type: DOCS
           transport: stdio
-          command: "<command from local secure config>"
-          enabled: true
+          command: ${JCHATMIND_MCP_DOCS_COMMAND:}
+          enabled: false
           allowed-tools:
-            - name: search_docs
-              risk-level: READ_ONLY
-              auto-invoke-allowed: true
-            - name: fetch_doc
-              risk-level: READ_ONLY
-              auto-invoke-allowed: true
-        - name: github-read
-          type: GITHUB
-          transport: http
-          url: "https://example.invalid/mcp"
-          enabled: true
-          allowed-tools:
-            - name: search_issues
+            - name: resolve-library-id
               risk-level: NETWORK_READ
               auto-invoke-allowed: true
-            - name: get_pull_request
-              risk-level: NETWORK_READ
-              auto-invoke-allowed: true
+          allowed-resources:
+            - uri: context7://library/readme
+              risk-level: READ_ONLY
+              auto-attach-allowed: false
+          allowed-prompts:
+            - name: explain-library
+              risk-level: READ_ONLY
+              auto-attach-allowed: false
 ```
 
-不要把 token、私有 URL、个人路径或本地 command 参数提交到仓库。真实 server command/url 应放在本机 `application-local.yaml` 或环境变量中。
+授权只来自显式配置：
 
-## 白名单和风险分级
+- `server.enabled=true`
+- `server.type`
+- `allowed-tools` / `allowed-resources` / `allowed-prompts` 精确白名单
+- `risk-level`
+- `auto-invoke-allowed` / `auto-attach-allowed`
+- registry 注册状态
+- policy 判断
 
-外部 server 必须显式配置且 `enabled=true` 才会被加载。第一版只支持：
+未配置 `risk-level` 的 capability 默认视为 `DANGEROUS`。discovery 得到的 name、uri、description、schema 只用于注册和展示，不参与安全等级推断。
 
-- `DOCS`
-- `GITHUB`
-- `BROWSER`
+## Tools 接入 Agent
 
-以下类型会被拒绝：
+Agent 构建时，`JChatMindFactory` 会合并两类工具：
 
-- `FILESYSTEM`
-- `DATABASE`
-- `SHELL`
+- 本地 `ToolRegistry` 允许暴露的 fixed / optional tools。
+- `McpToolCallbackAdapter.toolCallbacks()` 生成的外部 MCP `ToolCallback`。
 
-外部 tool 也必须在 `allowed-tools` 中出现才可能暴露给模型。风险等级包括：
+外部 MCP tool 只来自 `McpToolCallbackAdapter.exposedToolNames()`，并加入当前 Agent runtime tool name 白名单。执行前 `ToolExecutionServiceImpl` 仍会做 preflight：
 
-- `READ_ONLY`
-- `NETWORK_READ`
-- `WRITE_OPERATION`
-- `DANGEROUS`
+- tool 已注册。
+- tool 来自 enabled server。
+- tool 在 `allowed-tools` 精确白名单中。
+- `risk-level` 显式为 `READ_ONLY` 或 `NETWORK_READ`。
+- `auto-invoke-allowed=true`。
+- policy 通过。
+- tool name 必须存在于当前 Agent runtime tool list。
 
-策略：
+外部 MCP tool 调用会写 audit，并按 `max-result-length` 截断。外部调用异常会返回可读失败结果，例如 `External MCP tool call failed: ...`，不会让本地 Agent 因 callback 异常直接崩溃。
 
-- 所有外部 tool 的 `risk-level` 必须显式配置为 `READ_ONLY` 或 `NETWORK_READ`，并且 `auto-invoke-allowed=true` 才能暴露给模型。
-- 未配置 `risk-level` 的工具默认按 `DANGEROUS`，即使 tool name、description、serverName、url 或 command 看起来像只读工具，也不会被自动放行。
-- discovery 到的 tool name、description 和 schema 只用于展示与参数 schema，不用于安全等级推断。
-- `WRITE_OPERATION` 和 `DANGEROUS` 第一版不会暴露给模型。
+## Resources
 
-## Agent 接入方式
+resources 通过 `ExternalMcpResourceRegistry` 注册，读取通过 `ExternalMcpResourceAccessService` 受控执行。
 
-启用 MCP client 后，`McpToolCallbackAdapter` 会把通过白名单和风险策略的外部 MCP tools 转换为 Spring AI `ToolCallback`，追加到 Agent 可调用工具集合。
+规则：
 
-该实现不删除、不替换现有 `ToolRegistry`，也不修改 `CodeSearchTools`、`DataBaseTools`、`KnowledgeTools`。本地工具仍由原 `ToolRegistry` 管理；外部 MCP 工具使用 `mcp_<server>_<tool>` 形式命名，并且只在当前 Agent runtime tool list 中存在时允许执行记录通过。
+- resource 必须出现在 `allowed-resources` 精确白名单中。
+- 第一版只允许 `READ_ONLY` resource 被读取。
+- 未配置 `risk-level` 默认 `DANGEROUS`，拒绝读取。
+- description 中出现 `safe`、`read-only` 不会改变风险等级。
+- 内容读取经过 `max-result-length` 截断。
+- allowed / denied / failure 都写 audit。
+- resource 不会自动注入 Agent prompt，除非后续调用方显式使用 `auto-attach-allowed=true` 的注册结果。
+- 外部 resource 不可用不会影响本地 Agent 启动。
 
-## Audit
+## Prompts
 
-`McpToolAuditLogger` 会记录：
+prompts 通过 `ExternalMcpPromptRegistry` 注册，获取通过 `ExternalMcpPromptAccessService` 受控执行。
 
-- traceId
-- serverName
-- serverType
-- toolName
-- riskLevel
-- allowed
-- arguments preview
-- result summary
-- latencyMs
-- errorCode
-- truncated
+规则：
 
-审计失败只写 debug 日志，不影响主流程。参数和结果只记录截断摘要，不记录全文敏感内容。
+- prompt 必须出现在 `allowed-prompts` 精确白名单中。
+- 第一版只允许 `READ_ONLY` prompt 使用。
+- 未配置 `risk-level` 默认 `DANGEROUS`，拒绝使用。
+- description 中出现 `safe` 不会改变风险等级。
+- prompt 不会自动覆盖系统提示词。
+- prompt 只能作为用户显式选择或配置允许的模板被获取。
+- prompt required arguments 会做基础缺失校验。
+- audit 只记录参数名，不记录敏感参数全文。
+- 外部 prompt 不可用不会影响本地 Agent 启动。
 
-## 当前测试方式
+## 测试命令
 
-第一版 focused tests 使用 fake discovery / fake invoker 验证 registry、policy、adapter、audit 逻辑，不要求本地启动真实 MCP Server。
+编译：
 
-真实联调建议：
+```powershell
+$env:JAVA_HOME='<path-to-jdk-17-or-newer>'
+$env:PATH="$env:JAVA_HOME\bin;$env:PATH"
+.\mvnw.cmd -DskipTests compile
+```
 
-1. 在本机安全配置中配置 DOCS/GITHUB/BROWSER 类型 MCP Server。
-2. 只配置只读工具到 `allowed-tools`。
-3. 启动 `mcp` profile。
-4. 观察启动日志中可暴露工具数量。
-5. 让 Agent 询问外部文档、GitHub issue 或网页内容，确认只读 MCP tool 被调用并产生 audit。
+focused MCP / Agent tests：
 
-如果真实 MCP Server、网络、token 或外部服务不可用，应记录失败原因，不要伪造联调结果。
+```powershell
+.\mvnw.cmd "-Dtest=ExternalMcpRegistryAndPolicyTest,McpResourcePromptAccessTest,McpToolCallbackAdapterTest,McpClientIntegrationConfigTest,McpFakeEndToEndIntegrationTest,McpLocalToolRegistryIsolationTest,JChatMindFactoryMcpToolIntegrationTest,JChatMindFactoryStateTest,ToolExecutionServiceImplTest,InMemoryToolRegistryTest,ToolSafetyPolicyTest" test
+```
+
+真实 DOCS / BROWSER / GITHUB MCP Server 手动测试保留在：
+
+- `ExternalMcpDocsRealServerManualIntegrationTest`
+- `ExternalMcpBrowserRealServerManualIntegrationTest`
+- `ExternalMcpGithubRealServerManualIntegrationTest`
+
+这些测试默认跳过，只有显式环境变量启用时才运行。真实联调结果必须来自实际执行，不能伪造；需要 token 的 server 只能从环境变量读取 token。
+
+## 当前限制
+
+- 当前完整范围是 MCP Client / Host V1。
+- 不包含 JChatMind MCP Server Gateway。
+- resources/prompts 已有受控 registry 与 access service，但不会默认注入 Agent 系统提示词。
+- 不默认启用 filesystem、database、shell 或写操作 MCP 能力。

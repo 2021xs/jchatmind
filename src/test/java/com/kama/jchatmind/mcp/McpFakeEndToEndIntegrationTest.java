@@ -1,6 +1,10 @@
 package com.kama.jchatmind.mcp;
 
 import com.kama.jchatmind.agent.AgentEventPublisher;
+import com.kama.jchatmind.agent.JChatMind;
+import com.kama.jchatmind.agent.ToolCallBatchExecutor;
+import com.kama.jchatmind.config.ToolCorrectionProperties;
+import com.kama.jchatmind.converter.ChatMessageConverter;
 import com.kama.jchatmind.mcp.adapter.McpToolCallbackAdapter;
 import com.kama.jchatmind.mcp.audit.McpToolAuditLogger;
 import com.kama.jchatmind.mcp.config.ExternalMcpServerProperties;
@@ -13,8 +17,15 @@ import com.kama.jchatmind.mcp.registry.ExternalMcpToolRegistration;
 import com.kama.jchatmind.mcp.registry.ExternalMcpToolRegistry;
 import com.kama.jchatmind.mcp.safety.McpExternalToolPolicy;
 import com.kama.jchatmind.mcp.safety.McpToolRiskLevel;
+import com.kama.jchatmind.model.dto.ChatMessageDTO;
+import com.kama.jchatmind.model.entity.AgentStep;
+import com.kama.jchatmind.model.entity.AgentTask;
 import com.kama.jchatmind.model.entity.ToolCallLog;
+import com.kama.jchatmind.model.response.CreateChatMessageResponse;
 import com.kama.jchatmind.service.AgentTaskLogService;
+import com.kama.jchatmind.service.ChatMessageFacadeService;
+import com.kama.jchatmind.service.ConversationContextCompressor;
+import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.service.impl.ToolExecutionServiceImpl;
 import com.kama.jchatmind.tool.ToolDefinition;
 import com.kama.jchatmind.tool.ToolExecutionContext;
@@ -22,21 +33,40 @@ import com.kama.jchatmind.tool.ToolExecutionRecord;
 import com.kama.jchatmind.tool.ToolFailureClassifier;
 import com.kama.jchatmind.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.model.tool.ToolCallingManager;
+import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -101,6 +131,105 @@ class McpFakeEndToEndIntegrationTest {
         verify(logService).finishToolCall(eq("log-1"), eq(result), anyLong(), eq(false));
     }
 
+    @Test
+    void fakeAgentConversationRunsExternalMcpToolThroughJChatMindRuntime() {
+        McpClientProperties properties = new McpClientProperties();
+        properties.setMaxResultLength(80);
+        properties.setAuditEnabled(true);
+        properties.setServers(List.of(server()));
+        ExternalMcpToolRegistry externalRegistry = new ExternalMcpToolRegistry(
+                new ExternalMcpServerRegistry(properties),
+                ignored -> List.of(discoveredTool("search_docs")),
+                new McpExternalToolPolicy());
+        RecordingAuditLogger auditLogger = new RecordingAuditLogger();
+        McpToolCallbackAdapter adapter = new McpToolCallbackAdapter(
+                externalRegistry,
+                (tool, argumentsJson) -> "external docs answer",
+                auditLogger,
+                properties);
+        List<ToolCallback> callbacks = adapter.toolCallbacks();
+        List<String> runtimeNames = adapter.exposedToolNames();
+
+        ChatClient chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
+        ChatResponse toolCallResponse = new ChatResponse(List.of(new Generation(
+                AssistantMessage.builder()
+                        .content("")
+                        .toolCalls(List.of(new AssistantMessage.ToolCall(
+                                "call-1",
+                                "function",
+                                runtimeNames.get(0),
+                                "{\"query\":\"spring ai\"}"
+                        )))
+                        .build()
+        )));
+        ChatResponse finalResponse = new ChatResponse(List.of(new Generation(
+                AssistantMessage.builder()
+                        .content("Final answer includes external docs answer")
+                        .toolCalls(List.of())
+                        .build()
+        )));
+        when(chatClient.prompt(any(Prompt.class))
+                .system(anyString())
+                .toolCallbacks(any(ToolCallback[].class))
+                .call()
+                .chatClientResponse())
+                .thenReturn(new ChatClientResponse(toolCallResponse, Map.of()))
+                .thenReturn(new ChatClientResponse(finalResponse, Map.of()));
+
+        AgentTaskLogService logService = mockAgentTaskLogService();
+        ChatMessageFacadeService chatMessageFacadeService = mock(ChatMessageFacadeService.class);
+        when(chatMessageFacadeService.createChatMessage(org.mockito.ArgumentMatchers.any(ChatMessageDTO.class)))
+                .thenReturn(CreateChatMessageResponse.builder().chatMessageId("message-1").build());
+        when(chatMessageFacadeService.getChatMessageDTOsBySessionId(anyString())).thenReturn(List.of());
+        ConversationContextCompressor compressor = mock(ConversationContextCompressor.class);
+        when(compressor.check(anyString(), any()))
+                .thenReturn(new ConversationContextCompressor.CompressionCheck(false, "not_needed", 0, 0, 0, 0));
+
+        ToolExecutionServiceImpl executionService = new ToolExecutionServiceImpl(
+                new NoLocalToolRegistry(),
+                logService,
+                mock(AgentEventPublisher.class),
+                new ToolFailureClassifier(),
+                provider(externalRegistry),
+                provider(auditLogger));
+        JChatMind agent = new JChatMind(
+                "agent-1",
+                "test-model",
+                "test-agent",
+                "test",
+                "system",
+                chatClient,
+                20,
+                List.of(new UserMessage("use external docs")),
+                callbacks,
+                List.of(),
+                "session-1",
+                mock(SseService.class),
+                executionService,
+                chatMessageFacadeService,
+                mock(ChatMessageConverter.class),
+                logService,
+                compressor,
+                "user-message-1",
+                runtimeNames,
+                new ToolCorrectionProperties(),
+                new ToolFailureClassifier()
+        );
+        ReflectionTestUtils.setField(agent, "toolCallingManager", new FakeToolCallingManager(callbacks));
+
+        agent.run();
+
+        verify(logService, atLeastOnce()).finishToolCall(eq("tool-log-1"), eq("external docs answer"),
+                anyLong(), eq(false));
+        verify(logService).finishTask(eq("task-1"), anyString(), anyInt(), eq(1));
+        verify(logService, never()).failTask(anyString(), anyString(), anyInt(), anyInt());
+        verify(chatMessageFacadeService, atLeastOnce()).createChatMessage(
+                org.mockito.ArgumentMatchers.<ChatMessageDTO>argThat(
+                        message -> message.getRole() == ChatMessageDTO.RoleType.TOOL
+                                && "external docs answer".equals(message.getContent())));
+        assertEquals(List.of("start:search_docs", "success:search_docs:false"), auditLogger.events);
+    }
+
     private ExternalMcpServerProperties server() {
         ExternalMcpServerProperties server = new ExternalMcpServerProperties();
         server.setName("docs-readonly");
@@ -153,6 +282,65 @@ class McpFakeEndToEndIntegrationTest {
                 return value;
             }
         };
+    }
+
+    private AgentTaskLogService mockAgentTaskLogService() {
+        AgentTaskLogService logService = mock(AgentTaskLogService.class);
+        when(logService.startTask(anyString(), anyString(), anyString(), anyString(), anyString(), anyInt(), anyString()))
+                .thenReturn(AgentTask.builder().id("task-1").build());
+        AtomicInteger stepNo = new AtomicInteger(1);
+        when(logService.startStep(anyString(), anyInt(), anyString(), anyString(), anyString()))
+                .thenAnswer(invocation -> AgentStep.builder()
+                        .id("step-" + stepNo.getAndIncrement())
+                        .stepNo(invocation.getArgument(1))
+                        .stepType(invocation.getArgument(2))
+                        .build());
+        when(logService.startToolCall(anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyBoolean()))
+                .thenReturn(ToolCallLog.builder().id("tool-log-1").build());
+        return logService;
+    }
+
+    private static class FakeToolCallingManager implements ToolCallingManager {
+        private final List<ToolCallback> callbacks;
+
+        private FakeToolCallingManager(List<ToolCallback> callbacks) {
+            this.callbacks = callbacks;
+        }
+
+        @Override
+        public List<org.springframework.ai.tool.definition.ToolDefinition> resolveToolDefinitions(
+                org.springframework.ai.model.tool.ToolCallingChatOptions chatOptions) {
+            return callbacks.stream()
+                    .map(ToolCallback::getToolDefinition)
+                    .toList();
+        }
+
+        @Override
+        public ToolExecutionResult executeToolCalls(Prompt prompt, ChatResponse chatResponse) {
+            List<AssistantMessage.ToolCall> toolCalls = chatResponse.getResult().getOutput().getToolCalls();
+            List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>();
+            List<Message> history = new ArrayList<>(prompt.getInstructions());
+            history.add(chatResponse.getResult().getOutput());
+            for (AssistantMessage.ToolCall toolCall : toolCalls) {
+                ToolCallback callback = callbacks.stream()
+                        .filter(candidate -> candidate.getToolDefinition().name().equals(toolCall.name()))
+                        .findFirst()
+                        .orElseThrow();
+                responses.add(new ToolResponseMessage.ToolResponse(
+                        toolCall.id(),
+                        toolCall.name(),
+                        callback.call(toolCall.arguments())
+                ));
+            }
+            ToolResponseMessage toolResponseMessage = ToolResponseMessage.builder()
+                    .responses(responses)
+                    .build();
+            history.add(toolResponseMessage);
+            return ToolExecutionResult.builder()
+                    .conversationHistory(history)
+                    .returnDirect(false)
+                    .build();
+        }
     }
 
     private static class NoLocalToolRegistry implements ToolRegistry {

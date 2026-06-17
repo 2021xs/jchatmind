@@ -6,6 +6,10 @@ import com.kama.jchatmind.mcp.registry.ExternalMcpDiscoveredTool;
 import com.kama.jchatmind.mcp.registry.ExternalMcpDiscoveredPrompt;
 import com.kama.jchatmind.mcp.registry.ExternalMcpDiscoveredResource;
 import com.kama.jchatmind.mcp.registry.ExternalMcpCapabilityDiscoveryClient;
+import com.kama.jchatmind.mcp.registry.ExternalMcpPromptClient;
+import com.kama.jchatmind.mcp.registry.ExternalMcpPromptRegistration;
+import com.kama.jchatmind.mcp.registry.ExternalMcpResourceReader;
+import com.kama.jchatmind.mcp.registry.ExternalMcpResourceRegistration;
 import com.kama.jchatmind.mcp.registry.ExternalMcpServerRegistration;
 import com.kama.jchatmind.mcp.registry.ExternalMcpToolRegistration;
 import io.modelcontextprotocol.client.McpSyncClient;
@@ -17,7 +21,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
-public class SpringAiExternalMcpClientAdapter implements ExternalMcpCapabilityDiscoveryClient, ExternalMcpToolInvoker {
+public class SpringAiExternalMcpClientAdapter implements ExternalMcpCapabilityDiscoveryClient, ExternalMcpToolInvoker,
+        ExternalMcpResourceReader, ExternalMcpPromptClient {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
     };
 
@@ -64,6 +69,12 @@ public class SpringAiExternalMcpClientAdapter implements ExternalMcpCapabilityDi
                 .map(prompt -> ExternalMcpDiscoveredPrompt.builder()
                         .name(prompt.name())
                         .description(prompt.description())
+                        .requiredArguments(prompt.arguments() == null
+                                ? List.of()
+                                : prompt.arguments().stream()
+                                .filter(argument -> Boolean.TRUE.equals(argument.required()))
+                                .map(McpSchema.PromptArgument::name)
+                                .toList())
                         .build())
                 .toList();
     }
@@ -80,6 +91,22 @@ public class SpringAiExternalMcpClientAdapter implements ExternalMcpCapabilityDi
         if (Boolean.TRUE.equals(result.isError())) {
             throw new IllegalStateException("External MCP tool returned error: " + result);
         }
+        return toJson(result);
+    }
+
+    @Override
+    public String read(ExternalMcpResourceRegistration resource) {
+        McpSyncClient client = clientFor(resource.getServerName())
+                .orElseThrow(() -> new IllegalStateException("No MCP client found for server: " + resource.getServerName()));
+        McpSchema.ReadResourceResult result = client.readResource(new McpSchema.ReadResourceRequest(resource.getUri()));
+        return toJson(result);
+    }
+
+    @Override
+    public String get(ExternalMcpPromptRegistration prompt, Map<String, Object> arguments) {
+        McpSyncClient client = clientFor(prompt.getServerName())
+                .orElseThrow(() -> new IllegalStateException("No MCP client found for server: " + prompt.getServerName()));
+        McpSchema.GetPromptResult result = client.getPrompt(new McpSchema.GetPromptRequest(prompt.getName(), arguments));
         return toJson(result);
     }
 

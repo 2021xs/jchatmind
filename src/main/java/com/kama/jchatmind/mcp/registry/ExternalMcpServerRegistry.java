@@ -42,8 +42,12 @@ public class ExternalMcpServerRegistry {
         if (server.getType() == null) {
             throw new IllegalStateException("enabled MCP server must declare type: " + server.getName());
         }
-        if (server.getAllowedTools() == null || server.getAllowedTools().isEmpty()) {
-            throw new IllegalStateException("enabled MCP server must declare allowed-tools: " + server.getName());
+        boolean hasAllowedTools = server.getAllowedTools() != null && !server.getAllowedTools().isEmpty();
+        boolean hasAllowedResources = server.getAllowedResources() != null && !server.getAllowedResources().isEmpty();
+        boolean hasAllowedPrompts = server.getAllowedPrompts() != null && !server.getAllowedPrompts().isEmpty();
+        if (!hasAllowedTools && !hasAllowedResources && !hasAllowedPrompts) {
+            throw new IllegalStateException(
+                    "enabled MCP server must declare at least one allow-list: " + server.getName());
         }
     }
 }
