@@ -48,5 +48,6 @@ application-local.yaml
 output.txt
 data/documents/
 .run/
+.playwright-mcp/
 *_secret*
 *_local*
