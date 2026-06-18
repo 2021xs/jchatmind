@@ -3,10 +3,9 @@ import {
   Alert,
   Badge,
   Button,
+  Collapse,
   Empty,
   Input,
-  List,
-  Segmented,
   Select,
   Space,
   Spin,
@@ -19,11 +18,17 @@ import {
   AuditOutlined,
   CodeOutlined,
   CommentOutlined,
+  DownOutlined,
+  FileSearchOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
   PlusOutlined,
   ReloadOutlined,
   SendOutlined,
-  ThunderboltOutlined,
+  ToolOutlined,
 } from "@ant-design/icons";
+import { XMarkdown } from "@ant-design/x-markdown";
+import "@ant-design/x-markdown/dist/x-markdown.css";
 import {
   createChatSession,
   createSseConnection,
@@ -37,6 +42,7 @@ import {
 import type {
   Agent,
   AgentSseEvent,
+  AgentStepTrace,
   AgentTaskTrace,
   ChatMessage,
   ChatSession,
@@ -46,7 +52,8 @@ import type {
   ToolCallTrace,
 } from "./types";
 
-type ViewKey = "repos" | "conversations" | "chat" | "trace";
+type DetailMode = "trace" | "tools" | "events";
+type SseStatus = "idle" | "connecting" | "connected" | "interrupted";
 
 interface RuntimeState {
   repositories: CodeRepository[];
@@ -58,10 +65,30 @@ interface RuntimeState {
   selectedRepoId?: string;
   selectedSessionId?: string;
   selectedAgentId?: string;
-  view: ViewKey;
+  selectedTraceId?: string;
   loadState: LoadState;
   error?: string;
+  sessionError?: string;
   sending: boolean;
+  detailOpen: boolean;
+  detailMode: DetailMode;
+  sseStatus: SseStatus;
+}
+
+interface CodeEvidence {
+  filePath?: string;
+  lineRange?: string;
+  chunkType?: string;
+  symbolName?: string;
+  apiPath?: string;
+  httpMethod?: string;
+  score?: string;
+}
+
+interface ToolMessageSummary {
+  toolName: string;
+  summary: string;
+  evidence: CodeEvidence[];
 }
 
 const defaultState: RuntimeState = {
@@ -71,17 +98,15 @@ const defaultState: RuntimeState = {
   messages: [],
   traces: [],
   sseEvents: [],
-  view: "chat",
   loadState: "idle",
   sending: false,
+  detailOpen: true,
+  detailMode: "trace",
+  sseStatus: "idle",
 };
 
-const viewOptions = [
-  { label: "项目", value: "repos", icon: <CodeOutlined /> },
-  { label: "会话", value: "conversations", icon: <CommentOutlined /> },
-  { label: "Chat", value: "chat", icon: <ThunderboltOutlined /> },
-  { label: "Trace", value: "trace", icon: <AuditOutlined /> },
-];
+const MAX_VISIBLE_SESSIONS = 24;
+const LONG_TEXT_LIMIT = 1200;
 
 function App() {
   const [state, setState] = useState<RuntimeState>(defaultState);
@@ -93,9 +118,10 @@ function App() {
     [state.repositories, state.selectedRepoId],
   );
 
+  const sortedSessions = useMemo(() => sortSessions(state.sessions), [state.sessions]);
+
   const selectedSession = useMemo(
-    () =>
-      state.sessions.find((session) => session.id === state.selectedSessionId),
+    () => state.sessions.find((session) => session.id === state.selectedSessionId),
     [state.sessions, state.selectedSessionId],
   );
 
@@ -104,18 +130,43 @@ function App() {
     [state.agents, state.selectedAgentId],
   );
 
+  const selectedTrace = useMemo(
+    () =>
+      state.traces.find((trace) => trace.id === state.selectedTraceId) ??
+      state.traces[0],
+    [state.traces, state.selectedTraceId],
+  );
+
+  const visibleToolCalls = useMemo(
+    () => state.traces.flatMap((trace) => trace.toolCalls ?? []),
+    [state.traces],
+  );
+
   useEffect(() => {
     refreshConsole();
   }, []);
 
   useEffect(() => {
     if (!state.selectedSessionId) {
-      setState((previous) => ({ ...previous, messages: [], traces: [] }));
+      setState((previous) => ({
+        ...previous,
+        messages: [],
+        traces: [],
+        sseEvents: [],
+        selectedTraceId: undefined,
+        sseStatus: "idle",
+      }));
       return;
     }
 
     const activeSessionId = state.selectedSessionId;
+    setState((previous) => ({
+      ...previous,
+      sseStatus: "connecting",
+      sessionError: undefined,
+    }));
     void refreshSessionData(activeSessionId);
+
     const source = createSseConnection(activeSessionId);
 
     const appendAgentEvent = (event: Event) => {
@@ -125,7 +176,12 @@ function App() {
       }
       setState((previous) => ({
         ...previous,
+        sseStatus: "connected",
         sseEvents: [parsed, ...previous.sseEvents].slice(0, 80),
+        detailMode:
+          parsed.type === "tool_call_start" || parsed.type === "tool_call_result"
+            ? "tools"
+            : previous.detailMode,
       }));
       if (parsed.type === "done" || parsed.type === "error") {
         void refreshSessionData(activeSessionId);
@@ -140,11 +196,16 @@ function App() {
       }
       setState((previous) => ({
         ...previous,
+        sseStatus: "connected",
         messages: upsertMessage(previous.messages, messagePayload),
       }));
     };
 
+    source.addEventListener("init", () => {
+      setState((previous) => ({ ...previous, sseStatus: "connected" }));
+    });
     source.addEventListener("message_start", appendAgentEvent);
+    source.addEventListener("token", appendAgentEvent);
     source.addEventListener("tool_call_start", appendAgentEvent);
     source.addEventListener("tool_call_result", appendAgentEvent);
     source.addEventListener("retrieval_result", appendAgentEvent);
@@ -155,6 +216,7 @@ function App() {
     source.onerror = () => {
       setState((previous) => ({
         ...previous,
+        sseStatus: "interrupted",
         sseEvents: [
           {
             type: "error",
@@ -183,21 +245,22 @@ function App() {
         getAgents(),
         getChatSessions(),
       ]);
+      const sorted = sortSessions(sessions);
       setState((previous) => {
         const selectedSessionId =
-          previous.selectedSessionId && hasId(sessions, previous.selectedSessionId)
+          previous.selectedSessionId && hasId(sorted, previous.selectedSessionId)
             ? previous.selectedSessionId
-            : sessions[0]?.id;
+            : sorted[0]?.id;
         const selectedAgentId =
           previous.selectedAgentId && hasId(agents, previous.selectedAgentId)
             ? previous.selectedAgentId
-            : sessions.find((session) => session.id === selectedSessionId)
-                ?.agentId ?? agents[0]?.id;
+            : sorted.find((session) => session.id === selectedSessionId)?.agentId ??
+              agents[0]?.id;
         return {
           ...previous,
           repositories,
           agents,
-          sessions,
+          sessions: sorted,
           selectedRepoId:
             previous.selectedRepoId && hasId(repositories, previous.selectedRepoId)
               ? previous.selectedRepoId
@@ -222,9 +285,21 @@ function App() {
         getChatMessages(sessionId),
         getAgentTraces(sessionId),
       ]);
-      setState((previous) => ({ ...previous, messages, traces }));
+      setState((previous) => ({
+        ...previous,
+        messages,
+        traces,
+        selectedTraceId:
+          previous.selectedTraceId && hasId(traces, previous.selectedTraceId)
+            ? previous.selectedTraceId
+            : traces[0]?.id,
+        sessionError: undefined,
+      }));
     } catch (error) {
-      setState((previous) => ({ ...previous, error: errorMessage(error) }));
+      setState((previous) => ({
+        ...previous,
+        sessionError: errorMessage(error),
+      }));
     }
   }
 
@@ -239,10 +314,10 @@ function App() {
       const sessions = await getChatSessions();
       setState((previous) => ({
         ...previous,
-        sessions,
+        sessions: sortSessions(sessions),
         selectedSessionId: sessionId,
         selectedAgentId: agentId,
-        view: "chat",
+        detailMode: "trace",
       }));
     } catch (error) {
       noticeApi.error(errorMessage(error));
@@ -256,11 +331,11 @@ function App() {
     }
     const agentId = selectedSession?.agentId ?? state.selectedAgentId;
     if (!state.selectedSessionId || !agentId) {
-      noticeApi.warning("请选择或创建会话");
+      noticeApi.warning("请选择或新建会话");
       return;
     }
     setDraft("");
-    setState((previous) => ({ ...previous, sending: true }));
+    setState((previous) => ({ ...previous, sending: true, sessionError: undefined }));
     try {
       await sendChatMessage(state.selectedSessionId, agentId, content);
       await refreshSessionData(state.selectedSessionId);
@@ -272,260 +347,308 @@ function App() {
     }
   }
 
+  function selectSession(sessionId: string) {
+    const session = state.sessions.find((item) => item.id === sessionId);
+    setState((previous) => ({
+      ...previous,
+      selectedSessionId: sessionId,
+      selectedAgentId: session?.agentId ?? previous.selectedAgentId,
+      selectedTraceId: undefined,
+    }));
+  }
+
+  function openDetail(mode: DetailMode, traceId?: string) {
+    setState((previous) => ({
+      ...previous,
+      detailOpen: true,
+      detailMode: mode,
+      selectedTraceId: traceId ?? previous.selectedTraceId,
+    }));
+  }
+
   return (
     <main className="console-shell">
       {contextHolder}
-      <header className="console-header">
-        <div>
-          <Typography.Title level={3} className="console-title">
-            JChatMind Web Console
-          </Typography.Title>
-          <Typography.Text type="secondary">
-            Repo、会话、Agent Chat、Trace / Audit 的 Web 主入口
-          </Typography.Text>
-        </div>
-        <Space wrap>
-          <Tooltip title="重新加载项目、Agent、会话列表">
-            <Button icon={<ReloadOutlined />} onClick={refreshConsole}>
-              刷新
-            </Button>
-          </Tooltip>
-          <Segmented
-            options={viewOptions}
-            value={state.view}
-            onChange={(value) =>
-              setState((previous) => ({
-                ...previous,
-                view: value as ViewKey,
-              }))
-            }
-          />
-        </Space>
-      </header>
+      <Header
+        repo={selectedRepo}
+        agent={selectedAgent}
+        session={selectedSession}
+        sseStatus={state.sseStatus}
+        detailOpen={state.detailOpen}
+        onRefresh={refreshConsole}
+        onToggleDetail={() =>
+          setState((previous) => ({
+            ...previous,
+            detailOpen: !previous.detailOpen,
+          }))
+        }
+      />
 
       {state.error ? (
         <Alert
+          className="top-alert"
           type="warning"
           showIcon
           closable
-          message="后端接口暂不可用或返回失败"
+          message="后端接口暂不可用"
           description={state.error}
+          action={
+            <Button size="small" onClick={refreshConsole}>
+              重试
+            </Button>
+          }
           onClose={() =>
             setState((previous) => ({ ...previous, error: undefined }))
           }
         />
       ) : null}
 
-      <section className="context-bar">
-        <Select
-          className="context-select"
-          placeholder="选择当前 repo"
-          value={state.selectedRepoId}
-          options={state.repositories.map((repo) => ({
-            value: repo.id,
-            label: `${repo.name}${repo.status ? ` · ${repo.status}` : ""}`,
-          }))}
-          onChange={(selectedRepoId) =>
-            setState((previous) => ({ ...previous, selectedRepoId }))
-          }
-          notFoundContent="暂无 repo"
-        />
-        <Select
-          className="context-select"
-          placeholder="选择 Agent"
-          value={state.selectedAgentId}
-          options={state.agents.map((agent) => ({
-            value: agent.id,
-            label: `${agent.name}${agent.model ? ` · ${agent.model}` : ""}`,
-          }))}
-          onChange={(selectedAgentId) =>
-            setState((previous) => ({ ...previous, selectedAgentId }))
-          }
-          notFoundContent="暂无 Agent"
-        />
-        <Select
-          className="context-select wide"
-          placeholder="选择会话"
-          value={state.selectedSessionId}
-          options={state.sessions.map((session) => ({
-            value: session.id,
-            label: session.title || session.id,
-          }))}
-          onChange={(selectedSessionId) => {
-            const session = state.sessions.find(
-              (item) => item.id === selectedSessionId,
-            );
-            setState((previous) => ({
-              ...previous,
-              selectedSessionId,
-              selectedAgentId: session?.agentId ?? previous.selectedAgentId,
-            }));
-          }}
-          notFoundContent="暂无会话"
-        />
-        <Button icon={<PlusOutlined />} onClick={handleCreateSession}>
-          新建会话
-        </Button>
-      </section>
-
       <Spin spinning={state.loadState === "loading"}>
-        <section className="console-grid">
-          <aside
-            className={`panel ${state.view === "repos" ? "panel-focus" : ""}`}
-          >
-            <RepositoryPanel
-              repositories={state.repositories}
-              selectedRepoId={state.selectedRepoId}
-              onSelect={(selectedRepoId) =>
-                setState((previous) => ({ ...previous, selectedRepoId }))
-              }
-            />
-          </aside>
-          <aside
-            className={`panel ${
-              state.view === "conversations" ? "panel-focus" : ""
-            }`}
-          >
-            <ConversationPanel
-              sessions={state.sessions}
-              selectedSessionId={state.selectedSessionId}
-              selectedRepo={selectedRepo}
-              agents={state.agents}
-              onCreate={handleCreateSession}
-              onSelect={(selectedSessionId) => {
-                const session = state.sessions.find(
-                  (item) => item.id === selectedSessionId,
-                );
-                setState((previous) => ({
-                  ...previous,
-                  selectedSessionId,
-                  selectedAgentId: session?.agentId ?? previous.selectedAgentId,
-                }));
-              }}
-            />
-          </aside>
-          <section
-            className={`panel chat-panel ${
-              state.view === "chat" ? "panel-focus" : ""
-            }`}
-          >
-            <ChatPanel
-              repo={selectedRepo}
-              session={selectedSession}
-              agent={selectedAgent}
-              messages={state.messages}
-              draft={draft}
-              sending={state.sending}
-              onDraftChange={setDraft}
-              onSend={handleSend}
-            />
-          </section>
-          <aside
-            className={`panel trace-panel ${
-              state.view === "trace" ? "panel-focus" : ""
-            }`}
-          >
-            <TracePanel
-              traces={state.traces}
-              events={state.sseEvents}
-              sessionId={state.selectedSessionId}
-            />
-          </aside>
+        <section className={`console-layout ${state.detailOpen ? "" : "detail-collapsed"}`}>
+          <Sidebar
+            repositories={state.repositories}
+            sessions={sortedSessions}
+            agents={state.agents}
+            selectedRepoId={state.selectedRepoId}
+            selectedSessionId={state.selectedSessionId}
+            selectedAgentId={state.selectedAgentId}
+            onSelectRepo={(selectedRepoId) =>
+              setState((previous) => ({ ...previous, selectedRepoId }))
+            }
+            onSelectAgent={(selectedAgentId) =>
+              setState((previous) => ({ ...previous, selectedAgentId }))
+            }
+            onSelectSession={selectSession}
+            onCreateSession={handleCreateSession}
+          />
+
+          <ChatPanel
+            repo={selectedRepo}
+            session={selectedSession}
+            agent={selectedAgent}
+            messages={state.messages}
+            traces={state.traces}
+            draft={draft}
+            sending={state.sending}
+            sessionError={state.sessionError}
+            sseStatus={state.sseStatus}
+            onDraftChange={setDraft}
+            onSend={handleSend}
+            onOpenTrace={(traceId) => openDetail("trace", traceId)}
+            onOpenTools={() => openDetail("tools")}
+            onRetrySession={() =>
+              state.selectedSessionId
+                ? void refreshSessionData(state.selectedSessionId)
+                : undefined
+            }
+          />
+
+          <DetailPanel
+            open={state.detailOpen}
+            mode={state.detailMode}
+            traces={state.traces}
+            selectedTrace={selectedTrace}
+            toolCalls={visibleToolCalls}
+            events={state.sseEvents}
+            sessionId={state.selectedSessionId}
+            onModeChange={(detailMode) =>
+              setState((previous) => ({ ...previous, detailMode }))
+            }
+            onSelectTrace={(selectedTraceId) =>
+              setState((previous) => ({ ...previous, selectedTraceId }))
+            }
+            onClose={() =>
+              setState((previous) => ({ ...previous, detailOpen: false }))
+            }
+          />
         </section>
       </Spin>
     </main>
   );
 }
 
-function RepositoryPanel({
-  repositories,
-  selectedRepoId,
-  onSelect,
+function Header({
+  repo,
+  agent,
+  session,
+  sseStatus,
+  detailOpen,
+  onRefresh,
+  onToggleDetail,
 }: {
-  repositories: CodeRepository[];
-  selectedRepoId?: string;
-  onSelect: (repoId: string) => void;
+  repo?: CodeRepository;
+  agent?: Agent;
+  session?: ChatSession;
+  sseStatus: SseStatus;
+  detailOpen: boolean;
+  onRefresh: () => void;
+  onToggleDetail: () => void;
 }) {
   return (
-    <>
-      <PanelHeader title="仓库 / 项目" badge={repositories.length} />
-      {repositories.length === 0 ? (
-        <Empty description="暂无代码仓库，等待后端 /api/code-repositories 返回数据" />
-      ) : (
-        <List
-          dataSource={repositories}
-          renderItem={(repo) => (
-            <button
-              className={`list-row ${repo.id === selectedRepoId ? "selected" : ""}`}
-              onClick={() => onSelect(repo.id)}
-              type="button"
-            >
-              <span className="row-title">{repo.name}</span>
-              <span className="row-subtitle">{repo.language ?? "java"}</span>
-              <Tag color={repo.status === "READY" ? "green" : "default"}>
-                {repo.status ?? "UNKNOWN"}
-              </Tag>
-            </button>
-          )}
-        />
-      )}
-    </>
+    <header className="console-header">
+      <div className="brand-block">
+        <Typography.Title level={4} className="console-title">
+          JChatMind Web Console
+        </Typography.Title>
+        <Typography.Text type="secondary">
+          面向代码问答、工具调用和 Agent Trace 的主入口
+        </Typography.Text>
+      </div>
+      <div className="header-context">
+        <ContextPill label="Repo" value={repo?.name ?? "未选择"} />
+        <ContextPill label="Agent" value={agent?.name ?? "未选择"} />
+        <ContextPill label="Conversation" value={session?.title ?? "未选择"} />
+        <Tag color={sseStatusColor(sseStatus)}>{sseStatusLabel(sseStatus)}</Tag>
+        <Tooltip title="重新加载仓库、Agent、会话和当前 Trace">
+          <Button icon={<ReloadOutlined />} onClick={onRefresh}>
+            刷新
+          </Button>
+        </Tooltip>
+        <Tooltip title={detailOpen ? "收起 Trace / Audit" : "展开 Trace / Audit"}>
+          <Button
+            icon={detailOpen ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />}
+            onClick={onToggleDetail}
+          />
+        </Tooltip>
+      </div>
+    </header>
   );
 }
 
-function ConversationPanel({
+function ContextPill({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="context-pill">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </span>
+  );
+}
+
+function Sidebar({
+  repositories,
   sessions,
-  selectedSessionId,
-  selectedRepo,
   agents,
-  onCreate,
-  onSelect,
+  selectedRepoId,
+  selectedSessionId,
+  selectedAgentId,
+  onSelectRepo,
+  onSelectAgent,
+  onSelectSession,
+  onCreateSession,
 }: {
+  repositories: CodeRepository[];
   sessions: ChatSession[];
-  selectedSessionId?: string;
-  selectedRepo?: CodeRepository;
   agents: Agent[];
-  onCreate: () => void;
-  onSelect: (sessionId: string) => void;
+  selectedRepoId?: string;
+  selectedSessionId?: string;
+  selectedAgentId?: string;
+  onSelectRepo: (repoId: string) => void;
+  onSelectAgent: (agentId: string) => void;
+  onSelectSession: (sessionId: string) => void;
+  onCreateSession: () => void;
 }) {
-  const agentName = (agentId: string) =>
-    agents.find((agent) => agent.id === agentId)?.name ?? agentId;
+  const selectedRepo = repositories.find((repo) => repo.id === selectedRepoId);
+  const visibleSessions = sessions.slice(0, MAX_VISIBLE_SESSIONS);
 
   return (
-    <>
-      <PanelHeader
-        title="会话列表"
-        badge={sessions.length}
-        action={
-          <Button size="small" icon={<PlusOutlined />} onClick={onCreate}>
-            新建
-          </Button>
-        }
-      />
-      <div className="binding-hint">
-        当前 repo: {selectedRepo?.name ?? "未选择"}。后端会话模型暂无 repoId，
-        这里保留绑定入口。
-      </div>
-      {sessions.length === 0 ? (
-        <Empty description="暂无会话，可先选择 Agent 后新建" />
-      ) : (
-        <List
-          dataSource={sessions}
-          renderItem={(session) => (
-            <button
-              className={`list-row ${
-                session.id === selectedSessionId ? "selected" : ""
-              }`}
-              onClick={() => onSelect(session.id)}
-              type="button"
-            >
-              <span className="row-title">{session.title || "未命名会话"}</span>
-              <span className="row-subtitle">Agent: {agentName(session.agentId)}</span>
-            </button>
-          )}
+    <aside className="sidebar">
+      <section className="sidebar-section">
+        <SectionHeader
+          icon={<CodeOutlined />}
+          title="代码仓库"
+          count={repositories.length}
         />
-      )}
-    </>
+        {repositories.length === 0 ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="请先导入代码仓库"
+          />
+        ) : (
+          <div className="repo-list">
+            {repositories.map((repo) => (
+              <button
+                className={`nav-row ${repo.id === selectedRepoId ? "selected" : ""}`}
+                key={repo.id}
+                type="button"
+                onClick={() => onSelectRepo(repo.id)}
+              >
+                <span className="row-main">{repo.name}</span>
+                <span className="row-meta">
+                  <span>{repo.language ?? "unknown"}</span>
+                  <StatusTag status={repo.status} />
+                </span>
+                <span className="row-time">
+                  {formatDate(repo.updatedAt ?? repo.createdAt)}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="sidebar-section">
+        <SectionHeader
+          icon={<CommentOutlined />}
+          title="会话"
+          count={sessions.length}
+          action={
+            <Button size="small" icon={<PlusOutlined />} onClick={onCreateSession}>
+              新建
+            </Button>
+          }
+        />
+        <Select
+          className="agent-select"
+          size="small"
+          placeholder="选择 Agent"
+          value={selectedAgentId}
+          options={agents.map((agent) => ({
+            value: agent.id,
+            label: `${agent.name}${agent.model ? ` / ${agent.model}` : ""}`,
+          }))}
+          onChange={onSelectAgent}
+          notFoundContent="暂无 Agent"
+        />
+        <div className="binding-hint">
+          当前 repo: {selectedRepo?.name ?? "未选择"}。后端 chat_session 暂未绑定
+          repoId，这里仅按当前仓库预留导航上下文。
+        </div>
+        {sessions.length === 0 ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="新建会话开始提问"
+          />
+        ) : (
+          <>
+            <div className="conversation-list">
+              {visibleSessions.map((session) => (
+                <button
+                  className={`nav-row compact ${
+                    session.id === selectedSessionId ? "selected" : ""
+                  }`}
+                  key={session.id}
+                  type="button"
+                  onClick={() => onSelectSession(session.id)}
+                >
+                  <span className="row-main">{session.title || "未命名会话"}</span>
+                  <span className="row-meta">
+                    <span>Agent: {agentName(agents, session.agentId)}</span>
+                  </span>
+                  <span className="row-time">
+                    {formatDate(session.updatedAt ?? session.createdAt)}
+                  </span>
+                </button>
+              ))}
+            </div>
+            {sessions.length > MAX_VISIBLE_SESSIONS ? (
+              <div className="list-note">
+                已按最近使用显示前 {MAX_VISIBLE_SESSIONS} 条，共 {sessions.length} 条。
+              </div>
+            ) : null}
+          </>
+        )}
+      </section>
+    </aside>
   );
 }
 
@@ -534,43 +657,114 @@ function ChatPanel({
   session,
   agent,
   messages,
+  traces,
   draft,
   sending,
+  sessionError,
+  sseStatus,
   onDraftChange,
   onSend,
+  onOpenTrace,
+  onOpenTools,
+  onRetrySession,
 }: {
   repo?: CodeRepository;
   session?: ChatSession;
   agent?: Agent;
   messages: ChatMessage[];
+  traces: AgentTaskTrace[];
   draft: string;
   sending: boolean;
+  sessionError?: string;
+  sseStatus: SseStatus;
   onDraftChange: (value: string) => void;
   onSend: () => void;
+  onOpenTrace: (traceId?: string) => void;
+  onOpenTools: () => void;
+  onRetrySession: () => void;
 }) {
+  const latestTrace = traces[0];
+  const toolCallCount = traces.reduce(
+    (count, trace) => count + (trace.toolCalls?.length ?? 0),
+    0,
+  );
+
   return (
-    <>
-      <PanelHeader
-        title="Chat 对话"
-        badge={messages.length}
-        action={
-          <Space size={6} wrap>
-            <Tag>{repo?.name ?? "未选择 repo"}</Tag>
-            <Tag color="blue">{session?.title ?? "未选择会话"}</Tag>
-          </Space>
-        }
-      />
-      <div className="chat-context">
-        <span>Agent: {agent?.name ?? "未选择"}</span>
-        <span>Conversation: {session?.id ?? "无"}</span>
+    <section className="chat-panel">
+      <div className="chat-heading">
+        <div>
+          <Typography.Title level={4} className="panel-title">
+            代码助手
+          </Typography.Title>
+          <Typography.Text type="secondary">
+            选择仓库和会话后提问，回答优先展示自然语言；证据和工具细节在右侧查看。
+          </Typography.Text>
+        </div>
+        <Space wrap>
+          <Tag>{repo?.name ?? "未选择 repo"}</Tag>
+          <Tag color="blue">{agent?.name ?? "未选择 Agent"}</Tag>
+          {latestTrace ? (
+            <Button
+              size="small"
+              icon={<AuditOutlined />}
+              onClick={() => onOpenTrace(latestTrace.id)}
+            >
+              Trace
+            </Button>
+          ) : null}
+          <Button size="small" icon={<ToolOutlined />} onClick={onOpenTools}>
+            Tool {toolCallCount}
+          </Button>
+        </Space>
       </div>
+
+      {sessionError ? (
+        <Alert
+          className="session-alert"
+          type="error"
+          showIcon
+          message="当前会话数据加载失败"
+          description={sessionError}
+          action={
+            <Button size="small" onClick={onRetrySession}>
+              重试
+            </Button>
+          }
+        />
+      ) : null}
+
       <div className="message-list">
-        {messages.length === 0 ? (
-          <Empty description="暂无消息，输入问题后将通过现有 chat message + SSE 链路触发 Agent" />
+        {!session ? (
+          <Empty description="请选择或新建会话后开始提问" />
+        ) : messages.length === 0 ? (
+          <Empty description="新建会话开始提问" />
         ) : (
-          messages.map((item) => <MessageBubble key={item.id} message={item} />)
+          messages.map((item) => (
+            <MessageBubble
+              key={item.id}
+              message={item}
+              onOpenTools={onOpenTools}
+            />
+          ))
         )}
+        {sending ? (
+          <div className="typing-row">
+            <span className="typing-dot" />
+            正在发送并等待 Agent 响应
+          </div>
+        ) : null}
       </div>
+
+      {sseStatus === "interrupted" ? (
+        <Alert
+          className="sse-alert"
+          type="warning"
+          showIcon
+          message="SSE 连接已断开"
+          description="可以继续发送消息；如需恢复实时事件，请刷新或重新选择当前会话。"
+        />
+      ) : null}
+
       <div className="composer">
         <Input.TextArea
           value={draft}
@@ -595,131 +789,568 @@ function ChatPanel({
           发送
         </Button>
       </div>
-    </>
+    </section>
   );
 }
 
-function TracePanel({
-  traces,
-  events,
-  sessionId,
+function MessageBubble({
+  message,
+  onOpenTools,
 }: {
-  traces: AgentTaskTrace[];
-  events: AgentSseEvent[];
-  sessionId?: string;
+  message: ChatMessage;
+  onOpenTools: () => void;
 }) {
-  const toolCalls = traces.flatMap((trace) => trace.toolCalls ?? []);
-  return (
-    <>
-      <PanelHeader title="Trace / Audit" badge={toolCalls.length + events.length} />
-      {!sessionId ? (
-        <Empty description="选择会话后展示 Agent run、tool calls 和 SSE 事件" />
-      ) : (
-        <div className="trace-body">
-          <section>
-            <Typography.Text strong>持久化 Agent Run</Typography.Text>
-            {traces.length === 0 ? (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="暂无 agent_task/tool_call_log 数据"
-              />
-            ) : (
-              traces.map((trace) => (
-                <div className="trace-run" key={trace.id}>
-                  <Space wrap>
-                    <Tag color={statusColor(trace.status)}>{trace.status}</Tag>
-                    <span>{trace.traceId ?? trace.id}</span>
-                    <span>{formatLatency(trace.latencyMs)}</span>
-                  </Space>
-                  <div className="trace-summary">
-                    {trace.finishReason ?? trace.goal ?? "agent run"}
-                  </div>
-                  <ToolCallList toolCalls={trace.toolCalls ?? []} />
-                </div>
-              ))
-            )}
-          </section>
+  const roleLabel = roleText(message.role);
+  const isTool = message.role === "tool";
+  const isAssistant = message.role === "assistant";
 
-          <section>
-            <Typography.Text strong>实时 SSE 事件</Typography.Text>
-            {events.length === 0 ? (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="暂无实时事件；连接建立后会显示 tool/start/result/done"
-              />
-            ) : (
-              events.map((event, index) => (
-                <div className="event-row" key={`${event.eventId ?? index}`}>
-                  <Tag color={event.type === "error" ? "red" : "processing"}>
-                    {event.type ?? "event"}
-                  </Tag>
-                  <span>{event.taskId ?? "no-task"}</span>
-                  <pre>{summarizeEvent(event.payload)}</pre>
-                </div>
-              ))
-            )}
-          </section>
-        </div>
+  return (
+    <article className={`message-bubble role-${message.role}`}>
+      <div className="message-meta">
+        <span>{roleLabel}</span>
+        <span>{formatDate(message.createdAt)}</span>
+      </div>
+      {isTool ? (
+        <ToolMessage message={message} onOpenTools={onOpenTools} />
+      ) : isAssistant ? (
+        <MarkdownContent content={message.content} />
+      ) : (
+        <LongText text={message.content} />
       )}
-    </>
+    </article>
   );
 }
 
-function ToolCallList({ toolCalls }: { toolCalls: ToolCallTrace[] }) {
-  if (toolCalls.length === 0) {
-    return <div className="empty-line">本次 run 未记录工具调用</div>;
+function ToolMessage({
+  message,
+  onOpenTools,
+}: {
+  message: ChatMessage;
+  onOpenTools: () => void;
+}) {
+  const summary = summarizeToolMessage(message);
+  const normalizedContent = normalizeToolContent(message.content);
+
+  return (
+    <div className="tool-message">
+      <div className="tool-card-head">
+        <Space wrap size={6}>
+          <Tag icon={<ToolOutlined />}>{summary.toolName}</Tag>
+          <Tag color="success">local tool</Tag>
+          <Tag>{summary.evidence.length} evidence</Tag>
+        </Space>
+        <Button size="small" type="text" onClick={onOpenTools}>
+          查看 Trace
+        </Button>
+      </div>
+      <div className="tool-summary-text">{summary.summary}</div>
+      <EvidenceList evidence={summary.evidence} />
+      <Collapse
+        ghost
+        size="small"
+        expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+        items={[
+          {
+            key: "raw",
+            label: "展开 tool 原始结果",
+            children: <RawBlock value={normalizedContent} />,
+          },
+        ]}
+      />
+    </div>
+  );
+}
+
+function MarkdownContent({ content }: { content: string }) {
+  if (!content) {
+    return <span className="muted">无内容</span>;
+  }
+  if (content.length <= LONG_TEXT_LIMIT) {
+    return (
+      <div className="markdown-body">
+        <XMarkdown content={content} />
+      </div>
+    );
+  }
+  const preview = content.slice(0, LONG_TEXT_LIMIT);
+  return (
+    <div className="markdown-body">
+      <XMarkdown content={`${preview}\n\n...`} />
+      <Collapse
+        ghost
+        size="small"
+        items={[
+          {
+            key: "full",
+            label: "展开完整回答",
+            children: <XMarkdown content={content} />,
+          },
+        ]}
+      />
+    </div>
+  );
+}
+
+function LongText({ text }: { text: string }) {
+  if (!text) {
+    return <span className="muted">无内容</span>;
+  }
+  if (text.length <= LONG_TEXT_LIMIT) {
+    return <div className="plain-text">{text}</div>;
   }
   return (
-    <div className="tool-list">
-      {toolCalls.map((call) => (
-        <div className="tool-row" key={call.id}>
-          <Space wrap>
-            <Tag color={call.blockedByPolicy ? "red" : statusColor(call.status)}>
-              {call.blockedByPolicy ? "denied" : call.status ?? "unknown"}
-            </Tag>
-            <Tag>{toolKind(call)}</Tag>
-            <span className="tool-name">
-              {call.actualToolName ?? call.toolName ?? "unknown_tool"}
-            </span>
-            <span>{formatLatency(call.latencyMs)}</span>
-            {call.errorType ? <Tag color="volcano">{call.errorType}</Tag> : null}
-          </Space>
-          <div className="tool-summary">
-            {call.errorMessage ?? call.resultSummary ?? "无结果摘要"}
-          </div>
+    <div>
+      <div className="plain-text">{text.slice(0, LONG_TEXT_LIMIT)}...</div>
+      <Collapse
+        ghost
+        size="small"
+        items={[
+          {
+            key: "full",
+            label: "展开完整文本",
+            children: <RawBlock value={text} />,
+          },
+        ]}
+      />
+    </div>
+  );
+}
+
+function DetailPanel({
+  open,
+  mode,
+  traces,
+  selectedTrace,
+  toolCalls,
+  events,
+  sessionId,
+  onModeChange,
+  onSelectTrace,
+  onClose,
+}: {
+  open: boolean;
+  mode: DetailMode;
+  traces: AgentTaskTrace[];
+  selectedTrace?: AgentTaskTrace;
+  toolCalls: ToolCallTrace[];
+  events: AgentSseEvent[];
+  sessionId?: string;
+  onModeChange: (mode: DetailMode) => void;
+  onSelectTrace: (traceId: string) => void;
+  onClose: () => void;
+}) {
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <aside className="detail-panel">
+      <div className="detail-header">
+        <div>
+          <Typography.Title level={5} className="panel-title">
+            Trace / Audit
+          </Typography.Title>
+          <Typography.Text type="secondary">
+            摘要优先，raw detail 默认折叠
+          </Typography.Text>
         </div>
+        <Button size="small" type="text" icon={<MenuFoldOutlined />} onClick={onClose} />
+      </div>
+
+      <div className="detail-tabs">
+        <button
+          className={mode === "trace" ? "active" : ""}
+          type="button"
+          onClick={() => onModeChange("trace")}
+        >
+          Runs <Badge count={traces.length} />
+        </button>
+        <button
+          className={mode === "tools" ? "active" : ""}
+          type="button"
+          onClick={() => onModeChange("tools")}
+        >
+          Tools <Badge count={toolCalls.length} />
+        </button>
+        <button
+          className={mode === "events" ? "active" : ""}
+          type="button"
+          onClick={() => onModeChange("events")}
+        >
+          SSE <Badge count={events.length} />
+        </button>
+      </div>
+
+      {!sessionId ? (
+        <Empty description="选择会话后展示 Trace / Audit" />
+      ) : mode === "trace" ? (
+        <TraceRunPanel
+          traces={traces}
+          selectedTrace={selectedTrace}
+          onSelectTrace={onSelectTrace}
+        />
+      ) : mode === "tools" ? (
+        <ToolAuditPanel toolCalls={toolCalls} />
+      ) : (
+        <SseEventPanel events={events} />
+      )}
+    </aside>
+  );
+}
+
+function TraceRunPanel({
+  traces,
+  selectedTrace,
+  onSelectTrace,
+}: {
+  traces: AgentTaskTrace[];
+  selectedTrace?: AgentTaskTrace;
+  onSelectTrace: (traceId: string) => void;
+}) {
+  if (traces.length === 0) {
+    return <Empty description="当前会话暂无 Agent Run 记录" />;
+  }
+
+  return (
+    <div className="trace-panel-content">
+      <Select
+        className="trace-select"
+        value={selectedTrace?.id}
+        options={traces.map((trace) => ({
+          value: trace.id,
+          label: `${trace.status ?? "UNKNOWN"} / ${trace.traceId ?? trace.id}`,
+        }))}
+        onChange={onSelectTrace}
+      />
+      {selectedTrace ? <TraceRun trace={selectedTrace} /> : null}
+    </div>
+  );
+}
+
+function TraceRun({ trace }: { trace: AgentTaskTrace }) {
+  return (
+    <section className="trace-run">
+      <div className="trace-summary-grid">
+        <Metric label="runId" value={trace.traceId ?? trace.id} />
+        <Metric label="status" value={trace.status ?? "UNKNOWN"} />
+        <Metric label="latency" value={formatLatency(trace.latencyMs)} />
+        <Metric label="steps" value={String(trace.actualSteps ?? trace.steps?.length ?? 0)} />
+        <Metric label="tool calls" value={String(trace.toolCallCount ?? trace.toolCalls?.length ?? 0)} />
+        <Metric label="model" value={trace.modelName ?? "n/a"} />
+      </div>
+      {trace.errorMessage ? (
+        <Alert
+          className="trace-error"
+          type="error"
+          showIcon
+          message="Agent Run 失败"
+          description={trace.errorMessage}
+        />
+      ) : null}
+      <div className="step-list">
+        {(trace.steps ?? []).length === 0 ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="当前 run 暂无 step 记录"
+          />
+        ) : (
+          trace.steps.map((step) => <TraceStep key={step.id} step={step} />)
+        )}
+      </div>
+      <Collapse
+        size="small"
+        items={[
+          {
+            key: "run-raw",
+            label: "raw run detail",
+            children: <RawBlock value={trace} />,
+          },
+        ]}
+      />
+    </section>
+  );
+}
+
+function TraceStep({ step }: { step: AgentStepTrace }) {
+  return (
+    <div className="step-row">
+      <div className="step-head">
+        <Space wrap size={6}>
+          <Tag>Step {step.stepNo ?? "-"}</Tag>
+          <Tag color={statusColor(step.status)}>{step.status ?? "UNKNOWN"}</Tag>
+          <span>{step.stepType ?? "step"}</span>
+        </Space>
+        <span className="muted">{formatLatency(step.latencyMs)}</span>
+      </div>
+      <div className="step-copy">
+        {step.inputSummary ? <p>{step.inputSummary}</p> : null}
+        {step.outputSummary ? <p>{step.outputSummary}</p> : null}
+        {step.errorMessage ? <p className="danger-text">{step.errorMessage}</p> : null}
+      </div>
+      <Collapse
+        ghost
+        size="small"
+        items={[
+          {
+            key: "step-raw",
+            label: "raw step detail",
+            children: <RawBlock value={step} />,
+          },
+        ]}
+      />
+    </div>
+  );
+}
+
+function ToolAuditPanel({ toolCalls }: { toolCalls: ToolCallTrace[] }) {
+  if (toolCalls.length === 0) {
+    return <Empty description="本次回答未触发工具调用" />;
+  }
+
+  return (
+    <div className="tool-audit-list">
+      {toolCalls.map((call) => (
+        <ToolCallCard key={call.id} call={call} />
       ))}
     </div>
   );
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function ToolCallCard({ call }: { call: ToolCallTrace }) {
+  const denied = call.blockedByPolicy === true;
+  const summary = call.errorMessage ?? call.resultSummary ?? "暂无结果摘要";
+
   return (
-    <div className={`message-bubble role-${message.role}`}>
-      <div className="message-role">{message.role}</div>
-      <div className="message-content">{message.content}</div>
+    <article className="tool-call-card">
+      <div className="tool-card-head">
+        <Space wrap size={6}>
+          <Tag color={denied ? "red" : statusColor(call.status)}>
+            {denied ? "DENIED" : call.status ?? "UNKNOWN"}
+          </Tag>
+          <Tag>{toolKind(call)}</Tag>
+          <strong>{call.actualToolName ?? call.toolName ?? "unknown_tool"}</strong>
+        </Space>
+        <span className="muted">{formatLatency(call.latencyMs)}</span>
+      </div>
+      <div className="tool-summary-text">{summary}</div>
+      <Space wrap size={6}>
+        {call.errorType ? <Tag color="volcano">{call.errorType}</Tag> : null}
+        {call.argumentTruncated ? <Tag>arguments truncated</Tag> : null}
+        {call.resultTruncated ? <Tag>result truncated</Tag> : null}
+      </Space>
+      <Collapse
+        ghost
+        size="small"
+        items={[
+          {
+            key: "tool-raw",
+            label: "raw tool detail",
+            children: <RawBlock value={call} />,
+          },
+        ]}
+      />
+    </article>
+  );
+}
+
+function SseEventPanel({ events }: { events: AgentSseEvent[] }) {
+  if (events.length === 0) {
+    return <Empty description="当前会话暂无实时 SSE 事件" />;
+  }
+
+  return (
+    <div className="event-list">
+      {events.map((event, index) => (
+        <article className="event-row" key={event.eventId ?? `${event.type}-${index}`}>
+          <div className="tool-card-head">
+            <Space wrap size={6}>
+              <Tag color={event.type === "error" ? "red" : "processing"}>
+                {event.type ?? "event"}
+              </Tag>
+              <span>{event.taskId ?? "no-task"}</span>
+            </Space>
+            <span className="muted">{formatDate(event.timestamp)}</span>
+          </div>
+          <div className="tool-summary-text">{summarizeEvent(event.payload)}</div>
+          <Collapse
+            ghost
+            size="small"
+            items={[
+              {
+                key: "event-raw",
+                label: "raw SSE payload",
+                children: <RawBlock value={event.payload ?? event} />,
+              },
+            ]}
+          />
+        </article>
+      ))}
     </div>
   );
 }
 
-function PanelHeader({
+function EvidenceList({ evidence }: { evidence: CodeEvidence[] }) {
+  if (evidence.length === 0) {
+    return <div className="muted">未解析到代码证据摘要</div>;
+  }
+  return (
+    <div className="evidence-list">
+      {evidence.slice(0, 5).map((item, index) => (
+        <div className="evidence-row" key={`${item.filePath}-${item.lineRange}-${index}`}>
+          <FileSearchOutlined />
+          <div>
+            <div className="evidence-file">
+              {item.filePath ?? "unknown file"}
+              {item.lineRange ? `:${item.lineRange}` : ""}
+            </div>
+            <div className="evidence-meta">
+              {[item.chunkType, item.symbolName, item.apiPath, item.httpMethod, item.score]
+                .filter(Boolean)
+                .join(" / ") || "no metadata"}
+            </div>
+          </div>
+        </div>
+      ))}
+      {evidence.length > 5 ? (
+        <div className="list-note">还有 {evidence.length - 5} 条证据在原始结果中</div>
+      ) : null}
+    </div>
+  );
+}
+
+function SectionHeader({
+  icon,
   title,
-  badge,
+  count,
   action,
 }: {
+  icon: ReactNode;
   title: string;
-  badge?: number;
+  count: number;
   action?: ReactNode;
 }) {
   return (
-    <div className="panel-header">
-      <Space>
-        <Typography.Title level={5}>{title}</Typography.Title>
-        {typeof badge === "number" ? <Badge count={badge} /> : null}
+    <div className="section-header">
+      <Space size={8}>
+        {icon}
+        <strong>{title}</strong>
+        <Badge count={count} />
       </Space>
       {action}
     </div>
   );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function StatusTag({ status }: { status?: string }) {
+  return <Tag color={repoStatusColor(status)}>{status ?? "UNKNOWN"}</Tag>;
+}
+
+function RawBlock({ value }: { value: unknown }) {
+  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  return <pre className="raw-block">{text}</pre>;
+}
+
+function summarizeToolMessage(message: ChatMessage): ToolMessageSummary {
+  const content = normalizeToolContent(message.content);
+  const toolName =
+    message.metadata?.toolResponse?.name ??
+    inferToolName(content) ??
+    "tool result";
+  const evidence = parseCodeEvidence(content);
+  const summary =
+    evidence.length > 0
+      ? `命中 ${evidence.length} 个代码证据：${evidence
+          .slice(0, 2)
+          .map((item) => item.filePath)
+          .filter(Boolean)
+          .join(", ")}`
+      : firstMeaningfulLine(content) || "工具已返回结果，原始内容已折叠。";
+  return { toolName, summary, evidence };
+}
+
+function parseCodeEvidence(content: string): CodeEvidence[] {
+  const normalized = normalizeToolContent(content);
+  if (!normalized.includes("[code snippet]")) {
+    return [];
+  }
+  return normalized
+    .split("[code snippet]")
+    .slice(1)
+    .map((block) => ({
+      filePath: lineValue(block, "filePath"),
+      lineRange: lineValue(block, "lineRange"),
+      chunkType: lineValue(block, "chunkType"),
+      symbolName: lineValue(block, "symbolName"),
+      apiPath: lineValue(block, "apiPath"),
+      httpMethod: lineValue(block, "httpMethod"),
+      score: lineValue(block, "score"),
+    }))
+    .filter((item) => item.filePath || item.symbolName || item.apiPath);
+}
+
+function normalizeToolContent(content: string): string {
+  if (!content) {
+    return "";
+  }
+  const trimmed = content.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (typeof parsed === "string") {
+        return parsed;
+      }
+    } catch {
+      // Fall through to conservative unescape for legacy persisted tool strings.
+    }
+  }
+  return trimmed
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\"/g, '"');
+}
+
+function lineValue(block: string, key: string): string | undefined {
+  const match = block.match(new RegExp(`^${key}:\\s*(.*)$`, "m"));
+  const value = match?.[1]?.trim();
+  return value || undefined;
+}
+
+function inferToolName(content: string): string | undefined {
+  if (content.includes("Selected code evidence")) {
+    return "searchProjectCode";
+  }
+  if (content.includes("No related code evidence found")) {
+    return "searchProjectCode";
+  }
+  return undefined;
+}
+
+function firstMeaningfulLine(content: string): string {
+  return content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0)
+    ?.slice(0, 240) ?? "";
+}
+
+function sortSessions(sessions: ChatSession[]): ChatSession[] {
+  return [...sessions].sort((left, right) => {
+    const leftTime = Date.parse(left.updatedAt ?? left.createdAt ?? "");
+    const rightTime = Date.parse(right.updatedAt ?? right.createdAt ?? "");
+    return (Number.isNaN(rightTime) ? 0 : rightTime) - (Number.isNaN(leftTime) ? 0 : leftTime);
+  });
 }
 
 function hasId<T extends { id: string }>(items: T[], id: string): boolean {
@@ -760,11 +1391,28 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
+function roleText(role: string): string {
+  if (role === "assistant") {
+    return "Assistant";
+  }
+  if (role === "user") {
+    return "User";
+  }
+  if (role === "tool") {
+    return "Tool";
+  }
+  return role;
+}
+
+function agentName(agents: Agent[], agentId: string): string {
+  return agents.find((agent) => agent.id === agentId)?.name ?? agentId;
+}
+
 function statusColor(status?: string) {
-  if (status === "SUCCESS") {
+  if (status === "SUCCESS" || status === "COMPLETED") {
     return "green";
   }
-  if (status === "FAILED" || status === "CRASHED") {
+  if (status === "FAILED" || status === "CRASHED" || status === "ERROR") {
     return "red";
   }
   if (status === "RUNNING") {
@@ -773,20 +1421,83 @@ function statusColor(status?: string) {
   return "default";
 }
 
+function repoStatusColor(status?: string) {
+  if (status === "READY" || status === "SUCCESS") {
+    return "green";
+  }
+  if (status === "FAILED") {
+    return "red";
+  }
+  if (status === "IMPORTING" || status === "RUNNING") {
+    return "blue";
+  }
+  return "default";
+}
+
+function sseStatusColor(status: SseStatus) {
+  if (status === "connected") {
+    return "green";
+  }
+  if (status === "interrupted") {
+    return "orange";
+  }
+  if (status === "connecting") {
+    return "blue";
+  }
+  return "default";
+}
+
+function sseStatusLabel(status: SseStatus) {
+  if (status === "connected") {
+    return "SSE connected";
+  }
+  if (status === "interrupted") {
+    return "SSE interrupted";
+  }
+  if (status === "connecting") {
+    return "SSE connecting";
+  }
+  return "SSE idle";
+}
+
 function toolKind(call: ToolCallTrace) {
   const name = call.actualToolName ?? call.toolName ?? "";
   return name.startsWith("mcp_") ? "MCP tool" : "local tool";
 }
 
 function formatLatency(value?: number) {
-  return typeof value === "number" ? `${value} ms` : "latency n/a";
+  return typeof value === "number" ? `${value} ms` : "n/a";
+}
+
+function formatDate(value?: string) {
+  if (!value) {
+    return "n/a";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function summarizeEvent(payload?: Record<string, unknown>) {
   if (!payload) {
-    return "";
+    return "无 payload";
   }
-  return JSON.stringify(payload, null, 2).slice(0, 360);
+  const keys = ["toolName", "actualToolName", "status", "resultSummary", "errorMessage", "finishReason"];
+  const values = keys
+    .map((key) => payload[key])
+    .filter((value) => typeof value === "string" && value.length > 0)
+    .map(String);
+  if (values.length > 0) {
+    return values.join(" / ").slice(0, 280);
+  }
+  return JSON.stringify(payload).slice(0, 280);
 }
 
 export default App;

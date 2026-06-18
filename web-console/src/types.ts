@@ -21,6 +21,9 @@ export interface ChatSession {
   id: string;
   agentId: string;
   title?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export type MessageRole = "user" | "assistant" | "system" | "tool";
@@ -30,7 +33,24 @@ export interface ChatMessage {
   sessionId: string;
   role: MessageRole;
   content: string;
-  metadata?: Record<string, unknown>;
+  metadata?: ChatMessageMetadata;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ChatMessageMetadata {
+  toolResponse?: {
+    id?: string;
+    name?: string;
+    responseData?: string;
+  };
+  toolCalls?: Array<{
+    id?: string;
+    type?: string;
+    name?: string;
+    arguments?: string;
+  }>;
+  [key: string]: unknown;
 }
 
 export interface AgentTaskTrace {
@@ -42,6 +62,7 @@ export interface AgentTaskTrace {
   goal?: string;
   finishReason?: string;
   modelName?: string;
+  maxSteps?: number;
   actualSteps?: number;
   toolCallCount?: number;
   latencyMs?: number;
@@ -64,6 +85,8 @@ export interface AgentStepTrace {
   latencyMs?: number;
   modelName?: string;
   llmLatencyMs?: number;
+  inputTokens?: number;
+  outputTokens?: number;
   finishReason?: string;
   startedAt?: string;
   finishedAt?: string;
