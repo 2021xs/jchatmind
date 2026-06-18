@@ -21,6 +21,14 @@ public class MultiChatClientConfig {
         return buildDeepSeekClient(apiKey, baseUrl, model);
     }
 
+    @Bean("gpt-compatible-chat")
+    public ChatClient gptCompatibleChatClient(
+            @Value("${jchatmind.ai.gpt.compatible.api-key}") String apiKey,
+            @Value("${jchatmind.ai.gpt.compatible.base-url}") String baseUrl,
+            @Value("${jchatmind.ai.gpt.compatible.model}") String model) {
+        return buildDeepSeekClient(apiKey, baseUrl, model);
+    }
+
     private ChatClient buildDeepSeekClient(String apiKey, String baseUrl, String model) {
         DeepSeekApi deepSeekApi = DeepSeekApi.builder()
                 .apiKey(apiKey)

@@ -58,6 +58,11 @@ jchatmind:
         api-key: ${DEEPSEEK_OFFICIAL_API_KEY:your-api-key}
         base-url: ${DEEPSEEK_OFFICIAL_BASE_URL:https://api.deepseek.com}
         model: ${DEEPSEEK_OFFICIAL_MODEL:deepseek-chat}
+    gpt:
+      compatible:
+        api-key: ${GPT_COMPATIBLE_API_KEY:your-api-key}
+        base-url: ${GPT_COMPATIBLE_BASE_URL:https://api.openai.com/v1}
+        model: ${GPT_COMPATIBLE_MODEL:gpt-5.5}
   code-rag:
     # Final answer-time Code RAG path:
     # RAW_VECTOR candidates + LLM evidence selector.

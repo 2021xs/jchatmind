@@ -12,20 +12,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
 @EnabledIfEnvironmentVariable(named = "JCHATMIND_REAL_CHAT_CLIENT_ENABLED", matches = "true")
-class DeepSeekOfficialChatClientManualIntegrationTest {
+class GptCompatibleChatClientManualIntegrationTest {
 
     @Autowired
-    @Qualifier("deepseek-official-chat")
+    @Qualifier("gpt-compatible-chat")
     private ChatClient chatClient;
 
     @Autowired
     private ChatClientRegistry chatClientRegistry;
 
-    @Value("${jchatmind.ai.deepseek.official.model}")
+    @Value("${jchatmind.ai.gpt.compatible.model}")
     private String configuredModel;
 
     @Test
-    void configuredOfficialChatClientCanCompleteSimpleConversation() {
+    void configuredGptCompatibleChatClientCanCompleteSimpleConversation() {
         String answer = chatClient.prompt()
                 .system("You are a configuration smoke test. Follow the user's exact output instruction.")
                 .user("Reply with exactly: JChatMind GPT 5.5 ok")
@@ -34,6 +34,7 @@ class DeepSeekOfficialChatClientManualIntegrationTest {
 
         assertThat(configuredModel).isEqualTo("gpt-5.5");
         assertThat(chatClientRegistry.get("gpt-5.5")).isSameAs(chatClient);
+        assertThat(chatClientRegistry.get("deepseek-chat")).isNotSameAs(chatClient);
         assertThat(answer).contains("JChatMind GPT 5.5 ok");
     }
 }

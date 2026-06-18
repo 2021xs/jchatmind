@@ -16,20 +16,27 @@ public class ChatClientRegistry {
 
     @Autowired
     public ChatClientRegistry(Map<String, ChatClient> chatClients,
-                              @Value("${jchatmind.ai.deepseek.official.model:}") String officialModel) {
-        this(chatClients, officialModel, true);
+                              @Value("${jchatmind.ai.deepseek.official.model:}") String deepSeekOfficialModel,
+                              @Value("${jchatmind.ai.gpt.compatible.model:}") String gptCompatibleModel) {
+        this(chatClients, deepSeekOfficialModel, gptCompatibleModel, true);
     }
 
     public ChatClientRegistry(Map<String, ChatClient> chatClients) {
-        this(chatClients, null, true);
+        this(chatClients, null, null, true);
     }
 
-    private ChatClientRegistry(Map<String, ChatClient> chatClients, String officialModel, boolean registerAliases) {
+    ChatClientRegistry(Map<String, ChatClient> chatClients,
+                       String deepSeekOfficialModel,
+                       String gptCompatibleModel,
+                       boolean registerAliases) {
         this.chatClients = new LinkedHashMap<>(chatClients);
         if (registerAliases) {
             registerCompatibleAlias("deepseek-chat", "deepseek-official-chat");
-            if (StringUtils.hasText(officialModel)) {
-                registerCompatibleAlias(officialModel.trim(), "deepseek-official-chat");
+            if (StringUtils.hasText(deepSeekOfficialModel)) {
+                registerCompatibleAlias(deepSeekOfficialModel.trim(), "deepseek-official-chat");
+            }
+            if (StringUtils.hasText(gptCompatibleModel)) {
+                registerCompatibleAlias(gptCompatibleModel.trim(), "gpt-compatible-chat");
             }
         }
     }
