@@ -103,18 +103,30 @@ export function useSessionSse({
     source.addEventListener("error", appendAgentEvent);
     source.addEventListener("message", appendLegacyMessage);
     source.onerror = () => {
-      setState((previous) => ({
-        ...previous,
-        sseStatus: "error",
-        sseEvents: [
-          {
-            type: "error",
-            timestamp: new Date().toISOString(),
-            payload: { errorMessage: "SSE connection interrupted" },
-          },
-          ...previous.sseEvents,
-        ].slice(0, 80),
-      }));
+      setState((previous) => {
+        const activeRun =
+          previous.sending ||
+          previous.messageStatus === "sending" ||
+          previous.messageStatus === "generating";
+        if (!activeRun) {
+          return {
+            ...previous,
+            sseStatus: "disconnected",
+          };
+        }
+        return {
+          ...previous,
+          sseStatus: "error",
+          sseEvents: [
+            {
+              type: "error",
+              timestamp: new Date().toISOString(),
+              payload: { errorMessage: "SSE connection interrupted during active run" },
+            },
+            ...previous.sseEvents,
+          ].slice(0, 80),
+        };
+      });
     };
 
     return () => {
