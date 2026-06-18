@@ -130,3 +130,11 @@ export interface LegacySseMessage {
   };
   metadata?: Record<string, unknown>;
 }
+
+export interface WebConsoleChatSendResponse {
+  userMessageId: string;
+  assistantMessageId?: string;
+  runId?: string;
+  conversationId: string;
+  sseUrl?: string;
+}

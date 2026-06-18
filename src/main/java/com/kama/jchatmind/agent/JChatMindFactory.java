@@ -27,6 +27,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.aop.support.AopUtils;
@@ -256,16 +257,25 @@ public class JChatMindFactory {
     }
 
     public JChatMind create(String agentId, String chatSessionId, String userMessageId) {
+        return create(agentId, chatSessionId, userMessageId, null, null);
+    }
+
+    public JChatMind create(String agentId, String chatSessionId, String userMessageId,
+                           String runtimeSystemContext, String traceId) {
         Agent agent = loadAgent(agentId);
         AgentDTO agentConfig = toAgentConfig(agent);
         List<Message> memory = loadMemory(chatSessionId, agent.getModel());
+        if (StringUtils.hasText(runtimeSystemContext)) {
+            memory = new ArrayList<>(memory);
+            memory.add(0, new SystemMessage(runtimeSystemContext));
+        }
 
         List<KnowledgeBaseDTO> knowledgeBases = resolveRuntimeKnowledgeBases(agentConfig);
         List<Tool> runtimeTools = resolveRuntimeTools(agentConfig);
         List<ToolCallback> toolCallbacks = buildToolCallbacks(runtimeTools);
         List<String> runtimeToolNames = resolveRuntimeToolNames(runtimeTools);
 
-        return buildAgentRuntime(
+        JChatMind runtime = buildAgentRuntime(
                 agent,
                 agentConfig,
                 memory,
@@ -275,5 +285,9 @@ public class JChatMindFactory {
                 chatSessionId,
                 userMessageId
         );
+        if (StringUtils.hasText(traceId)) {
+            runtime.setTraceId(traceId);
+        }
+        return runtime;
     }
 }

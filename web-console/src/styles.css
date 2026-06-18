@@ -283,6 +283,11 @@ button {
   background: #fbfaf7;
 }
 
+.message-bubble.transient-message {
+  border-style: dashed;
+  background: #fafbfc;
+}
+
 .message-meta {
   display: flex;
   justify-content: space-between;
@@ -294,6 +299,67 @@ button {
 .markdown-body {
   color: #202939;
   line-height: 1.65;
+}
+
+.assistant-message {
+  display: grid;
+  gap: 10px;
+}
+
+.reasoning-collapse {
+  border: 1px solid #edf0f3;
+  border-radius: 8px;
+  background: #fafbfc;
+}
+
+.reasoning-trace {
+  display: grid;
+  gap: 10px;
+}
+
+.reasoning-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.reasoning-lines {
+  color: #364152;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.reasoning-lines p {
+  margin: 0 0 4px;
+}
+
+.reasoning-tools {
+  display: grid;
+  gap: 8px;
+}
+
+.reasoning-tool-row {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid #e4e9ef;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.answer-section {
+  display: grid;
+  gap: 6px;
+}
+
+.answer-title {
+  color: #202939;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.compact-step-list .step-row {
+  padding: 8px;
 }
 
 .markdown-body pre,
@@ -558,5 +624,9 @@ button {
   .message-bubble,
   .message-bubble.role-tool {
     max-width: 100%;
+  }
+
+  .reasoning-summary-grid {
+    grid-template-columns: 1fr 1fr;
   }
 }

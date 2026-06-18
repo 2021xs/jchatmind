@@ -81,6 +81,7 @@ public class JChatMind {
     private int toolCallCount = 0;
     private int maxLoopSteps = MAX_STEPS;
     private String finishReason;
+    private String traceId;
     private final Map<String, Integer> toolCorrectionAttempts = new HashMap<>();
 
     private final List<ChatMessageDTO> pendingChatMessages = new ArrayList<>();
@@ -639,13 +640,13 @@ public class JChatMind {
             throw new IllegalStateException("Agent is not idle");
         }
 
-        String traceId = UUID.randomUUID().toString();
+        String effectiveTraceId = StringUtils.hasText(this.traceId) ? this.traceId : UUID.randomUUID().toString();
         AgentTask task = agentTaskLogService.startTask(this.chatSessionId, this.agentId, this.userMessageId,
-                "chat session agent run", this.model, maxLoopSteps, traceId);
+                "chat session agent run", this.model, maxLoopSteps, effectiveTraceId);
         this.currentTaskId = task.getId();
         this.agentExecutionContext = AgentExecutionContext.builder()
                 .taskId(currentTaskId)
-                .traceId(traceId)
+                .traceId(effectiveTraceId)
                 .sessionId(chatSessionId)
                 .agentId(agentId)
                 .modelName(model)
@@ -653,7 +654,7 @@ public class JChatMind {
                 .build();
         sendAgentEvent(AgentSseEvent.Type.MESSAGE_START, payload(
                 "taskId", currentTaskId,
-                "traceId", traceId,
+                "traceId", effectiveTraceId,
                 "agentId", this.agentId,
                 "userMessageId", this.userMessageId
         ));
@@ -698,6 +699,10 @@ public class JChatMind {
 
     public void setMaxLoopSteps(int maxLoopSteps) {
         this.maxLoopSteps = Math.max(1, maxLoopSteps);
+    }
+
+    public void setTraceId(String traceId) {
+        this.traceId = traceId;
     }
 
     public String getFinishReason() {

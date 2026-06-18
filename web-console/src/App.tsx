@@ -53,7 +53,8 @@ import type {
 } from "./types";
 
 type DetailMode = "trace" | "tools" | "events";
-type SseStatus = "idle" | "connecting" | "connected" | "interrupted";
+type SseStatus = "disconnected" | "connecting" | "connected" | "error";
+type MessageStatus = "idle" | "sending" | "generating" | "completed" | "failed";
 
 interface RuntimeState {
   repositories: CodeRepository[];
@@ -70,6 +71,9 @@ interface RuntimeState {
   error?: string;
   sessionError?: string;
   sending: boolean;
+  messageStatus: MessageStatus;
+  activeRunId?: string;
+  activeUserMessageId?: string;
   detailOpen: boolean;
   detailMode: DetailMode;
   sseStatus: SseStatus;
@@ -100,9 +104,10 @@ const defaultState: RuntimeState = {
   sseEvents: [],
   loadState: "idle",
   sending: false,
+  messageStatus: "idle",
   detailOpen: true,
   detailMode: "trace",
-  sseStatus: "idle",
+  sseStatus: "disconnected",
 };
 
 const MAX_VISIBLE_SESSIONS = 24;
@@ -154,7 +159,10 @@ function App() {
         traces: [],
         sseEvents: [],
         selectedTraceId: undefined,
-        sseStatus: "idle",
+        sseStatus: "disconnected",
+        messageStatus: "idle",
+        activeRunId: undefined,
+        activeUserMessageId: undefined,
       }));
       return;
     }
@@ -178,6 +186,22 @@ function App() {
         ...previous,
         sseStatus: "connected",
         sseEvents: [parsed, ...previous.sseEvents].slice(0, 80),
+        messageStatus:
+          parsed.type === "done"
+            ? "completed"
+            : parsed.type === "error"
+              ? "failed"
+              : parsed.type === "message_start" ||
+                  parsed.type === "tool_call_start" ||
+                  parsed.type === "tool_call_result" ||
+                  parsed.type === "step_done"
+                ? "generating"
+                : previous.messageStatus,
+        sending: parsed.type === "done" || parsed.type === "error" ? false : previous.sending,
+        activeRunId:
+          typeof parsed.payload?.traceId === "string"
+            ? parsed.payload.traceId
+            : previous.activeRunId,
         detailMode:
           parsed.type === "tool_call_start" || parsed.type === "tool_call_result"
             ? "tools"
@@ -198,6 +222,14 @@ function App() {
         ...previous,
         sseStatus: "connected",
         messages: upsertMessage(previous.messages, messagePayload),
+        messageStatus:
+          messagePayload.role === "assistant" && !hasToolCalls(messagePayload)
+            ? "completed"
+            : previous.messageStatus,
+        sending:
+          messagePayload.role === "assistant" && !hasToolCalls(messagePayload)
+            ? false
+            : previous.sending,
       }));
     };
 
@@ -216,7 +248,7 @@ function App() {
     source.onerror = () => {
       setState((previous) => ({
         ...previous,
-        sseStatus: "interrupted",
+        sseStatus: "error",
         sseEvents: [
           {
             type: "error",
@@ -330,18 +362,50 @@ function App() {
       return;
     }
     const agentId = selectedSession?.agentId ?? state.selectedAgentId;
+    const repoId = state.selectedRepoId;
     if (!state.selectedSessionId || !agentId) {
       noticeApi.warning("请选择或新建会话");
       return;
     }
+    if (!repoId) {
+      noticeApi.warning("请选择仓库");
+      return;
+    }
     setDraft("");
-    setState((previous) => ({ ...previous, sending: true, sessionError: undefined }));
+    setState((previous) => ({
+      ...previous,
+      sending: true,
+      messageStatus: "sending",
+      activeRunId: undefined,
+      activeUserMessageId: undefined,
+      sessionError: undefined,
+    }));
     try {
-      await sendChatMessage(state.selectedSessionId, agentId, content);
+      const response = await sendChatMessage(state.selectedSessionId, agentId, repoId, content);
+      setState((previous) => ({
+        ...previous,
+        sending: false,
+        messageStatus: "generating",
+        activeRunId: response.runId,
+        activeUserMessageId: response.userMessageId,
+        messages: upsertMessage(previous.messages, {
+          id: response.userMessageId,
+          sessionId: response.conversationId,
+          role: "user",
+          content,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      }));
       await refreshSessionData(state.selectedSessionId);
     } catch (error) {
       noticeApi.error(errorMessage(error));
       setDraft(content);
+      setState((previous) => ({
+        ...previous,
+        sending: false,
+        messageStatus: "failed",
+      }));
     } finally {
       setState((previous) => ({ ...previous, sending: false }));
     }
@@ -430,6 +494,8 @@ function App() {
             traces={state.traces}
             draft={draft}
             sending={state.sending}
+            messageStatus={state.messageStatus}
+            activeRunId={state.activeRunId}
             sessionError={state.sessionError}
             sseStatus={state.sseStatus}
             onDraftChange={setDraft}
@@ -660,6 +726,8 @@ function ChatPanel({
   traces,
   draft,
   sending,
+  messageStatus,
+  activeRunId,
   sessionError,
   sseStatus,
   onDraftChange,
@@ -675,6 +743,8 @@ function ChatPanel({
   traces: AgentTaskTrace[];
   draft: string;
   sending: boolean;
+  messageStatus: MessageStatus;
+  activeRunId?: string;
   sessionError?: string;
   sseStatus: SseStatus;
   onDraftChange: (value: string) => void;
@@ -684,6 +754,8 @@ function ChatPanel({
   onRetrySession: () => void;
 }) {
   const latestTrace = traces[0];
+  const visibleMessages = messages.filter(isPrimaryChatMessage);
+  const busy = sending || messageStatus === "generating";
   const toolCallCount = traces.reduce(
     (count, trace) => count + (trace.toolCalls?.length ?? 0),
     0,
@@ -736,26 +808,40 @@ function ChatPanel({
       <div className="message-list">
         {!session ? (
           <Empty description="请选择或新建会话后开始提问" />
-        ) : messages.length === 0 ? (
+        ) : visibleMessages.length === 0 ? (
           <Empty description="新建会话开始提问" />
         ) : (
-          messages.map((item) => (
+          visibleMessages.map((item) => (
             <MessageBubble
               key={item.id}
               message={item}
+              trace={item.role === "assistant" ? traceForAssistant(item, messages, traces) : undefined}
+              question={item.role === "assistant" ? questionForAssistant(item, messages) : undefined}
               onOpenTools={onOpenTools}
             />
           ))
         )}
-        {sending ? (
+        {messageStatus === "sending" ? (
           <div className="typing-row">
             <span className="typing-dot" />
-            正在发送并等待 Agent 响应
+            正在发送消息
           </div>
+        ) : messageStatus === "generating" ? (
+          <article className="message-bubble role-assistant transient-message">
+            <div className="message-meta">
+              <span>Assistant</span>
+              <span>generating</span>
+            </div>
+            <div className="typing-row">
+              <span className="typing-dot" />
+              Agent 正在生成回答
+              {activeRunId ? <Tag>{activeRunId}</Tag> : null}
+            </div>
+          </article>
         ) : null}
       </div>
 
-      {sseStatus === "interrupted" ? (
+      {sseStatus === "error" ? (
         <Alert
           className="sse-alert"
           type="warning"
@@ -777,13 +863,13 @@ function ChatPanel({
           }}
           autoSize={{ minRows: 2, maxRows: 6 }}
           placeholder="向当前 Agent 提问。Shift + Enter 换行。"
-          disabled={!session || sending}
+          disabled={!session || busy}
         />
         <Button
           type="primary"
           icon={<SendOutlined />}
-          loading={sending}
-          disabled={!session || !draft.trim()}
+          loading={busy}
+          disabled={!session || busy || !draft.trim()}
           onClick={onSend}
         >
           发送
@@ -795,9 +881,13 @@ function ChatPanel({
 
 function MessageBubble({
   message,
+  trace,
+  question,
   onOpenTools,
 }: {
   message: ChatMessage;
+  trace?: AgentTaskTrace;
+  question?: string;
   onOpenTools: () => void;
 }) {
   const roleLabel = roleText(message.role);
@@ -813,11 +903,156 @@ function MessageBubble({
       {isTool ? (
         <ToolMessage message={message} onOpenTools={onOpenTools} />
       ) : isAssistant ? (
-        <MarkdownContent content={message.content} />
+        <AssistantMessageContent
+          message={message}
+          trace={trace}
+          question={question}
+          onOpenTools={onOpenTools}
+        />
       ) : (
         <LongText text={message.content} />
       )}
     </article>
+  );
+}
+
+function AssistantMessageContent({
+  message,
+  trace,
+  question,
+  onOpenTools,
+}: {
+  message: ChatMessage;
+  trace?: AgentTaskTrace;
+  question?: string;
+  onOpenTools: () => void;
+}) {
+  return (
+    <div className="assistant-message">
+      <Collapse
+        className="reasoning-collapse"
+        size="small"
+        items={[
+          {
+            key: "reasoning",
+            label: "思考过程 / 执行过程",
+            children: (
+              <ReasoningTrace
+                trace={trace}
+                question={question}
+                userMessageId={trace?.userMessageId}
+                onOpenTools={onOpenTools}
+              />
+            ),
+          },
+        ]}
+      />
+      <section className="answer-section">
+        <div className="answer-title">正式回答</div>
+        <MarkdownContent content={message.content} />
+      </section>
+    </div>
+  );
+}
+
+function ReasoningTrace({
+  trace,
+  question,
+  userMessageId,
+  onOpenTools,
+}: {
+  trace?: AgentTaskTrace;
+  question?: string;
+  userMessageId?: string;
+  onOpenTools: () => void;
+}) {
+  if (!trace) {
+    return <div className="muted">本次回答暂无可展示执行过程</div>;
+  }
+  const steps = trace.steps ?? [];
+  const toolCalls = trace.toolCalls ?? [];
+  return (
+    <div className="reasoning-trace">
+      <div className="reasoning-summary-grid">
+        <Metric label="runId" value={trace.traceId ?? trace.id} />
+        <Metric label="status" value={trace.status ?? "UNKNOWN"} />
+        <Metric label="steps" value={String(trace.actualSteps ?? steps.length)} />
+        <Metric label="tools" value={String(trace.toolCallCount ?? toolCalls.length)} />
+      </div>
+      <div className="reasoning-lines">
+        <p>已理解问题：{question ?? trace.goal ?? "chat session agent run"}</p>
+        <p>使用会话：{trace.sessionId ?? "n/a"}</p>
+        <p>使用 Agent：{trace.agentId ?? "n/a"}</p>
+        {userMessageId ? <p>用户消息：{userMessageId}</p> : null}
+      </div>
+      {toolCalls.length > 0 ? (
+        <div className="reasoning-tools">
+          {toolCalls.slice(0, 4).map((call) => (
+            <ToolCallSummary key={call.id} call={call} />
+          ))}
+          {toolCalls.length > 4 ? (
+            <Button size="small" type="link" onClick={onOpenTools}>
+              查看全部 {toolCalls.length} 次工具调用
+            </Button>
+          ) : null}
+        </div>
+      ) : (
+        <div className="muted">本次回答未记录工具调用</div>
+      )}
+      {steps.length > 0 ? (
+        <Collapse
+          ghost
+          size="small"
+          items={[
+            {
+              key: "steps",
+              label: `展开 ${steps.length} 个 step 摘要`,
+              children: (
+                <div className="step-list compact-step-list">
+                  {steps.map((step) => (
+                    <TraceStep key={step.id} step={step} />
+                  ))}
+                </div>
+              ),
+            },
+            {
+              key: "raw",
+              label: "raw run detail",
+              children: <RawBlock value={trace} />,
+            },
+          ]}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ToolCallSummary({ call }: { call: ToolCallTrace }) {
+  const summary = call.errorMessage ?? call.resultSummary ?? "暂无结果摘要";
+  const evidence = parseCodeEvidence(summary);
+  return (
+    <div className="reasoning-tool-row">
+      <div className="tool-card-head">
+        <Space wrap size={6}>
+          <Tag color={statusColor(call.status)}>{call.status ?? "UNKNOWN"}</Tag>
+          <strong>{call.actualToolName ?? call.toolName ?? "unknown_tool"}</strong>
+        </Space>
+        <span className="muted">{formatLatency(call.latencyMs)}</span>
+      </div>
+      <div className="tool-summary-text">{summary}</div>
+      <EvidenceList evidence={evidence} />
+      <Collapse
+        ghost
+        size="small"
+        items={[
+          {
+            key: "raw",
+            label: "raw tool detail",
+            children: <RawBlock value={call} />,
+          },
+        ]}
+      />
+    </div>
   );
 }
 
@@ -1259,6 +1494,47 @@ function RawBlock({ value }: { value: unknown }) {
   return <pre className="raw-block">{text}</pre>;
 }
 
+function isPrimaryChatMessage(message: ChatMessage): boolean {
+  if (message.role === "tool" || message.role === "system") {
+    return false;
+  }
+  if (message.role === "assistant" && hasToolCalls(message)) {
+    return false;
+  }
+  return true;
+}
+
+function hasToolCalls(message: ChatMessage): boolean {
+  return Array.isArray(message.metadata?.toolCalls) && message.metadata.toolCalls.length > 0;
+}
+
+function traceForAssistant(
+  assistant: ChatMessage,
+  messages: ChatMessage[],
+  traces: AgentTaskTrace[],
+): AgentTaskTrace | undefined {
+  const assistantIndex = messages.findIndex((message) => message.id === assistant.id);
+  const priorUser = findPriorUserMessage(messages, assistantIndex);
+  if (!priorUser) {
+    return undefined;
+  }
+  return traces.find((trace) => trace.userMessageId === priorUser.id);
+}
+
+function questionForAssistant(assistant: ChatMessage, messages: ChatMessage[]): string | undefined {
+  const assistantIndex = messages.findIndex((message) => message.id === assistant.id);
+  return findPriorUserMessage(messages, assistantIndex)?.content;
+}
+
+function findPriorUserMessage(messages: ChatMessage[], beforeIndex: number): ChatMessage | undefined {
+  for (let index = Math.max(0, beforeIndex - 1); index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") {
+      return messages[index];
+    }
+  }
+  return undefined;
+}
+
 function summarizeToolMessage(message: ChatMessage): ToolMessageSummary {
   const content = normalizeToolContent(message.content);
   const toolName =
@@ -1438,8 +1714,8 @@ function sseStatusColor(status: SseStatus) {
   if (status === "connected") {
     return "green";
   }
-  if (status === "interrupted") {
-    return "orange";
+  if (status === "error") {
+    return "red";
   }
   if (status === "connecting") {
     return "blue";
@@ -1451,13 +1727,13 @@ function sseStatusLabel(status: SseStatus) {
   if (status === "connected") {
     return "SSE connected";
   }
-  if (status === "interrupted") {
-    return "SSE interrupted";
+  if (status === "error") {
+    return "SSE error";
   }
   if (status === "connecting") {
     return "SSE connecting";
   }
-  return "SSE idle";
+  return "SSE disconnected";
 }
 
 function toolKind(call: ToolCallTrace) {

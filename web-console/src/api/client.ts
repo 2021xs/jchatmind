@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   ChatSession,
   CodeRepository,
+  WebConsoleChatSendResponse,
 } from "../types";
 
 interface ApiResponse<T> {
@@ -107,18 +108,18 @@ export async function getChatMessages(
 export async function sendChatMessage(
   sessionId: string,
   agentId: string,
+  repoId: string,
   content: string,
-): Promise<string> {
-  const data = await request<{ chatMessageId: string }>("/chat-messages", {
+): Promise<WebConsoleChatSendResponse> {
+  return request<WebConsoleChatSendResponse>("/web-console/chat/send", {
     method: "POST",
     body: JSON.stringify({
-      sessionId,
+      conversationId: sessionId,
       agentId,
-      role: "user",
+      repoId,
       content,
     }),
   });
-  return data.chatMessageId;
 }
 
 export async function getAgentTraces(
