@@ -96,4 +96,51 @@ class WebConsoleChatServiceImplTest {
         assertEquals(traceIdCaptor.getValue(), response.getRunId());
         assertNotNull(response.getRunId());
     }
+
+    @Test
+    void sendKeepsChineseUserMessageReadable() {
+        ChatSessionMapper chatSessionMapper = mock(ChatSessionMapper.class);
+        CodeRepositoryMapper codeRepositoryMapper = mock(CodeRepositoryMapper.class);
+        ChatMessageFacadeService chatMessageFacadeService = mock(ChatMessageFacadeService.class);
+        JChatMindFactory jChatMindFactory = mock(JChatMindFactory.class);
+        AgentEventPublisher eventPublisher = mock(AgentEventPublisher.class);
+        JChatMind agent = mock(JChatMind.class);
+        Executor directExecutor = Runnable::run;
+
+        when(chatSessionMapper.selectById("session-cn")).thenReturn(ChatSession.builder()
+                .id("session-cn")
+                .agentId("agent-1")
+                .title("Web Console 中文测试")
+                .build());
+        when(codeRepositoryMapper.selectById("repo-1")).thenReturn(CodeRepository.builder()
+                .id("repo-1")
+                .name("hm-dianping")
+                .status("READY")
+                .build());
+        when(chatMessageFacadeService.agentCreateChatMessage(isA(CreateChatMessageRequest.class)))
+                .thenReturn(CreateChatMessageResponse.builder().chatMessageId("user-message-cn").build());
+        when(jChatMindFactory.create(eq("agent-1"), eq("session-cn"), eq("user-message-cn"),
+                isA(String.class), isA(String.class))).thenReturn(agent);
+
+        WebConsoleChatServiceImpl service = new WebConsoleChatServiceImpl(
+                chatSessionMapper,
+                codeRepositoryMapper,
+                chatMessageFacadeService,
+                jChatMindFactory,
+                eventPublisher,
+                directExecutor);
+        WebConsoleChatSendRequest request = new WebConsoleChatSendRequest();
+        request.setConversationId("session-cn");
+        request.setAgentId("agent-1");
+        request.setRepoId("repo-1");
+        request.setContent("分析秒杀下单链路");
+
+        service.send(request);
+
+        ArgumentCaptor<CreateChatMessageRequest> messageCaptor =
+                ArgumentCaptor.forClass(CreateChatMessageRequest.class);
+        verify(chatMessageFacadeService).agentCreateChatMessage(messageCaptor.capture());
+        assertEquals("分析秒杀下单链路", messageCaptor.getValue().getContent());
+        assertFalse(messageCaptor.getValue().getContent().contains("????"));
+    }
 }

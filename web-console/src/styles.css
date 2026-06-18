@@ -179,6 +179,14 @@ button {
   margin-bottom: 10px;
 }
 
+.section-header-title,
+.inline-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .repo-list,
 .conversation-list,
 .tool-audit-list,
@@ -378,6 +386,17 @@ button {
 
 .reasoning-lines p {
   margin: 0 0 4px;
+}
+
+.reasoning-evidence-summary {
+  padding: 8px 10px;
+  border: 1px solid #edf0f3;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #364152;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .reasoning-tools {

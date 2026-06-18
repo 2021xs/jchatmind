@@ -87,6 +87,32 @@ class ChatSessionFacadeServiceImplTest {
                 .contains("\"custom\":\"kept\"");
     }
 
+    @Test
+    void createWebConsoleSessionKeepsChineseTitleReadable() throws Exception {
+        CreateChatSessionRequest request = new CreateChatSessionRequest();
+        request.setAgentId("agent-1");
+        request.setTitle("Web Console 中文测试");
+        request.setChannel("WEB_CONSOLE");
+        request.setRepoId("repo-1");
+        when(chatSessionMapper.insert(isA(ChatSession.class))).thenAnswer(invocation -> {
+            invocation.<ChatSession>getArgument(0).setId("session-cn");
+            return 1;
+        });
+
+        service.createChatSession(request);
+
+        ArgumentCaptor<ChatSession> captor = ArgumentCaptor.forClass(ChatSession.class);
+        verify(chatSessionMapper).insert(captor.capture());
+        ChatSession persisted = captor.getValue();
+        assertThat(persisted.getTitle()).isEqualTo("Web Console 中文测试");
+        assertThat(persisted.getTitle()).doesNotContain("????");
+
+        ChatSessionVO vo = new ChatSessionConverter(new ObjectMapper().findAndRegisterModules())
+                .toVO(persisted);
+        assertThat(vo.getTitle()).isEqualTo("Web Console 中文测试");
+        assertThat(vo.getTitle()).doesNotContain("????");
+    }
+
     private ChatSession chatSession(String id, String agentId, String metadata) {
         LocalDateTime now = LocalDateTime.of(2026, 6, 18, 10, 0);
         return ChatSession.builder()
