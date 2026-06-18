@@ -43,6 +43,7 @@ class FeishuAgentSessionBindingServiceTest {
         verify(chatSessionMapper).insertWithId(chatSessionCaptor.capture());
         verify(bindingMapper).upsertActiveSession(bindingCaptor.capture());
         assertThat(chatSessionCaptor.getValue().getId()).isEqualTo(sessionId);
+        assertThat(chatSessionCaptor.getValue().getMetadata()).contains("\"channel\":\"FEISHU\"");
         assertThat(bindingCaptor.getValue().getFeishuChatId()).isEqualTo("oc_test");
         assertThat(bindingCaptor.getValue().getSessionId()).isEqualTo(sessionId);
     }

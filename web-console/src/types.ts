@@ -21,6 +21,8 @@ export interface ChatSession {
   id: string;
   agentId: string;
   title?: string;
+  channel?: string;
+  repoId?: string;
   createdAt?: string;
   updatedAt?: string;
   metadata?: Record<string, unknown>;

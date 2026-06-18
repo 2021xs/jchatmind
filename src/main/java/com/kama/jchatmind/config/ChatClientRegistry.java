@@ -1,7 +1,10 @@
 package com.kama.jchatmind.config;
 
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -11,9 +14,24 @@ public class ChatClientRegistry {
 
     private final Map<String, ChatClient> chatClients;
 
+    @Autowired
+    public ChatClientRegistry(Map<String, ChatClient> chatClients,
+                              @Value("${jchatmind.ai.deepseek.official.model:}") String officialModel) {
+        this(chatClients, officialModel, true);
+    }
+
     public ChatClientRegistry(Map<String, ChatClient> chatClients) {
+        this(chatClients, null, true);
+    }
+
+    private ChatClientRegistry(Map<String, ChatClient> chatClients, String officialModel, boolean registerAliases) {
         this.chatClients = new LinkedHashMap<>(chatClients);
-        registerCompatibleAlias("deepseek-chat", "deepseek-official-chat");
+        if (registerAliases) {
+            registerCompatibleAlias("deepseek-chat", "deepseek-official-chat");
+            if (StringUtils.hasText(officialModel)) {
+                registerCompatibleAlias(officialModel.trim(), "deepseek-official-chat");
+            }
+        }
     }
 
     public ChatClient get(String key) {

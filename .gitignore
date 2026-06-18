@@ -41,6 +41,8 @@ build/
 .vscode/
 
 src/main/resources/application-dev.yaml
+# Local Spring Boot overrides with API keys, database passwords, and personal runtime settings.
+# Keep this file out of commits; application.yaml imports it with optional:file:./application-local.yaml.
 application-local.yml
 application-local.yaml
 .kiro/

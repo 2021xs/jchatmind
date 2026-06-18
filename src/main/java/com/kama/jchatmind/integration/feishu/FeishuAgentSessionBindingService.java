@@ -20,6 +20,7 @@ import java.util.UUID;
 public class FeishuAgentSessionBindingService {
 
     private static final DateTimeFormatter TITLE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
+    private static final String FEISHU_CHAT_SESSION_METADATA = "{\"channel\":\"FEISHU\",\"source\":\"feishu\"}";
 
     private final FeishuAgentSessionBindingMapper bindingMapper;
     private final ChatSessionMapper chatSessionMapper;
@@ -44,7 +45,7 @@ public class FeishuAgentSessionBindingService {
                 .id(sessionId)
                 .agentId(agentId)
                 .title(newSessionTitle(chatId, now))
-                .metadata(null)
+                .metadata(FEISHU_CHAT_SESSION_METADATA)
                 .createdAt(now)
                 .updatedAt(now)
                 .build());

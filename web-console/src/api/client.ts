@@ -17,6 +17,7 @@ type QueryValue = string | number | boolean | null | undefined;
 
 const configuredApiBase = import.meta.env.VITE_JCHATMIND_API_BASE_URL;
 const configuredSseBase = import.meta.env.VITE_JCHATMIND_SSE_BASE_URL;
+const WEB_CONSOLE_CHANNEL = "WEB_CONSOLE";
 
 export const API_BASE_URL = normalizeBaseUrl(configuredApiBase, "/api");
 export const SSE_BASE_URL = normalizeBaseUrl(configuredSseBase, "/sse");
@@ -78,9 +79,13 @@ export async function getAgents(): Promise<Agent[]> {
   return data.agents ?? [];
 }
 
-export async function getChatSessions(): Promise<ChatSession[]> {
+export async function getChatSessions(
+  channel: string = WEB_CONSOLE_CHANNEL,
+): Promise<ChatSession[]> {
   const data = await request<{ chatSessions: ChatSession[] }>(
     "/chat-sessions",
+    {},
+    { channel },
   );
   return data.chatSessions ?? [];
 }
@@ -88,10 +93,16 @@ export async function getChatSessions(): Promise<ChatSession[]> {
 export async function createChatSession(
   agentId: string,
   title: string,
+  repoId?: string,
 ): Promise<string> {
   const data = await request<{ chatSessionId: string }>("/chat-sessions", {
     method: "POST",
-    body: JSON.stringify({ agentId, title }),
+    body: JSON.stringify({
+      agentId,
+      title,
+      channel: WEB_CONSOLE_CHANNEL,
+      repoId,
+    }),
   });
   return data.chatSessionId;
 }

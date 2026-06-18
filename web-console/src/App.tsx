@@ -342,7 +342,11 @@ function App() {
       return;
     }
     try {
-      const sessionId = await createChatSession(agentId, "Web Console 会话");
+      const sessionId = await createChatSession(
+        agentId,
+        "Web Console 会话",
+        state.selectedRepoId,
+      );
       const sessions = await getChatSessions();
       setState((previous) => ({
         ...previous,
@@ -676,8 +680,8 @@ function Sidebar({
           notFoundContent="暂无 Agent"
         />
         <div className="binding-hint">
-          当前 repo: {selectedRepo?.name ?? "未选择"}。后端 chat_session 暂未绑定
-          repoId，这里仅按当前仓库预留导航上下文。
+          当前 repo: {selectedRepo?.name ?? "未选择"}。新建 Web Console 会话会写入
+          WEB_CONSOLE channel 和 repoId。
         </div>
         {sessions.length === 0 ? (
           <Empty
@@ -863,7 +867,7 @@ function ChatPanel({
           }}
           autoSize={{ minRows: 2, maxRows: 6 }}
           placeholder="向当前 Agent 提问。Shift + Enter 换行。"
-          disabled={!session || busy}
+          disabled={!session}
         />
         <Button
           type="primary"

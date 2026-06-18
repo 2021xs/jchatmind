@@ -2,7 +2,7 @@ spring:
   application:
     name: jchatmind
   config:
-    import: optional:classpath:application-local.yaml
+    import: optional:file:./application-local.yaml
   autoconfigure:
     exclude:
       - org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration

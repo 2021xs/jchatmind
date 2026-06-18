@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.kama.jchatmind.converter.ChatSessionConverter;
 import com.kama.jchatmind.exception.BizException;
 import com.kama.jchatmind.mapper.ChatSessionMapper;
+import com.kama.jchatmind.model.common.ChatSessionChannel;
 import com.kama.jchatmind.model.dto.ChatSessionDTO;
 import com.kama.jchatmind.model.entity.ChatSession;
 import com.kama.jchatmind.model.request.CreateChatSessionRequest;
@@ -19,6 +20,7 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import org.springframework.util.StringUtils;
 
 @Service
 @AllArgsConstructor
@@ -30,6 +32,24 @@ public class ChatSessionFacadeServiceImpl implements ChatSessionFacadeService {
     @Override
     public GetChatSessionsResponse getChatSessions() {
         List<ChatSession> chatSessions = chatSessionMapper.selectAll();
+        return toResponse(chatSessions);
+    }
+
+    @Override
+    public GetChatSessionsResponse getChatSessions(String channel) {
+        if (!StringUtils.hasText(channel)) {
+            return getChatSessions();
+        }
+        String normalizedChannel;
+        try {
+            normalizedChannel = ChatSessionChannel.normalize(channel);
+        } catch (IllegalArgumentException e) {
+            throw new BizException("Unsupported chat session channel: " + channel);
+        }
+        return toResponse(chatSessionMapper.selectByChannel(normalizedChannel));
+    }
+
+    private GetChatSessionsResponse toResponse(List<ChatSession> chatSessions) {
         List<ChatSessionVO> result = new ArrayList<>();
         for (ChatSession chatSession : chatSessions) {
             try {
@@ -80,6 +100,7 @@ public class ChatSessionFacadeServiceImpl implements ChatSessionFacadeService {
     @Override
     public CreateChatSessionResponse createChatSession(CreateChatSessionRequest request) {
         try {
+            validateCreateRequest(request);
             // 将 CreateChatSessionRequest 转换为 ChatSessionDTO
             ChatSessionDTO chatSessionDTO = chatSessionConverter.toDTO(request);
             
@@ -103,6 +124,22 @@ public class ChatSessionFacadeServiceImpl implements ChatSessionFacadeService {
                     .build();
         } catch (JsonProcessingException e) {
             throw new BizException("创建聊天会话时发生序列化错误: " + e.getMessage());
+        }
+    }
+
+    private void validateCreateRequest(CreateChatSessionRequest request) {
+        if (request == null) {
+            throw new BizException("创建聊天会话请求不能为空");
+        }
+        if (!StringUtils.hasText(request.getAgentId())) {
+            throw new BizException("agentId 不能为空");
+        }
+        if (StringUtils.hasText(request.getChannel())) {
+            try {
+                ChatSessionChannel.parse(request.getChannel());
+            } catch (IllegalArgumentException e) {
+                throw new BizException("Unsupported chat session channel: " + request.getChannel());
+            }
         }
     }
 

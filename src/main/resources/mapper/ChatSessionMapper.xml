@@ -83,6 +83,19 @@
         ORDER BY updated_at DESC
     </select>
 
+    <select id="selectByChannel" resultMap="BaseResultMap">
+        SELECT
+            id,
+            agent_id,
+            title,
+            metadata::text AS metadata,
+            created_at,
+            updated_at
+        FROM chat_session
+        WHERE UPPER(COALESCE(metadata ->> 'channel', 'LEGACY')) = #{channel}
+        ORDER BY updated_at DESC
+    </select>
+
     <select id="selectByAgentId" resultMap="BaseResultMap">
         SELECT
             id,
