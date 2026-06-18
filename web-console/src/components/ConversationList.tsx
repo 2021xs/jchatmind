@@ -1,11 +1,11 @@
-import { Button, Empty, Select } from "antd";
-import { CommentOutlined, PlusOutlined } from "@ant-design/icons";
-import type { Agent, ChatSession, CodeRepository } from "../types";
+import { Button, Empty, Popconfirm, Select } from "antd";
+import { CommentOutlined, DeleteOutlined, PlusOutlined } from "@ant-design/icons";
+import type { Agent, ChatSession, CodeRepository, WebConsoleModel } from "../types";
 import {
   MAX_VISIBLE_SESSIONS,
-  agentName,
   formatDate,
-  selectedAgentCapability,
+  modelLabel,
+  WEB_CONSOLE_MODELS,
 } from "../utils/messageDisplay";
 import { SectionHeader } from "./common";
 
@@ -14,19 +14,21 @@ export function ConversationList({
   agents,
   selectedRepo,
   selectedSessionId,
-  selectedAgentId,
-  onSelectAgent,
+  selectedModel,
+  onSelectModel,
   onSelectSession,
   onCreateSession,
+  onDeleteSession,
 }: {
   sessions: ChatSession[];
   agents: Agent[];
   selectedRepo?: CodeRepository;
   selectedSessionId?: string;
-  selectedAgentId?: string;
-  onSelectAgent: (agentId: string) => void;
+  selectedModel: WebConsoleModel;
+  onSelectModel: (model: WebConsoleModel) => void;
   onSelectSession: (sessionId: string) => void;
   onCreateSession: () => void;
+  onDeleteSession: (sessionId: string) => Promise<void>;
 }) {
   const visibleSessions = sessions.slice(0, MAX_VISIBLE_SESSIONS);
 
@@ -43,23 +45,16 @@ export function ConversationList({
         }
       />
       <Select
-        className="agent-select"
+        className="model-select"
         size="small"
-        placeholder="选择 Agent"
-        value={selectedAgentId}
-        options={agents.map((agent) => {
-          const capability = selectedAgentCapability(agent);
-          return {
-            value: agent.id,
-            label: `${agent.name}${agent.model ? ` / ${agent.model}` : ""} - ${capability.description}`,
-          };
-        })}
-        onChange={onSelectAgent}
-        notFoundContent="暂无 Agent"
+        placeholder="选择模型"
+        value={selectedModel}
+        options={WEB_CONSOLE_MODELS}
+        onChange={onSelectModel}
       />
       <div className="binding-hint">
-        当前 repo: {selectedRepo?.name ?? "未选择"}。新建 Web Console 会话会写入
-        WEB_CONSOLE channel 和 repoId。
+        当前助手：代码助手。当前 repo: {selectedRepo?.name ?? "未选择"}。
+        新建 Web Console 会话会写入 WEB_CONSOLE channel、repoId 和 model。
       </div>
       {sessions.length === 0 ? (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="新建会话开始提问" />
@@ -67,22 +62,58 @@ export function ConversationList({
         <>
           <div className="conversation-list">
             {visibleSessions.map((session) => (
-              <button
+              <div
                 className={`nav-row compact ${
                   session.id === selectedSessionId ? "selected" : ""
                 }`}
                 key={session.id}
-                type="button"
+                role="button"
+                tabIndex={0}
                 onClick={() => onSelectSession(session.id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelectSession(session.id);
+                  }
+                }}
               >
-                <span className="row-main">{session.title || "未命名会话"}</span>
+                <span className="row-head">
+                  <span className="row-main">{session.title || "未命名会话"}</span>
+                  <span
+                    className="row-action"
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  >
+                    <Popconfirm
+                      title="确认删除该 Web Console 会话？"
+                      description="删除后会话历史将不可恢复。消息、Trace 和工具日志是否清理取决于后端当前实现。"
+                      okText="删除"
+                      cancelText="取消"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => onDeleteSession(session.id)}
+                    >
+                      <Button
+                        aria-label={`删除会话 ${session.title || session.id}`}
+                        size="small"
+                        type="text"
+                        danger
+                        icon={<DeleteOutlined />}
+                      />
+                    </Popconfirm>
+                  </span>
+                </span>
                 <span className="row-meta">
-                  <span>Agent: {agentName(agents, session.agentId)}</span>
+                  <span>模型：{modelLabel(session.model)}</span>
+                  {!session.model ? (
+                    <span title="历史会话未记录 model">
+                      fallback: {modelLabel(agentModel(agents, session.agentId))}
+                    </span>
+                  ) : null}
                 </span>
                 <span className="row-time">
                   {formatDate(session.updatedAt ?? session.createdAt)}
                 </span>
-              </button>
+              </div>
             ))}
           </div>
           {sessions.length > MAX_VISIBLE_SESSIONS ? (
@@ -94,4 +125,8 @@ export function ConversationList({
       )}
     </section>
   );
+}
+
+function agentModel(agents: Agent[], agentId: string): string | undefined {
+  return agents.find((agent) => agent.id === agentId)?.model;
 }

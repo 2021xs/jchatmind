@@ -1,25 +1,24 @@
 import { AuditOutlined, SendOutlined, ToolOutlined } from "@ant-design/icons";
 import { Alert, Button, Empty, Input, Space, Tag, Typography } from "antd";
 import type {
-  Agent,
   AgentTaskTrace,
   ChatMessage,
   ChatSession,
   CodeRepository,
   MessageStatus,
   SseStatus,
+  WebConsoleModel,
 } from "../types";
 import {
-  isPlainAgent,
   isPrimaryChatMessage,
-  selectedAgentCapability,
+  modelLabel,
 } from "../utils/messageDisplay";
 import { MessageBubble } from "./MessageBubble";
 
 export function ChatPanel({
   repo,
   session,
-  agent,
+  model,
   messages,
   traces,
   draft,
@@ -35,7 +34,7 @@ export function ChatPanel({
 }: {
   repo?: CodeRepository;
   session?: ChatSession;
-  agent?: Agent;
+  model: WebConsoleModel;
   messages: ChatMessage[];
   traces: AgentTaskTrace[];
   draft: string;
@@ -56,9 +55,6 @@ export function ChatPanel({
     (count, trace) => count + (trace.toolCalls?.length ?? 0),
     0,
   );
-  const capability = selectedAgentCapability(agent);
-  const showPlainAgentHint = Boolean(repo && agent && isPlainAgent(agent));
-
   return (
     <section className="chat-panel">
       <div className="chat-heading">
@@ -67,14 +63,13 @@ export function ChatPanel({
             代码助手
           </Typography.Title>
           <Typography.Text type="secondary">
-            {capability.detail}
+            使用代码助手能力模板，可按当前模型调用安全代码检索工具。
           </Typography.Text>
         </div>
         <Space wrap>
           <Tag>{repo?.name ?? "未选择 repo"}</Tag>
-          <Tag color={capability.tone === "code" ? "green" : "blue"}>
-            {agent?.name ?? "未选择 Agent"} · {capability.description}
-          </Tag>
+          <Tag color="green">代码助手</Tag>
+          <Tag color="blue">{modelLabel(model)}</Tag>
           {latestTrace ? (
             <Button
               size="small"
@@ -89,15 +84,6 @@ export function ChatPanel({
           </Button>
         </Space>
       </div>
-
-      {showPlainAgentHint ? (
-        <Alert
-          className="session-alert"
-          type="info"
-          showIcon
-          message="当前 Agent 是普通对话，不会主动检索代码。若要分析代码，建议切换到 code-agent。"
-        />
-      ) : null}
 
       {sessionError ? (
         <Alert
@@ -127,7 +113,6 @@ export function ChatPanel({
               trace={item.role === "assistant" ? traceForAssistant(item, messages, traces) : undefined}
               question={item.role === "assistant" ? questionForAssistant(item, messages) : undefined}
               repo={repo}
-              agent={agent}
               onOpenTools={onOpenTools}
             />
           ))
@@ -172,7 +157,7 @@ export function ChatPanel({
             }
           }}
           autoSize={{ minRows: 2, maxRows: 6 }}
-          placeholder="向当前 Agent 提问。Shift + Enter 换行。"
+          placeholder="向代码助手提问。Shift + Enter 换行。"
           disabled={!session}
         />
         <Button

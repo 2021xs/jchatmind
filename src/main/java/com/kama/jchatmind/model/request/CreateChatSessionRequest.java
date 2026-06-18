@@ -10,5 +10,6 @@ public class CreateChatSessionRequest {
     private String title;
     private String channel;
     private String repoId;
+    private String model;
     private Map<String, Object> metadata;
 }

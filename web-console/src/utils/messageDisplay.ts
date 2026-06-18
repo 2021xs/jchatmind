@@ -1,16 +1,22 @@
 import type {
   Agent,
-  AgentCapability,
   AgentSseEvent,
   ChatMessage,
   ChatSession,
   CodeRepository,
   SseStatus,
   ToolCallTrace,
+  WebConsoleModel,
 } from "../types";
 
 export const MAX_VISIBLE_SESSIONS = 24;
 export const LONG_TEXT_LIMIT = 1200;
+export const WEB_CONSOLE_MODELS: Array<{ value: WebConsoleModel; label: string }> = [
+  { value: "gpt-5.5", label: "GPT 5.5" },
+  { value: "deepseek-chat", label: "DeepSeek Chat" },
+];
+
+export const DEFAULT_WEB_CONSOLE_MODEL: WebConsoleModel = "gpt-5.5";
 
 export function isPrimaryChatMessage(message: ChatMessage): boolean {
   if (message.role === "tool" || message.role === "system") {
@@ -65,27 +71,26 @@ export function roleText(role: string): string {
   return role;
 }
 
-export function agentName(agents: Agent[], agentId: string): string {
-  return agents.find((agent) => agent.id === agentId)?.name ?? agentId;
-}
-
-export function selectedAgentCapability(agent?: Agent): AgentCapability {
-  const fallback = fallbackAgentCapability(agent);
-  const description = agent?.description?.trim();
-  return {
-    ...fallback,
-    description: description || fallback.description,
-    detail: description || fallback.detail,
+export function codeAssistantAgent(agents: Agent[]): Agent | undefined {
+  const hasCodeSearchTool = (agent: Agent) =>
+    (agent.allowedTools ?? []).some((tool) =>
+      tool.toLowerCase().includes("searchprojectcode"),
+    );
+  const onlyCodeSearchTool = (agent: Agent) => {
+    const tools = agent.allowedTools ?? [];
+    return tools.length === 1 && hasCodeSearchTool(agent);
   };
+  return agents.find(onlyCodeSearchTool) ?? agents.find(hasCodeSearchTool);
 }
 
-export function isPlainAgent(agent?: Agent): boolean {
-  const key = `${agent?.name ?? ""} ${agent?.id ?? ""}`.toLowerCase();
-  const tools = agent?.allowedTools ?? [];
-  if (tools.some((tool) => tool.toLowerCase().includes("searchprojectcode"))) {
-    return false;
-  }
-  return key.includes("plain-agent") || key.includes("plain agent") || key.includes("plain");
+export function modelLabel(model?: string): string {
+  return WEB_CONSOLE_MODELS.find((item) => item.value === model)?.label ?? model ?? "未记录";
+}
+
+export function normalizeWebConsoleModel(model?: string): WebConsoleModel {
+  return WEB_CONSOLE_MODELS.some((item) => item.value === model)
+    ? (model as WebConsoleModel)
+    : DEFAULT_WEB_CONSOLE_MODEL;
 }
 
 export function statusColor(status?: string): string {
@@ -195,46 +200,6 @@ export function summarizeEvent(payload?: Record<string, unknown>): string {
 
 export function readyRepositories(repositories: CodeRepository[]): CodeRepository[] {
   return repositories.filter((repo) => repo.status === "READY");
-}
-
-function fallbackAgentCapability(agent?: Agent): AgentCapability {
-  const key = `${agent?.name ?? ""} ${agent?.id ?? ""} ${agent?.model ?? ""}`.toLowerCase();
-  const tools = agent?.allowedTools ?? [];
-
-  if (tools.some((tool) => tool.toLowerCase().includes("searchprojectcode")) || key.includes("code-agent")) {
-    return {
-      displayName: "code-agent",
-      description: "代码问答，会调用 searchProjectCode",
-      detail: "适合分析已导入仓库的代码链路、接口、SQL、常量和工具调用证据。",
-      tone: "code",
-    };
-  }
-
-  if (key.includes("gpt-5.5") || key.includes("gpt")) {
-    return {
-      displayName: "gpt-5.5",
-      description: "GPT 模型对话能力",
-      detail: "适合通用问答、解释和整理，不代表一定会主动检索代码。",
-      tone: "model",
-    };
-  }
-
-  if (key.includes("deepseek")) {
-    return {
-      displayName: "deepseek-chat",
-      description: "DeepSeek 模型对话能力",
-      detail: "适合通用问答、解释和整理，不展示模型隐藏思维链。",
-      tone: "model",
-    };
-  }
-
-  // TODO: 后续应由后端 AgentDTO/AgentVO 返回 displayName、description、capabilities。
-  return {
-    displayName: "plain-agent",
-    description: "普通对话，不主动检索代码",
-    detail: "当前 Agent 不会主动调用 searchProjectCode。若要分析代码，建议切换到 code-agent。",
-    tone: "plain",
-  };
 }
 
 export function asAgentSseEvent(data: string): AgentSseEvent | null {

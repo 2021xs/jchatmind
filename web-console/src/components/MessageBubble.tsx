@@ -1,7 +1,7 @@
 import { Collapse } from "antd";
 import { XMarkdown } from "@ant-design/x-markdown";
 import "@ant-design/x-markdown/dist/x-markdown.css";
-import type { Agent, AgentTaskTrace, ChatMessage, CodeRepository } from "../types";
+import type { AgentTaskTrace, ChatMessage, CodeRepository } from "../types";
 import { LONG_TEXT_LIMIT, formatDate, roleText } from "../utils/messageDisplay";
 import { RawBlock } from "./common";
 import { ReasoningPanel } from "./ReasoningPanel";
@@ -12,14 +12,12 @@ export function MessageBubble({
   trace,
   question,
   repo,
-  agent,
   onOpenTools,
 }: {
   message: ChatMessage;
   trace?: AgentTaskTrace;
   question?: string;
   repo?: CodeRepository;
-  agent?: Agent;
   onOpenTools: () => void;
 }) {
   const roleLabel = roleText(message.role);
@@ -40,7 +38,6 @@ export function MessageBubble({
           trace={trace}
           question={question}
           repo={repo}
-          agent={agent}
           onOpenTools={onOpenTools}
         />
       ) : (
@@ -55,14 +52,12 @@ function AssistantMessageContent({
   trace,
   question,
   repo,
-  agent,
   onOpenTools,
 }: {
   message: ChatMessage;
   trace?: AgentTaskTrace;
   question?: string;
   repo?: CodeRepository;
-  agent?: Agent;
   onOpenTools: () => void;
 }) {
   return (
@@ -71,7 +66,6 @@ function AssistantMessageContent({
         trace={trace}
         question={question}
         repo={repo}
-        agent={agent}
         onOpenTools={onOpenTools}
       />
       <section className="answer-section">

@@ -1,20 +1,18 @@
 import { Button, Collapse, Space, Tag } from "antd";
-import type { Agent, AgentTaskTrace, CodeRepository } from "../types";
+import type { AgentTaskTrace, CodeRepository } from "../types";
 import { formatEvidenceRef, parseCodeEvidence } from "../utils/evidence";
-import { formatLatency } from "../utils/messageDisplay";
+import { formatLatency, modelLabel } from "../utils/messageDisplay";
 import { ToolCallSummaryCard } from "./ToolCallCard";
 
 export function ReasoningPanel({
   trace,
   question,
   repo,
-  agent,
   onOpenTools,
 }: {
   trace?: AgentTaskTrace;
   question?: string;
   repo?: CodeRepository;
-  agent?: Agent;
   onOpenTools: () => void;
 }) {
   const steps = trace?.steps ?? [];
@@ -42,7 +40,7 @@ export function ReasoningPanel({
                   <div className="reasoning-lines">
                     <p>理解问题：{question ?? trace.goal ?? "本次对话请求"}</p>
                     <p>使用仓库：{repo?.name ?? "未选择仓库"}</p>
-                    <p>使用 Agent：{agent?.name ?? trace.agentId ?? "n/a"}</p>
+                    <p>使用助手：代码助手 · {modelLabel(trace.modelName)}</p>
                     {steps.slice(0, 3).map((step) => (
                       <p key={step.id}>
                         执行步骤：{step.outputSummary ?? step.inputSummary ?? step.stepType ?? "step 摘要"}

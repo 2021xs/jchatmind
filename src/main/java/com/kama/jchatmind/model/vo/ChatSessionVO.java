@@ -13,6 +13,7 @@ public class ChatSessionVO {
     private String title;
     private String channel;
     private String repoId;
+    private String model;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

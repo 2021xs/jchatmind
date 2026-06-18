@@ -5,6 +5,7 @@ import type {
   ChatSession,
   CodeRepository,
   WebConsoleChatSendResponse,
+  WebConsoleModel,
 } from "../types";
 
 interface ApiResponse<T> {
@@ -74,6 +75,12 @@ export async function getRepositories(): Promise<CodeRepository[]> {
   return data.repositories ?? [];
 }
 
+export async function deleteRepository(repoId: string): Promise<void> {
+  await request<void>(`/code-repositories/${encodeURIComponent(repoId)}`, {
+    method: "DELETE",
+  });
+}
+
 export async function getAgents(): Promise<Agent[]> {
   const data = await request<{ agents: Agent[] }>("/agents");
   return data.agents ?? [];
@@ -93,6 +100,7 @@ export async function getChatSessions(
 export async function createChatSession(
   agentId: string,
   title: string,
+  model: WebConsoleModel,
   repoId?: string,
 ): Promise<string> {
   const data = await request<{ chatSessionId: string }>("/chat-sessions", {
@@ -102,9 +110,16 @@ export async function createChatSession(
       title,
       channel: WEB_CONSOLE_CHANNEL,
       repoId,
+      model,
     }),
   });
   return data.chatSessionId;
+}
+
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  await request<void>(`/chat-sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  });
 }
 
 export async function getChatMessages(
@@ -119,6 +134,7 @@ export async function getChatMessages(
 export async function sendChatMessage(
   sessionId: string,
   agentId: string,
+  model: WebConsoleModel,
   repoId: string,
   content: string,
 ): Promise<WebConsoleChatSendResponse> {
@@ -127,6 +143,7 @@ export async function sendChatMessage(
     body: JSON.stringify({
       conversationId: sessionId,
       agentId,
+      model,
       repoId,
       content,
     }),

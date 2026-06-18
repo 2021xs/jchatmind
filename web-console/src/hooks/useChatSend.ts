@@ -1,11 +1,13 @@
 import { useCallback, useState } from "react";
 import { sendChatMessage } from "../api/client";
-import type { ChatSession, RuntimeState } from "../types";
-import { errorMessage, upsertMessage } from "../utils/messageDisplay";
+import type { Agent, ChatSession, RuntimeState, WebConsoleModel } from "../types";
+import { codeAssistantAgent, errorMessage, upsertMessage } from "../utils/messageDisplay";
 
 export function useChatSend({
   selectedSession,
+  agents,
   selectedAgentId,
+  selectedModel,
   selectedRepoId,
   selectedSessionId,
   setState,
@@ -13,7 +15,9 @@ export function useChatSend({
   onError,
 }: {
   selectedSession?: ChatSession;
+  agents: Agent[];
   selectedAgentId?: string;
+  selectedModel: WebConsoleModel;
   selectedRepoId?: string;
   selectedSessionId?: string;
   setState: React.Dispatch<React.SetStateAction<RuntimeState>>;
@@ -27,7 +31,7 @@ export function useChatSend({
     if (!content) {
       return;
     }
-    const agentId = selectedSession?.agentId ?? selectedAgentId;
+    const agentId = codeAssistantAgent(agents)?.id ?? selectedSession?.agentId ?? selectedAgentId;
     const repoId = selectedRepoId;
     if (!selectedSessionId || !agentId) {
       onError("请选择或新建会话");
@@ -47,7 +51,13 @@ export function useChatSend({
       sessionError: undefined,
     }));
     try {
-      const response = await sendChatMessage(selectedSessionId, agentId, repoId, content);
+      const response = await sendChatMessage(
+        selectedSessionId,
+        agentId,
+        selectedModel,
+        repoId,
+        content,
+      );
       setState((previous) => ({
         ...previous,
         sending: false,
@@ -78,8 +88,10 @@ export function useChatSend({
   }, [
     draft,
     onError,
+    agents,
     refreshSessionData,
     selectedAgentId,
+    selectedModel,
     selectedRepoId,
     selectedSession,
     selectedSessionId,

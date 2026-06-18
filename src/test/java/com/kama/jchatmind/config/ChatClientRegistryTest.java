@@ -41,6 +41,17 @@ class ChatClientRegistryTest {
     }
 
     @Test
+    void exposesWebConsoleGptOptionEvenWhenConfiguredGptModelNameDiffers() {
+        ChatClient client = mock(ChatClient.class);
+        ChatClientRegistry registry = new ChatClientRegistry(
+                Map.of("gpt-compatible-chat", client), null, "gpt-4.1", true);
+
+        assertSame(client, registry.get("gpt-5.5"));
+        assertSame(client, registry.get("gpt-4.1"));
+        assertSame(client, registry.get("gpt-compatible-chat"));
+    }
+
+    @Test
     void keepsDeepSeekAndGptClientsIndependent() {
         ChatClient deepSeekClient = mock(ChatClient.class);
         ChatClient gptClient = mock(ChatClient.class);

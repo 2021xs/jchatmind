@@ -38,11 +38,16 @@ public class ChatClientRegistry {
             if (StringUtils.hasText(gptCompatibleModel)) {
                 registerCompatibleAlias(gptCompatibleModel.trim(), "gpt-compatible-chat");
             }
+            registerCompatibleAlias("gpt-5.5", "gpt-compatible-chat");
         }
     }
 
     public ChatClient get(String key) {
         return chatClients.get(key);
+    }
+
+    public boolean contains(String key) {
+        return chatClients.containsKey(key);
     }
 
     private void registerCompatibleAlias(String legacyName, String canonicalName) {

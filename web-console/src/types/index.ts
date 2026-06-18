@@ -6,6 +6,8 @@ export type DetailMode = "trace" | "tools" | "events";
 
 export type SseStatus = "disconnected" | "connecting" | "connected" | "error";
 
+export type WebConsoleModel = "gpt-5.5" | "deepseek-chat";
+
 export type MessageStatus =
   | "idle"
   | "sending"
@@ -32,19 +34,13 @@ export interface Agent {
   allowedKbs?: string[];
 }
 
-export interface AgentCapability {
-  displayName: string;
-  description: string;
-  detail: string;
-  tone: "code" | "plain" | "model";
-}
-
 export interface ChatSession {
   id: string;
   agentId: string;
   title?: string;
   channel?: string;
   repoId?: string;
+  model?: WebConsoleModel | string;
   createdAt?: string;
   updatedAt?: string;
   metadata?: Record<string, unknown>;
@@ -189,6 +185,7 @@ export interface RuntimeState {
   selectedRepoId?: string;
   selectedSessionId?: string;
   selectedAgentId?: string;
+  selectedModel: WebConsoleModel;
   selectedTraceId?: string;
   loadState: LoadState;
   error?: string;

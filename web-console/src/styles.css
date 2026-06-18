@@ -223,6 +223,23 @@ button {
   cursor: pointer;
 }
 
+.row-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.row-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+}
+
 .nav-row.compact {
   padding: 9px 10px;
 }
@@ -271,7 +288,7 @@ button {
   font-size: 12px;
 }
 
-.agent-select {
+.model-select {
   width: 100%;
   margin-bottom: 8px;
 }

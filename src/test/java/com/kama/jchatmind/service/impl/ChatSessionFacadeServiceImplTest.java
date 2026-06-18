@@ -52,7 +52,7 @@ class ChatSessionFacadeServiceImplTest {
     void getChatSessionsWithChannelUsesMetadataFilter() {
         when(chatSessionMapper.selectByChannel("WEB_CONSOLE")).thenReturn(List.of(
                 chatSession("web-1", "agent-1",
-                        "{\"channel\":\"WEB_CONSOLE\",\"repoId\":\"repo-1\",\"source\":\"web-console\"}")
+                        "{\"channel\":\"WEB_CONSOLE\",\"repoId\":\"repo-1\",\"model\":\"gpt-5.5\",\"source\":\"web-console\"}")
         ));
 
         GetChatSessionsResponse response = service.getChatSessions("web_console");
@@ -61,6 +61,7 @@ class ChatSessionFacadeServiceImplTest {
         assertThat(response.getChatSessions()).hasSize(1);
         assertThat(response.getChatSessions()[0].getChannel()).isEqualTo("WEB_CONSOLE");
         assertThat(response.getChatSessions()[0].getRepoId()).isEqualTo("repo-1");
+        assertThat(response.getChatSessions()[0].getModel()).isEqualTo("gpt-5.5");
     }
 
     @Test
@@ -70,6 +71,7 @@ class ChatSessionFacadeServiceImplTest {
         request.setTitle("Web Console 会话");
         request.setChannel("WEB_CONSOLE");
         request.setRepoId("repo-1");
+        request.setModel("deepseek-chat");
         request.setMetadata(Map.of("custom", "kept"));
         when(chatSessionMapper.insert(isA(ChatSession.class))).thenAnswer(invocation -> {
             invocation.<ChatSession>getArgument(0).setId("session-1");
@@ -83,6 +85,7 @@ class ChatSessionFacadeServiceImplTest {
         assertThat(captor.getValue().getMetadata())
                 .contains("\"channel\":\"WEB_CONSOLE\"")
                 .contains("\"repoId\":\"repo-1\"")
+                .contains("\"model\":\"deepseek-chat\"")
                 .contains("\"source\":\"web-console\"")
                 .contains("\"custom\":\"kept\"");
     }

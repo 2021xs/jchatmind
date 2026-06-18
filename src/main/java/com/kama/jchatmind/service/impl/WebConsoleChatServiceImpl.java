@@ -1,8 +1,11 @@
 package com.kama.jchatmind.service.impl;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.agent.AgentEventPublisher;
 import com.kama.jchatmind.agent.JChatMind;
 import com.kama.jchatmind.agent.JChatMindFactory;
+import com.kama.jchatmind.config.ChatClientRegistry;
 import com.kama.jchatmind.exception.AgentAlreadyRunningException;
 import com.kama.jchatmind.exception.BizException;
 import com.kama.jchatmind.mapper.ChatSessionMapper;
@@ -23,17 +26,23 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.UUID;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Executor;
 
 @Slf4j
 @Service
 public class WebConsoleChatServiceImpl implements WebConsoleChatService {
     private static final int WEB_CONSOLE_MAX_AGENT_LOOP_STEPS = 12;
+    private static final String DEFAULT_WEB_CONSOLE_MODEL = "gpt-5.5";
+    private static final Set<String> SUPPORTED_WEB_CONSOLE_MODELS = Set.of("gpt-5.5", "deepseek-chat");
 
     private final ChatSessionMapper chatSessionMapper;
     private final CodeRepositoryMapper codeRepositoryMapper;
     private final ChatMessageFacadeService chatMessageFacadeService;
     private final JChatMindFactory jChatMindFactory;
+    private final ChatClientRegistry chatClientRegistry;
+    private final ObjectMapper objectMapper;
     private final AgentEventPublisher agentEventPublisher;
     private final Executor taskExecutor;
 
@@ -41,12 +50,16 @@ public class WebConsoleChatServiceImpl implements WebConsoleChatService {
                                      CodeRepositoryMapper codeRepositoryMapper,
                                      ChatMessageFacadeService chatMessageFacadeService,
                                      JChatMindFactory jChatMindFactory,
+                                     ChatClientRegistry chatClientRegistry,
+                                     ObjectMapper objectMapper,
                                      AgentEventPublisher agentEventPublisher,
                                      @Qualifier("taskExecutor") Executor taskExecutor) {
         this.chatSessionMapper = chatSessionMapper;
         this.codeRepositoryMapper = codeRepositoryMapper;
         this.chatMessageFacadeService = chatMessageFacadeService;
         this.jChatMindFactory = jChatMindFactory;
+        this.chatClientRegistry = chatClientRegistry;
+        this.objectMapper = objectMapper;
         this.agentEventPublisher = agentEventPublisher;
         this.taskExecutor = taskExecutor;
     }
@@ -56,6 +69,7 @@ public class WebConsoleChatServiceImpl implements WebConsoleChatService {
         validateRequest(request);
         ChatSession session = loadSession(request.getConversationId());
         String effectiveAgentId = resolveAgentId(request, session);
+        String effectiveModel = resolveModel(request, session);
         CodeRepository repository = loadRepository(request.getRepoId());
         String runId = UUID.randomUUID().toString();
 
@@ -65,11 +79,14 @@ public class WebConsoleChatServiceImpl implements WebConsoleChatService {
                         .sessionId(session.getId())
                         .role(ChatMessageDTO.RoleType.USER)
                         .content(request.getContent().trim())
+                        .metadata(ChatMessageDTO.MetaData.builder()
+                                .model(effectiveModel)
+                                .build())
                         .build());
 
-        String runtimeContext = webConsoleRuntimeContext(request, session, effectiveAgentId, repository);
+        String runtimeContext = webConsoleRuntimeContext(request, session, effectiveAgentId, effectiveModel, repository);
         taskExecutor.execute(() -> runAgent(effectiveAgentId, session.getId(),
-                userMessage.getChatMessageId(), runtimeContext, runId));
+                userMessage.getChatMessageId(), runtimeContext, runId, effectiveModel));
 
         return WebConsoleChatSendResponse.builder()
                 .userMessageId(userMessage.getChatMessageId())
@@ -118,6 +135,41 @@ public class WebConsoleChatServiceImpl implements WebConsoleChatService {
         return sessionAgentId;
     }
 
+    private String resolveModel(WebConsoleChatSendRequest request, ChatSession session) {
+        String requestedModel = safeModel(request.getModel());
+        String sessionModel = modelFromSessionMetadata(session);
+        String effectiveModel = StringUtils.hasText(requestedModel)
+                ? requestedModel
+                : StringUtils.hasText(sessionModel) ? sessionModel : DEFAULT_WEB_CONSOLE_MODEL;
+        if (!SUPPORTED_WEB_CONSOLE_MODELS.contains(effectiveModel)) {
+            throw new BizException("Unsupported Web Console model: " + effectiveModel);
+        }
+        if (!chatClientRegistry.contains(effectiveModel)) {
+            throw new BizException("ChatClient not configured for Web Console model: " + effectiveModel);
+        }
+        return effectiveModel;
+    }
+
+    private String modelFromSessionMetadata(ChatSession session) {
+        if (session == null || !StringUtils.hasText(session.getMetadata())) {
+            return null;
+        }
+        try {
+            Map<String, Object> metadata = objectMapper.readValue(session.getMetadata(), new TypeReference<>() {
+            });
+            Object model = metadata.get("model");
+            return model == null ? null : safeModel(String.valueOf(model));
+        } catch (Exception e) {
+            log.warn("Failed to parse Web Console session metadata model: sessionId={}, error={}",
+                    session.getId(), e.getMessage());
+            return null;
+        }
+    }
+
+    private String safeModel(String model) {
+        return StringUtils.hasText(model) ? model.trim() : null;
+    }
+
     private CodeRepository loadRepository(String repoId) {
         CodeRepository repository = codeRepositoryMapper.selectById(repoId);
         if (repository == null) {
@@ -127,10 +179,10 @@ public class WebConsoleChatServiceImpl implements WebConsoleChatService {
     }
 
     private void runAgent(String agentId, String sessionId, String userMessageId,
-                          String runtimeContext, String runId) {
+                          String runtimeContext, String runId, String model) {
         try {
             JChatMind agent = jChatMindFactory.create(agentId, sessionId, userMessageId,
-                    runtimeContext, runId);
+                    runtimeContext, runId, model);
             agent.setMaxLoopSteps(WEB_CONSOLE_MAX_AGENT_LOOP_STEPS);
             agent.run();
         } catch (AgentAlreadyRunningException e) {
@@ -152,6 +204,7 @@ public class WebConsoleChatServiceImpl implements WebConsoleChatService {
     private String webConsoleRuntimeContext(WebConsoleChatSendRequest request,
                                             ChatSession session,
                                             String agentId,
+                                            String model,
                                             CodeRepository repository) {
         return """
                 [Web Console runtime context]
@@ -159,6 +212,7 @@ public class WebConsoleChatServiceImpl implements WebConsoleChatService {
                 selectedRepoId: %s
                 selectedRepoName: %s
                 selectedAgentId: %s
+                selectedModel: %s
                 selectedConversationId: %s
 
                 Use the selectedRepoId when a code question needs searchProjectCode.
@@ -169,6 +223,7 @@ public class WebConsoleChatServiceImpl implements WebConsoleChatService {
                 request.getRepoId(),
                 safe(repository.getName()),
                 agentId,
+                model,
                 session.getId()
         );
     }

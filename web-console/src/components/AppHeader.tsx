@@ -4,13 +4,13 @@ import {
   MenuUnfoldOutlined,
   ReloadOutlined,
 } from "@ant-design/icons";
-import type { Agent, ChatSession, CodeRepository, SseStatus } from "../types";
-import { selectedAgentCapability, sseStatusColor, sseStatusLabel } from "../utils/messageDisplay";
+import type { ChatSession, CodeRepository, SseStatus, WebConsoleModel } from "../types";
+import { modelLabel, sseStatusColor, sseStatusLabel } from "../utils/messageDisplay";
 import { ContextPill } from "./common";
 
 export function AppHeader({
   repo,
-  agent,
+  model,
   session,
   sseStatus,
   detailOpen,
@@ -18,15 +18,13 @@ export function AppHeader({
   onToggleDetail,
 }: {
   repo?: CodeRepository;
-  agent?: Agent;
+  model: WebConsoleModel;
   session?: ChatSession;
   sseStatus: SseStatus;
   detailOpen: boolean;
   onRefresh: () => void;
   onToggleDetail: () => void;
 }) {
-  const capability = selectedAgentCapability(agent);
-
   return (
     <header className="console-header">
       <div className="brand-block">
@@ -39,8 +37,8 @@ export function AppHeader({
       </div>
       <div className="header-context">
         <ContextPill label="Repo" value={repo?.name ?? "未选择"} />
-        <ContextPill label="Agent" value={agent?.name ?? "未选择"} />
-        <ContextPill label="Capability" value={capability.description} />
+        <ContextPill label="助手" value="代码助手" />
+        <ContextPill label="模型" value={modelLabel(model)} />
         <ContextPill label="Conversation" value={session?.title ?? "未选择"} />
         <Tag color={sseStatusColor(sseStatus)}>{sseStatusLabel(sseStatus)}</Tag>
         <Tooltip title="重新加载仓库、Agent、会话和当前 Trace">

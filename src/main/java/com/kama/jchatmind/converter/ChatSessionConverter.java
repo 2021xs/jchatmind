@@ -60,6 +60,7 @@ public class ChatSessionConverter {
                 .title(dto.getTitle())
                 .channel(resolveChannel(dto.getMetadata()))
                 .repoId(dto.getMetadata() == null ? null : dto.getMetadata().getRepoId())
+                .model(dto.getMetadata() == null ? null : dto.getMetadata().getModel())
                 .createdAt(dto.getCreatedAt())
                 .updatedAt(dto.getUpdatedAt())
                 .build();
@@ -107,6 +108,9 @@ public class ChatSessionConverter {
         }
         if (StringUtils.hasText(request.getRepoId())) {
             merged.put("repoId", request.getRepoId().trim());
+        }
+        if (StringUtils.hasText(request.getModel())) {
+            merged.put("model", request.getModel().trim());
         }
         if (ChatSessionChannel.WEB_CONSOLE.name().equals(merged.get("channel"))) {
             merged.putIfAbsent("source", "web-console");

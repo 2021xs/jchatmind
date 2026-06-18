@@ -16,19 +16,22 @@ function App() {
     selectedRepo,
     sortedSessions,
     selectedSession,
-    selectedAgent,
     selectedTrace,
     visibleToolCalls,
     refreshConsole,
     refreshSessionData,
     createSession,
     selectSession,
+    removeRepository,
+    removeSession,
     openDetail,
   } = useConsoleState();
 
   const { draft, setDraft, handleSend } = useChatSend({
     selectedSession,
+    agents: state.agents,
     selectedAgentId: state.selectedAgentId,
+    selectedModel: state.selectedModel,
     selectedRepoId: state.selectedRepoId,
     selectedSessionId: state.selectedSessionId,
     setState,
@@ -59,7 +62,7 @@ function App() {
       {contextHolder}
       <AppHeader
         repo={selectedRepo}
-        agent={selectedAgent}
+        model={state.selectedModel}
         session={selectedSession}
         sseStatus={state.sseStatus}
         detailOpen={state.detailOpen}
@@ -97,21 +100,39 @@ function App() {
             agents={state.agents}
             selectedRepoId={state.selectedRepoId}
             selectedSessionId={state.selectedSessionId}
-            selectedAgentId={state.selectedAgentId}
+            selectedModel={state.selectedModel}
             onSelectRepo={(selectedRepoId) =>
               setState((previous) => ({ ...previous, selectedRepoId }))
             }
-            onSelectAgent={(selectedAgentId) =>
-              setState((previous) => ({ ...previous, selectedAgentId }))
+            onSelectModel={(selectedModel) =>
+              setState((previous) => ({ ...previous, selectedModel }))
             }
             onSelectSession={selectSession}
             onCreateSession={handleCreateSession}
+            onDeleteRepo={async (repoId) => {
+              try {
+                await removeRepository(repoId);
+                noticeApi.success("仓库索引已删除");
+              } catch (error) {
+                noticeApi.error(error instanceof Error ? error.message : String(error));
+                throw error;
+              }
+            }}
+            onDeleteSession={async (sessionId) => {
+              try {
+                await removeSession(sessionId);
+                noticeApi.success("会话已删除");
+              } catch (error) {
+                noticeApi.error(error instanceof Error ? error.message : String(error));
+                throw error;
+              }
+            }}
           />
 
           <ChatPanel
             repo={selectedRepo}
             session={selectedSession}
-            agent={selectedAgent}
+            model={state.selectedModel}
             messages={state.messages}
             traces={state.traces}
             draft={draft}

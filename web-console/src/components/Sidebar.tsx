@@ -1,4 +1,4 @@
-import type { Agent, ChatSession, CodeRepository } from "../types";
+import type { Agent, ChatSession, CodeRepository, WebConsoleModel } from "../types";
 import { ConversationList } from "./ConversationList";
 import { RepositoryList } from "./RepositoryList";
 
@@ -8,22 +8,26 @@ export function Sidebar({
   agents,
   selectedRepoId,
   selectedSessionId,
-  selectedAgentId,
+  selectedModel,
   onSelectRepo,
-  onSelectAgent,
+  onSelectModel,
   onSelectSession,
   onCreateSession,
+  onDeleteRepo,
+  onDeleteSession,
 }: {
   repositories: CodeRepository[];
   sessions: ChatSession[];
   agents: Agent[];
   selectedRepoId?: string;
   selectedSessionId?: string;
-  selectedAgentId?: string;
+  selectedModel: WebConsoleModel;
   onSelectRepo: (repoId: string) => void;
-  onSelectAgent: (agentId: string) => void;
+  onSelectModel: (model: WebConsoleModel) => void;
   onSelectSession: (sessionId: string) => void;
   onCreateSession: () => void;
+  onDeleteRepo: (repoId: string) => Promise<void>;
+  onDeleteSession: (sessionId: string) => Promise<void>;
 }) {
   const selectedRepo = repositories.find((repo) => repo.id === selectedRepoId);
 
@@ -33,16 +37,18 @@ export function Sidebar({
         repositories={repositories}
         selectedRepoId={selectedRepoId}
         onSelectRepo={onSelectRepo}
+        onDeleteRepo={onDeleteRepo}
       />
       <ConversationList
         sessions={sessions}
         agents={agents}
         selectedRepo={selectedRepo}
         selectedSessionId={selectedSessionId}
-        selectedAgentId={selectedAgentId}
-        onSelectAgent={onSelectAgent}
+        selectedModel={selectedModel}
+        onSelectModel={onSelectModel}
         onSelectSession={onSelectSession}
         onCreateSession={onCreateSession}
+        onDeleteSession={onDeleteSession}
       />
     </aside>
   );

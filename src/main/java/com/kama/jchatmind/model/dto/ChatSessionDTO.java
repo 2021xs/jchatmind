@@ -29,6 +29,7 @@ public class ChatSessionDTO {
     public static class MetaData {
         private String channel;
         private String repoId;
+        private String model;
         private String source;
         private String contextSummary;
         private String contextSummaryLastMessageId;

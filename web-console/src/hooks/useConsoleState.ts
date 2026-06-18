@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 import {
   createChatSession,
+  deleteChatSession,
+  deleteRepository,
   getAgentTraces,
   getAgents,
   getChatMessages,
@@ -8,7 +10,15 @@ import {
   getRepositories,
 } from "../api/client";
 import type { DetailMode, RuntimeState } from "../types";
-import { errorMessage, hasId, sortSessions } from "../utils/messageDisplay";
+import {
+  DEFAULT_WEB_CONSOLE_MODEL,
+  codeAssistantAgent,
+  errorMessage,
+  hasId,
+  normalizeWebConsoleModel,
+  readyRepositories,
+  sortSessions,
+} from "../utils/messageDisplay";
 
 export const defaultConsoleState: RuntimeState = {
   repositories: [],
@@ -17,6 +27,7 @@ export const defaultConsoleState: RuntimeState = {
   messages: [],
   traces: [],
   sseEvents: [],
+  selectedModel: DEFAULT_WEB_CONSOLE_MODEL,
   loadState: "idle",
   sending: false,
   messageStatus: "idle",
@@ -38,11 +49,6 @@ export function useConsoleState() {
   const selectedSession = useMemo(
     () => state.sessions.find((session) => session.id === state.selectedSessionId),
     [state.sessions, state.selectedSessionId],
-  );
-
-  const selectedAgent = useMemo(
-    () => state.agents.find((agent) => agent.id === state.selectedAgentId),
-    [state.agents, state.selectedAgentId],
   );
 
   const selectedTrace = useMemo(
@@ -75,22 +81,24 @@ export function useConsoleState() {
           previous.selectedSessionId && hasId(sorted, previous.selectedSessionId)
             ? previous.selectedSessionId
             : sorted[0]?.id;
-        const selectedAgentId =
-          previous.selectedAgentId && hasId(agents, previous.selectedAgentId)
-            ? previous.selectedAgentId
-            : sorted.find((session) => session.id === selectedSessionId)?.agentId ??
-              agents[0]?.id;
+        const assistantAgent = codeAssistantAgent(agents);
+        const selectedRepoId =
+          previous.selectedRepoId && hasId(repositories, previous.selectedRepoId)
+            ? previous.selectedRepoId
+            : readyRepositories(repositories)[0]?.id ?? repositories[0]?.id;
+        const selectedModel = normalizeWebConsoleModel(
+          sorted.find((session) => session.id === selectedSessionId)?.model ??
+            previous.selectedModel,
+        );
         return {
           ...previous,
           repositories,
           agents,
           sessions: sorted,
-          selectedRepoId:
-            previous.selectedRepoId && hasId(repositories, previous.selectedRepoId)
-              ? previous.selectedRepoId
-              : repositories[0]?.id,
+          selectedRepoId,
           selectedSessionId,
-          selectedAgentId,
+          selectedAgentId: assistantAgent?.id,
+          selectedModel,
           loadState: "ready",
         };
       });
@@ -129,22 +137,28 @@ export function useConsoleState() {
 
   const createSession = useCallback(
     async (title = "Web Console 会话") => {
-      const agentId = state.selectedAgentId ?? state.agents[0]?.id;
+      const agentId = codeAssistantAgent(state.agents)?.id;
       if (!agentId) {
-        throw new Error("需要先有可用 Agent，才能创建会话");
+        throw new Error("需要先有可用代码助手 Agent，才能创建会话");
       }
-      const sessionId = await createChatSession(agentId, title, state.selectedRepoId);
+      const sessionId = await createChatSession(
+        agentId,
+        title,
+        state.selectedModel,
+        state.selectedRepoId,
+      );
       const sessions = await getChatSessions();
       setState((previous) => ({
         ...previous,
         sessions: sortSessions(sessions),
         selectedSessionId: sessionId,
         selectedAgentId: agentId,
+        selectedModel: state.selectedModel,
         detailMode: "trace",
       }));
       return sessionId;
     },
-    [state.agents, state.selectedAgentId, state.selectedRepoId],
+    [state.agents, state.selectedModel, state.selectedRepoId],
   );
 
   const selectSession = useCallback(
@@ -153,12 +167,56 @@ export function useConsoleState() {
       setState((previous) => ({
         ...previous,
         selectedSessionId: sessionId,
-        selectedAgentId: session?.agentId ?? previous.selectedAgentId,
+        selectedAgentId: codeAssistantAgent(previous.agents)?.id,
+        selectedModel: normalizeWebConsoleModel(session?.model ?? previous.selectedModel),
         selectedTraceId: undefined,
       }));
     },
     [state.sessions],
   );
+
+  const removeRepository = useCallback(async (repoId: string) => {
+    await deleteRepository(repoId);
+    const repositories = await getRepositories();
+    setState((previous) => {
+      const nextRepoId =
+        previous.selectedRepoId === repoId
+          ? readyRepositories(repositories).find((repo) => repo.id !== repoId)?.id ??
+            repositories.find((repo) => repo.id !== repoId)?.id
+          : previous.selectedRepoId && hasId(repositories, previous.selectedRepoId)
+            ? previous.selectedRepoId
+            : readyRepositories(repositories)[0]?.id ?? repositories[0]?.id;
+      return {
+        ...previous,
+        repositories,
+        selectedRepoId: nextRepoId,
+      };
+    });
+  }, []);
+
+  const removeSession = useCallback(async (sessionId: string) => {
+    await deleteChatSession(sessionId);
+    const sessions = sortSessions(await getChatSessions());
+    setState((previous) => {
+      const selectedSessionId =
+        previous.selectedSessionId === sessionId
+          ? sessions.find((session) => session.id !== sessionId)?.id
+          : previous.selectedSessionId && hasId(sessions, previous.selectedSessionId)
+            ? previous.selectedSessionId
+            : sessions[0]?.id;
+      const selectedSession = sessions.find((session) => session.id === selectedSessionId);
+      return {
+        ...previous,
+        sessions,
+        selectedSessionId,
+        selectedModel: normalizeWebConsoleModel(selectedSession?.model ?? previous.selectedModel),
+        messages: selectedSessionId ? previous.messages : [],
+        traces: selectedSessionId ? previous.traces : [],
+        sseEvents: selectedSessionId ? previous.sseEvents : [],
+        selectedTraceId: selectedSessionId ? previous.selectedTraceId : undefined,
+      };
+    });
+  }, []);
 
   const openDetail = useCallback((mode: DetailMode, traceId?: string) => {
     setState((previous) => ({
@@ -175,13 +233,14 @@ export function useConsoleState() {
     selectedRepo,
     sortedSessions,
     selectedSession,
-    selectedAgent,
     selectedTrace,
     visibleToolCalls,
     refreshConsole,
     refreshSessionData,
     createSession,
     selectSession,
+    removeRepository,
+    removeSession,
     openDetail,
   };
 }

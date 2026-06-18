@@ -113,6 +113,24 @@ public class JChatMindFactory {
         return agentMapper.selectById(agentId);
     }
 
+    private Agent withRuntimeModel(Agent agent, String runtimeModel) {
+        if (!StringUtils.hasText(runtimeModel) || runtimeModel.equals(agent.getModel())) {
+            return agent;
+        }
+        return Agent.builder()
+                .id(agent.getId())
+                .name(agent.getName())
+                .description(agent.getDescription())
+                .systemPrompt(agent.getSystemPrompt())
+                .model(runtimeModel.trim())
+                .allowedTools(agent.getAllowedTools())
+                .allowedKbs(agent.getAllowedKbs())
+                .chatOptions(agent.getChatOptions())
+                .createdAt(agent.getCreatedAt())
+                .updatedAt(agent.getUpdatedAt())
+                .build();
+    }
+
     private List<Message> loadMemory(String chatSessionId, String model) {
         List<ChatMessageDTO> allMessages = chatMessageFacadeService.getChatMessageDTOsBySessionId(chatSessionId);
         ConversationContextCompressor.CompressedContext compressedContext =
@@ -262,7 +280,13 @@ public class JChatMindFactory {
 
     public JChatMind create(String agentId, String chatSessionId, String userMessageId,
                            String runtimeSystemContext, String traceId) {
+        return create(agentId, chatSessionId, userMessageId, runtimeSystemContext, traceId, null);
+    }
+
+    public JChatMind create(String agentId, String chatSessionId, String userMessageId,
+                           String runtimeSystemContext, String traceId, String runtimeModel) {
         Agent agent = loadAgent(agentId);
+        agent = withRuntimeModel(agent, runtimeModel);
         AgentDTO agentConfig = toAgentConfig(agent);
         List<Message> memory = loadMemory(chatSessionId, agent.getModel());
         if (StringUtils.hasText(runtimeSystemContext)) {
