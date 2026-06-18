@@ -19,8 +19,13 @@ export function ReasoningPanel({
   const toolCalls = trace?.toolCalls ?? [];
   const stepCount = trace?.actualSteps ?? steps.length;
   const toolCallCount = trace?.toolCallCount ?? toolCalls.length;
+  const primaryTools = toolCalls
+    .map((call) => call.actualToolName ?? call.toolName)
+    .filter(Boolean)
+    .slice(0, 2)
+    .join(", ");
   const title = trace
-    ? `已思考 ${formatLatency(trace.latencyMs)} · ${stepCount} 个步骤 · ${toolCallCount} 次工具调用`
+    ? `已执行 ${formatLatency(trace.latencyMs)} · ${stepCount} 步 · ${toolCallCount} 次工具调用${primaryTools ? ` · ${primaryTools}` : ""}`
     : "本次回答暂无可展示执行过程";
 
   return (

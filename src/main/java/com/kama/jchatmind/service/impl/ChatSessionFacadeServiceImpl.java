@@ -3,7 +3,11 @@ package com.kama.jchatmind.service.impl;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.kama.jchatmind.converter.ChatSessionConverter;
 import com.kama.jchatmind.exception.BizException;
+import com.kama.jchatmind.mapper.AgentStepMapper;
+import com.kama.jchatmind.mapper.AgentTaskMapper;
+import com.kama.jchatmind.mapper.ChatMessageMapper;
 import com.kama.jchatmind.mapper.ChatSessionMapper;
+import com.kama.jchatmind.mapper.ToolCallLogMapper;
 import com.kama.jchatmind.model.common.ChatSessionChannel;
 import com.kama.jchatmind.model.dto.ChatSessionDTO;
 import com.kama.jchatmind.model.entity.ChatSession;
@@ -28,6 +32,10 @@ public class ChatSessionFacadeServiceImpl implements ChatSessionFacadeService {
 
     private final ChatSessionMapper chatSessionMapper;
     private final ChatSessionConverter chatSessionConverter;
+    private final ChatMessageMapper chatMessageMapper;
+    private final AgentTaskMapper agentTaskMapper;
+    private final AgentStepMapper agentStepMapper;
+    private final ToolCallLogMapper toolCallLogMapper;
 
     @Override
     public GetChatSessionsResponse getChatSessions() {
@@ -136,7 +144,10 @@ public class ChatSessionFacadeServiceImpl implements ChatSessionFacadeService {
         }
         if (StringUtils.hasText(request.getChannel())) {
             try {
-                ChatSessionChannel.parse(request.getChannel());
+                ChatSessionChannel channel = ChatSessionChannel.parse(request.getChannel());
+                if (channel == ChatSessionChannel.WEB_CONSOLE && !StringUtils.hasText(request.getTitle())) {
+                    throw new BizException("Web Console 会话名称不能为空");
+                }
             } catch (IllegalArgumentException e) {
                 throw new BizException("Unsupported chat session channel: " + request.getChannel());
             }
@@ -149,7 +160,11 @@ public class ChatSessionFacadeServiceImpl implements ChatSessionFacadeService {
         if (chatSession == null) {
             throw new BizException("聊天会话不存在: " + chatSessionId);
         }
-        
+
+        toolCallLogMapper.deleteBySessionId(chatSessionId);
+        agentStepMapper.deleteBySessionId(chatSessionId);
+        agentTaskMapper.deleteBySessionId(chatSessionId);
+        chatMessageMapper.deleteBySessionId(chatSessionId);
         int result = chatSessionMapper.deleteById(chatSessionId);
         if (result <= 0) {
             throw new BizException("删除聊天会话失败");

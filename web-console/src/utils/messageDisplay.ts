@@ -10,7 +10,7 @@ import type {
 } from "../types";
 
 export const MAX_VISIBLE_SESSIONS = 24;
-export const LONG_TEXT_LIMIT = 1200;
+export const LONG_TEXT_LIMIT = 24000;
 export const WEB_CONSOLE_MODELS: Array<{ value: WebConsoleModel; label: string }> = [
   { value: "gpt-5.5", label: "GPT 5.5" },
   { value: "deepseek-chat", label: "DeepSeek Chat" },

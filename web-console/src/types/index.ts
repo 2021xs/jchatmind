@@ -159,6 +159,24 @@ export interface WebConsoleChatSendResponse {
   sseUrl?: string;
 }
 
+export interface WebConsoleCapability {
+  key: string;
+  label: string;
+  enabled: boolean;
+  tools: string[];
+  description?: string;
+  reason?: string;
+}
+
+export interface WebConsoleCapabilitiesResponse {
+  assistant: string;
+  profile: string;
+  model?: string;
+  repoId?: string;
+  capabilities: WebConsoleCapability[];
+  notSupported: string[];
+}
+
 export interface CodeEvidence {
   filePath?: string;
   lineRange?: string;
@@ -182,6 +200,7 @@ export interface RuntimeState {
   messages: ChatMessage[];
   traces: AgentTaskTrace[];
   sseEvents: AgentSseEvent[];
+  capabilities?: WebConsoleCapabilitiesResponse;
   selectedRepoId?: string;
   selectedSessionId?: string;
   selectedAgentId?: string;
@@ -190,6 +209,8 @@ export interface RuntimeState {
   loadState: LoadState;
   error?: string;
   sessionError?: string;
+  capabilityError?: string;
+  capabilityLoading?: boolean;
   sending: boolean;
   messageStatus: MessageStatus;
   activeRunId?: string;

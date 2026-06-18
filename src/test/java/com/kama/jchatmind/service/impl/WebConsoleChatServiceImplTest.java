@@ -13,12 +13,16 @@ import com.kama.jchatmind.model.entity.CodeRepository;
 import com.kama.jchatmind.model.request.CreateChatMessageRequest;
 import com.kama.jchatmind.model.request.WebConsoleChatSendRequest;
 import com.kama.jchatmind.model.response.CreateChatMessageResponse;
+import com.kama.jchatmind.model.response.GetWebConsoleCapabilitiesResponse;
 import com.kama.jchatmind.model.response.WebConsoleChatSendResponse;
+import com.kama.jchatmind.model.vo.WebConsoleCapabilityVO;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
+import com.kama.jchatmind.service.WebConsoleCapabilityService;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.client.ChatClient;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
 
@@ -43,6 +47,7 @@ class WebConsoleChatServiceImplTest {
         ChatClientRegistry chatClientRegistry = new ChatClientRegistry(
                 Map.of("gpt-compatible-chat", mock(ChatClient.class, RETURNS_DEEP_STUBS)));
         AgentEventPublisher eventPublisher = mock(AgentEventPublisher.class);
+        WebConsoleCapabilityService capabilityService = mock(WebConsoleCapabilityService.class);
         JChatMind agent = mock(JChatMind.class);
         Executor directExecutor = Runnable::run;
 
@@ -59,8 +64,13 @@ class WebConsoleChatServiceImplTest {
                 .build());
         when(chatMessageFacadeService.agentCreateChatMessage(isA(CreateChatMessageRequest.class)))
                 .thenReturn(CreateChatMessageResponse.builder().chatMessageId("user-message-1").build());
+        GetWebConsoleCapabilitiesResponse capabilities = capabilities("repo-1", "gpt-5.5");
+        when(capabilityService.getCapabilities("repo-1", "gpt-5.5")).thenReturn(capabilities);
+        when(capabilityService.runtimeCapabilityContext(capabilities)).thenReturn("capability context");
+        when(capabilityService.safeFullOptionalToolNames()).thenReturn(List.of("searchProjectCode", "databaseQuery"));
         when(jChatMindFactory.create(eq("agent-1"), eq("session-1"), eq("user-message-1"),
-                isA(String.class), isA(String.class), eq("gpt-5.5"))).thenReturn(agent);
+                isA(String.class), isA(String.class), eq("gpt-5.5"),
+                eq(List.of("searchProjectCode", "databaseQuery")))).thenReturn(agent);
 
         WebConsoleChatServiceImpl service = new WebConsoleChatServiceImpl(
                 chatSessionMapper,
@@ -70,6 +80,7 @@ class WebConsoleChatServiceImplTest {
                 chatClientRegistry,
                 new ObjectMapper(),
                 eventPublisher,
+                capabilityService,
                 directExecutor);
         WebConsoleChatSendRequest request = new WebConsoleChatSendRequest();
         request.setConversationId("session-1");
@@ -92,13 +103,16 @@ class WebConsoleChatServiceImplTest {
         ArgumentCaptor<String> runtimeContextCaptor = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> traceIdCaptor = ArgumentCaptor.forClass(String.class);
         verify(jChatMindFactory).create(eq("agent-1"), eq("session-1"), eq("user-message-1"),
-                runtimeContextCaptor.capture(), traceIdCaptor.capture(), eq("gpt-5.5"));
+                runtimeContextCaptor.capture(), traceIdCaptor.capture(), eq("gpt-5.5"),
+                eq(List.of("searchProjectCode", "databaseQuery")));
         org.assertj.core.api.Assertions.assertThat(runtimeContextCaptor.getValue())
                 .contains("channel: WEB_CONSOLE")
+                .contains("assistant: 代码助手")
                 .contains("selectedRepoId: repo-1")
                 .contains("selectedRepoName: hm-dianping")
                 .contains("selectedModel: gpt-5.5")
                 .contains("selectedConversationId: session-1")
+                .contains("capability context")
                 .contains("Do not add or mention Feishu context");
         verify(agent).setMaxLoopSteps(12);
         verify(agent).run();
@@ -119,6 +133,7 @@ class WebConsoleChatServiceImplTest {
         ChatClientRegistry chatClientRegistry = new ChatClientRegistry(
                 Map.of("deepseek-official-chat", mock(ChatClient.class, RETURNS_DEEP_STUBS)));
         AgentEventPublisher eventPublisher = mock(AgentEventPublisher.class);
+        WebConsoleCapabilityService capabilityService = mock(WebConsoleCapabilityService.class);
         JChatMind agent = mock(JChatMind.class);
         Executor directExecutor = Runnable::run;
 
@@ -135,8 +150,13 @@ class WebConsoleChatServiceImplTest {
                 .build());
         when(chatMessageFacadeService.agentCreateChatMessage(isA(CreateChatMessageRequest.class)))
                 .thenReturn(CreateChatMessageResponse.builder().chatMessageId("user-message-cn").build());
+        GetWebConsoleCapabilitiesResponse capabilities = capabilities("repo-1", "deepseek-chat");
+        when(capabilityService.getCapabilities("repo-1", "deepseek-chat")).thenReturn(capabilities);
+        when(capabilityService.runtimeCapabilityContext(capabilities)).thenReturn("capability context");
+        when(capabilityService.safeFullOptionalToolNames()).thenReturn(List.of("searchProjectCode", "databaseQuery"));
         when(jChatMindFactory.create(eq("agent-1"), eq("session-cn"), eq("user-message-cn"),
-                isA(String.class), isA(String.class), eq("deepseek-chat"))).thenReturn(agent);
+                isA(String.class), isA(String.class), eq("deepseek-chat"),
+                eq(List.of("searchProjectCode", "databaseQuery")))).thenReturn(agent);
 
         WebConsoleChatServiceImpl service = new WebConsoleChatServiceImpl(
                 chatSessionMapper,
@@ -146,6 +166,7 @@ class WebConsoleChatServiceImplTest {
                 chatClientRegistry,
                 new ObjectMapper(),
                 eventPublisher,
+                capabilityService,
                 directExecutor);
         WebConsoleChatSendRequest request = new WebConsoleChatSendRequest();
         request.setConversationId("session-cn");
@@ -161,5 +182,146 @@ class WebConsoleChatServiceImplTest {
         verify(chatMessageFacadeService).agentCreateChatMessage(messageCaptor.capture());
         assertEquals("分析秒杀下单链路", messageCaptor.getValue().getContent());
         assertFalse(messageCaptor.getValue().getContent().contains("????"));
+    }
+
+    @Test
+    void sendPassesEnabledMcpToolsIntoRuntimeAllowedTools() {
+        ChatSessionMapper chatSessionMapper = mock(ChatSessionMapper.class);
+        CodeRepositoryMapper codeRepositoryMapper = mock(CodeRepositoryMapper.class);
+        ChatMessageFacadeService chatMessageFacadeService = mock(ChatMessageFacadeService.class);
+        JChatMindFactory jChatMindFactory = mock(JChatMindFactory.class);
+        ChatClientRegistry chatClientRegistry = new ChatClientRegistry(
+                Map.of("gpt-compatible-chat", mock(ChatClient.class, RETURNS_DEEP_STUBS)));
+        AgentEventPublisher eventPublisher = mock(AgentEventPublisher.class);
+        WebConsoleCapabilityService capabilityService = mock(WebConsoleCapabilityService.class);
+        JChatMind agent = mock(JChatMind.class);
+        Executor directExecutor = Runnable::run;
+
+        when(chatSessionMapper.selectById("session-mcp")).thenReturn(ChatSession.builder()
+                .id("session-mcp")
+                .agentId("agent-1")
+                .title("MCP runtime")
+                .metadata("{\"channel\":\"WEB_CONSOLE\",\"model\":\"gpt-5.5\"}")
+                .build());
+        when(codeRepositoryMapper.selectById("repo-1")).thenReturn(CodeRepository.builder()
+                .id("repo-1")
+                .name("hm-dianping")
+                .status("READY")
+                .build());
+        when(chatMessageFacadeService.agentCreateChatMessage(isA(CreateChatMessageRequest.class)))
+                .thenReturn(CreateChatMessageResponse.builder().chatMessageId("user-message-mcp").build());
+        GetWebConsoleCapabilitiesResponse capabilities = capabilitiesWithMcp("repo-1", "gpt-5.5");
+        when(capabilityService.getCapabilities("repo-1", "gpt-5.5")).thenReturn(capabilities);
+        when(capabilityService.runtimeCapabilityContext(capabilities)).thenReturn("capability context");
+        when(capabilityService.safeFullOptionalToolNames()).thenReturn(List.of(
+                "searchProjectCode",
+                "databaseQuery",
+                "mcp_context7_resolve_library_id",
+                "mcp_github_mcp_server_search_code",
+                "mcp_playwright_browser_navigate"
+        ));
+        when(jChatMindFactory.create(eq("agent-1"), eq("session-mcp"), eq("user-message-mcp"),
+                isA(String.class), isA(String.class), eq("gpt-5.5"), isA(List.class))).thenReturn(agent);
+
+        WebConsoleChatServiceImpl service = new WebConsoleChatServiceImpl(
+                chatSessionMapper,
+                codeRepositoryMapper,
+                chatMessageFacadeService,
+                jChatMindFactory,
+                chatClientRegistry,
+                new ObjectMapper(),
+                eventPublisher,
+                capabilityService,
+                directExecutor);
+        WebConsoleChatSendRequest request = new WebConsoleChatSendRequest();
+        request.setConversationId("session-mcp");
+        request.setAgentId("agent-1");
+        request.setModel("gpt-5.5");
+        request.setRepoId("repo-1");
+        request.setContent("search current docs");
+
+        service.send(request);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String>> runtimeToolsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(jChatMindFactory).create(eq("agent-1"), eq("session-mcp"), eq("user-message-mcp"),
+                isA(String.class), isA(String.class), eq("gpt-5.5"), runtimeToolsCaptor.capture());
+        org.assertj.core.api.Assertions.assertThat(runtimeToolsCaptor.getValue()).containsExactly(
+                "searchProjectCode",
+                "databaseQuery",
+                "mcp_context7_resolve_library_id",
+                "mcp_github_mcp_server_search_code",
+                "mcp_playwright_browser_navigate");
+    }
+
+    private GetWebConsoleCapabilitiesResponse capabilities(String repoId, String model) {
+        return GetWebConsoleCapabilitiesResponse.builder()
+                .assistant("代码助手")
+                .profile(WebConsoleCapabilityService.PROFILE)
+                .repoId(repoId)
+                .model(model)
+                .capabilities(List.of(
+                        WebConsoleCapabilityVO.builder()
+                                .key("code_search")
+                                .label("代码检索")
+                                .enabled(true)
+                                .tools(List.of("searchProjectCode"))
+                                .build(),
+                        WebConsoleCapabilityVO.builder()
+                                .key("database_readonly")
+                                .label("数据库只读查询")
+                                .enabled(true)
+                                .tools(List.of("databaseQuery"))
+                                .build()
+                ))
+                .notSupported(List.of("shell", "apply_patch", "write_file"))
+                .build();
+    }
+
+    private GetWebConsoleCapabilitiesResponse capabilitiesWithMcp(String repoId, String model) {
+        return GetWebConsoleCapabilitiesResponse.builder()
+                .assistant("code assistant")
+                .profile(WebConsoleCapabilityService.PROFILE)
+                .repoId(repoId)
+                .model(model)
+                .capabilities(List.of(
+                        WebConsoleCapabilityVO.builder()
+                                .key("code_search")
+                                .enabled(true)
+                                .tools(List.of("searchProjectCode"))
+                                .build(),
+                        WebConsoleCapabilityVO.builder()
+                                .key("database_readonly")
+                                .enabled(true)
+                                .tools(List.of("databaseQuery"))
+                                .build(),
+                        WebConsoleCapabilityVO.builder()
+                                .key("knowledge_rag")
+                                .enabled(true)
+                                .tools(List.of("knowledgeQuery"))
+                                .build(),
+                        WebConsoleCapabilityVO.builder()
+                                .key("agent_control")
+                                .enabled(true)
+                                .tools(List.of("terminate"))
+                                .build(),
+                        WebConsoleCapabilityVO.builder()
+                                .key("mcp_docs")
+                                .enabled(true)
+                                .tools(List.of("mcp_context7_resolve_library_id"))
+                                .build(),
+                        WebConsoleCapabilityVO.builder()
+                                .key("mcp_github")
+                                .enabled(true)
+                                .tools(List.of("mcp_github_mcp_server_search_code"))
+                                .build(),
+                        WebConsoleCapabilityVO.builder()
+                                .key("mcp_browser")
+                                .enabled(true)
+                                .tools(List.of("mcp_playwright_browser_navigate"))
+                                .build()
+                ))
+                .notSupported(List.of("shell", "apply_patch", "write_file"))
+                .build();
     }
 }

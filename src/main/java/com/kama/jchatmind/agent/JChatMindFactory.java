@@ -147,6 +147,24 @@ public class JChatMindFactory {
         }
     }
 
+    private AgentDTO withRuntimeAllowedTools(AgentDTO agentConfig, List<String> runtimeAllowedToolNames) {
+        if (runtimeAllowedToolNames == null || runtimeAllowedToolNames.isEmpty()) {
+            return agentConfig;
+        }
+        return AgentDTO.builder()
+                .id(agentConfig.getId())
+                .name(agentConfig.getName())
+                .description(agentConfig.getDescription())
+                .systemPrompt(agentConfig.getSystemPrompt())
+                .model(agentConfig.getModel())
+                .allowedTools(runtimeAllowedToolNames)
+                .allowedKbs(agentConfig.getAllowedKbs())
+                .chatOptions(agentConfig.getChatOptions())
+                .createdAt(agentConfig.getCreatedAt())
+                .updatedAt(agentConfig.getUpdatedAt())
+                .build();
+    }
+
     private List<KnowledgeBaseDTO> resolveRuntimeKnowledgeBases(AgentDTO agentConfig) {
         List<String> allowedKbIds = agentConfig.getAllowedKbs();
         if (allowedKbIds == null || allowedKbIds.isEmpty()) {
@@ -285,9 +303,15 @@ public class JChatMindFactory {
 
     public JChatMind create(String agentId, String chatSessionId, String userMessageId,
                            String runtimeSystemContext, String traceId, String runtimeModel) {
+        return create(agentId, chatSessionId, userMessageId, runtimeSystemContext, traceId, runtimeModel, null);
+    }
+
+    public JChatMind create(String agentId, String chatSessionId, String userMessageId,
+                           String runtimeSystemContext, String traceId, String runtimeModel,
+                           List<String> runtimeAllowedToolNames) {
         Agent agent = loadAgent(agentId);
         agent = withRuntimeModel(agent, runtimeModel);
-        AgentDTO agentConfig = toAgentConfig(agent);
+        AgentDTO agentConfig = withRuntimeAllowedTools(toAgentConfig(agent), runtimeAllowedToolNames);
         List<Message> memory = loadMemory(chatSessionId, agent.getModel());
         if (StringUtils.hasText(runtimeSystemContext)) {
             memory = new ArrayList<>(memory);

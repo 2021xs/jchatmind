@@ -48,7 +48,7 @@ public class CodeRagProperties {
          * Answer-time evidence selector. Tests may disable it to verify fallback behavior.
          */
         private boolean enabled = true;
-        private String model = "deepseek-official-chat";
+        private String model = "gpt-5.5";
         private int maxCandidateChars = 600;
         private int maxSelected = 5;
         private long timeoutMs = 30000;

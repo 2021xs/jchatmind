@@ -92,6 +92,64 @@ button {
   white-space: nowrap;
 }
 
+.capability-panel {
+  display: grid;
+  gap: 10px;
+  width: min(420px, calc(100vw - 40px));
+}
+
+.capability-panel-head {
+  display: grid;
+  gap: 2px;
+}
+
+.capability-panel-head span {
+  color: #697586;
+  font-size: 12px;
+}
+
+.capability-list {
+  display: grid;
+  gap: 8px;
+}
+
+.capability-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 8px;
+  border: 1px solid #edf0f3;
+  border-radius: 8px;
+  background: #fafbfc;
+}
+
+.capability-row-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.capability-row-main strong {
+  color: #202939;
+  font-size: 13px;
+}
+
+.capability-row-main span {
+  color: #697586;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.capability-divider {
+  margin: 0;
+}
+
+.capability-not-supported {
+  display: grid;
+  gap: 6px;
+}
+
 .top-alert {
   margin-bottom: 14px;
 }
@@ -468,6 +526,12 @@ button {
 .step-row {
   display: grid;
   gap: 8px;
+}
+
+.tool-diagnostics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .tool-summary-text {

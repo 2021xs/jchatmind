@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   ChatSession,
   CodeRepository,
+  WebConsoleCapabilitiesResponse,
   WebConsoleChatSendResponse,
   WebConsoleModel,
 } from "../types";
@@ -133,7 +134,6 @@ export async function getChatMessages(
 
 export async function sendChatMessage(
   sessionId: string,
-  agentId: string,
   model: WebConsoleModel,
   repoId: string,
   content: string,
@@ -142,12 +142,22 @@ export async function sendChatMessage(
     method: "POST",
     body: JSON.stringify({
       conversationId: sessionId,
-      agentId,
       model,
       repoId,
       content,
     }),
   });
+}
+
+export async function getWebConsoleCapabilities(
+  repoId?: string,
+  model?: WebConsoleModel,
+): Promise<WebConsoleCapabilitiesResponse> {
+  return request<WebConsoleCapabilitiesResponse>(
+    "/web-console/capabilities",
+    {},
+    { repoId, model },
+  );
 }
 
 export async function getAgentTraces(

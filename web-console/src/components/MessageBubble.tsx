@@ -97,7 +97,7 @@ function MarkdownContent({ content }: { content: string }) {
         items={[
           {
             key: "full",
-            label: "展开完整回答",
+            label: "展开极长完整回答",
             children: <XMarkdown content={content} />,
           },
         ]}

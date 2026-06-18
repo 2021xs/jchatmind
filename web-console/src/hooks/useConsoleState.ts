@@ -8,8 +8,9 @@ import {
   getChatMessages,
   getChatSessions,
   getRepositories,
+  getWebConsoleCapabilities,
 } from "../api/client";
-import type { DetailMode, RuntimeState } from "../types";
+import type { DetailMode, RuntimeState, WebConsoleModel } from "../types";
 import {
   DEFAULT_WEB_CONSOLE_MODEL,
   codeAssistantAgent,
@@ -54,8 +55,10 @@ export function useConsoleState() {
   const selectedTrace = useMemo(
     () =>
       state.traces.find((trace) => trace.id === state.selectedTraceId) ??
+      state.traces.find((trace) => trace.userMessageId === state.activeUserMessageId) ??
+      state.traces.find((trace) => trace.traceId === state.activeRunId) ??
       state.traces[0],
-    [state.traces, state.selectedTraceId],
+    [state.activeRunId, state.activeUserMessageId, state.traces, state.selectedTraceId],
   );
 
   const visibleToolCalls = useMemo(
@@ -135,15 +138,45 @@ export function useConsoleState() {
     }
   }, []);
 
+  const refreshCapabilities = useCallback(async (
+    repoId?: string,
+    model: WebConsoleModel = DEFAULT_WEB_CONSOLE_MODEL,
+  ) => {
+    setState((previous) => ({
+      ...previous,
+      capabilityLoading: true,
+      capabilityError: undefined,
+    }));
+    try {
+      const capabilities = await getWebConsoleCapabilities(repoId, model);
+      setState((previous) => ({
+        ...previous,
+        capabilities,
+        capabilityLoading: false,
+        capabilityError: undefined,
+      }));
+    } catch (error) {
+      setState((previous) => ({
+        ...previous,
+        capabilityLoading: false,
+        capabilityError: errorMessage(error),
+      }));
+    }
+  }, []);
+
   const createSession = useCallback(
-    async (title = "Web Console 会话") => {
+    async (title: string) => {
+      const trimmedTitle = title.trim();
+      if (!trimmedTitle) {
+        throw new Error("请输入会话名称");
+      }
       const agentId = codeAssistantAgent(state.agents)?.id;
       if (!agentId) {
         throw new Error("需要先有可用代码助手 Agent，才能创建会话");
       }
       const sessionId = await createChatSession(
         agentId,
-        title,
+        trimmedTitle,
         state.selectedModel,
         state.selectedRepoId,
       );
@@ -242,5 +275,6 @@ export function useConsoleState() {
     removeRepository,
     removeSession,
     openDetail,
+    refreshCapabilities,
   };
 }

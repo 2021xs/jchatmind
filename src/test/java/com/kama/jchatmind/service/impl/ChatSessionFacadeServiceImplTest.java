@@ -2,7 +2,12 @@ package com.kama.jchatmind.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.converter.ChatSessionConverter;
+import com.kama.jchatmind.exception.BizException;
+import com.kama.jchatmind.mapper.AgentStepMapper;
+import com.kama.jchatmind.mapper.AgentTaskMapper;
+import com.kama.jchatmind.mapper.ChatMessageMapper;
 import com.kama.jchatmind.mapper.ChatSessionMapper;
+import com.kama.jchatmind.mapper.ToolCallLogMapper;
 import com.kama.jchatmind.model.entity.ChatSession;
 import com.kama.jchatmind.model.request.CreateChatSessionRequest;
 import com.kama.jchatmind.model.response.GetChatSessionsResponse;
@@ -16,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.isA;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -24,14 +30,28 @@ import static org.mockito.Mockito.when;
 class ChatSessionFacadeServiceImplTest {
 
     private ChatSessionMapper chatSessionMapper;
+    private ChatMessageMapper chatMessageMapper;
+    private AgentTaskMapper agentTaskMapper;
+    private AgentStepMapper agentStepMapper;
+    private ToolCallLogMapper toolCallLogMapper;
     private ChatSessionFacadeServiceImpl service;
 
     @BeforeEach
     void setUp() {
         chatSessionMapper = mock(ChatSessionMapper.class);
+        chatMessageMapper = mock(ChatMessageMapper.class);
+        agentTaskMapper = mock(AgentTaskMapper.class);
+        agentStepMapper = mock(AgentStepMapper.class);
+        toolCallLogMapper = mock(ToolCallLogMapper.class);
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.findAndRegisterModules();
-        service = new ChatSessionFacadeServiceImpl(chatSessionMapper, new ChatSessionConverter(objectMapper));
+        service = new ChatSessionFacadeServiceImpl(
+                chatSessionMapper,
+                new ChatSessionConverter(objectMapper),
+                chatMessageMapper,
+                agentTaskMapper,
+                agentStepMapper,
+                toolCallLogMapper);
     }
 
     @Test
@@ -114,6 +134,40 @@ class ChatSessionFacadeServiceImplTest {
                 .toVO(persisted);
         assertThat(vo.getTitle()).isEqualTo("Web Console 中文测试");
         assertThat(vo.getTitle()).doesNotContain("????");
+    }
+
+    @Test
+    void createWebConsoleSessionRequiresExplicitTitle() {
+        CreateChatSessionRequest request = new CreateChatSessionRequest();
+        request.setAgentId("agent-1");
+        request.setTitle(" ");
+        request.setChannel("WEB_CONSOLE");
+        request.setRepoId("repo-1");
+
+        assertThatThrownBy(() -> service.createChatSession(request))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("Web Console 会话名称不能为空");
+    }
+
+    @Test
+    void deleteChatSessionCleansMessagesTraceStepsAndToolLogsBeforeDeletingSession() {
+        when(chatSessionMapper.selectById("session-1")).thenReturn(
+                chatSession("session-1", "agent-1", "{\"channel\":\"WEB_CONSOLE\"}"));
+        when(chatSessionMapper.deleteById("session-1")).thenReturn(1);
+
+        service.deleteChatSession("session-1");
+
+        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(
+                toolCallLogMapper,
+                agentStepMapper,
+                agentTaskMapper,
+                chatMessageMapper,
+                chatSessionMapper);
+        inOrder.verify(toolCallLogMapper).deleteBySessionId("session-1");
+        inOrder.verify(agentStepMapper).deleteBySessionId("session-1");
+        inOrder.verify(agentTaskMapper).deleteBySessionId("session-1");
+        inOrder.verify(chatMessageMapper).deleteBySessionId("session-1");
+        inOrder.verify(chatSessionMapper).deleteById("session-1");
     }
 
     private ChatSession chatSession(String id, String agentId, String metadata) {

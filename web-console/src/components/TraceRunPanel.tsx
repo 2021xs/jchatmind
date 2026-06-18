@@ -6,10 +6,12 @@ import { Metric, RawBlock } from "./common";
 export function TraceRunPanel({
   traces,
   selectedTrace,
+  recentFallback,
   onSelectTrace,
 }: {
   traces: AgentTaskTrace[];
   selectedTrace?: AgentTaskTrace;
+  recentFallback?: boolean;
   onSelectTrace: (traceId: string) => void;
 }) {
   if (traces.length === 0) {
@@ -27,6 +29,14 @@ export function TraceRunPanel({
         }))}
         onChange={onSelectTrace}
       />
+      {recentFallback ? (
+        <Alert
+          className="trace-error"
+          type="info"
+          showIcon
+          message="当前展示最近一次执行记录"
+        />
+      ) : null}
       {selectedTrace ? <TraceRun trace={selectedTrace} /> : null}
     </div>
   );
@@ -36,7 +46,6 @@ function TraceRun({ trace }: { trace: AgentTaskTrace }) {
   return (
     <section className="trace-run">
       <div className="trace-summary-grid">
-        <Metric label="runId" value={trace.traceId ?? trace.id} />
         <Metric label="status" value={trace.status ?? "UNKNOWN"} />
         <Metric label="latency" value={formatLatency(trace.latencyMs)} />
         <Metric label="steps" value={String(trace.actualSteps ?? trace.steps?.length ?? 0)} />

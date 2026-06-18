@@ -14,6 +14,7 @@ import com.kama.jchatmind.mcp.registry.ExternalMcpServerRegistration;
 import com.kama.jchatmind.mcp.registry.ExternalMcpToolRegistration;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
@@ -26,18 +27,30 @@ public class SpringAiExternalMcpClientAdapter implements ExternalMcpCapabilityDi
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
     };
 
-    private final List<McpSyncClient> mcpClients;
+    private final List<McpSyncClient> fixedMcpClients;
+    private final ObjectProvider<List<McpSyncClient>> mcpClientsProvider;
     private final ObjectMapper objectMapper;
 
     public SpringAiExternalMcpClientAdapter(List<McpSyncClient> mcpClients, ObjectMapper objectMapper) {
-        this.mcpClients = mcpClients == null ? List.of() : List.copyOf(mcpClients);
+        this.fixedMcpClients = mcpClients == null ? List.of() : List.copyOf(mcpClients);
+        this.mcpClientsProvider = null;
+        this.objectMapper = objectMapper;
+    }
+
+    public SpringAiExternalMcpClientAdapter(ObjectProvider<List<McpSyncClient>> mcpClientsProvider,
+                                            ObjectMapper objectMapper) {
+        this.fixedMcpClients = null;
+        this.mcpClientsProvider = mcpClientsProvider;
         this.objectMapper = objectMapper;
     }
 
     @Override
     public List<ExternalMcpDiscoveredTool> discoverTools(ExternalMcpServerRegistration server) {
-        McpSyncClient client = clientFor(server)
-                .orElseThrow(() -> new IllegalStateException("No MCP client found for server: " + server.getName()));
+        Optional<McpSyncClient> maybeClient = clientFor(server);
+        if (maybeClient.isEmpty()) {
+            return List.of();
+        }
+        McpSyncClient client = maybeClient.get();
         return client.listTools().tools().stream()
                 .map(tool -> ExternalMcpDiscoveredTool.builder()
                         .name(tool.name())
@@ -49,8 +62,11 @@ public class SpringAiExternalMcpClientAdapter implements ExternalMcpCapabilityDi
 
     @Override
     public List<ExternalMcpDiscoveredResource> discoverResources(ExternalMcpServerRegistration server) {
-        McpSyncClient client = clientFor(server)
-                .orElseThrow(() -> new IllegalStateException("No MCP client found for server: " + server.getName()));
+        Optional<McpSyncClient> maybeClient = clientFor(server);
+        if (maybeClient.isEmpty()) {
+            return List.of();
+        }
+        McpSyncClient client = maybeClient.get();
         return client.listResources().resources().stream()
                 .map(resource -> ExternalMcpDiscoveredResource.builder()
                         .uri(resource.uri())
@@ -63,8 +79,11 @@ public class SpringAiExternalMcpClientAdapter implements ExternalMcpCapabilityDi
 
     @Override
     public List<ExternalMcpDiscoveredPrompt> discoverPrompts(ExternalMcpServerRegistration server) {
-        McpSyncClient client = clientFor(server)
-                .orElseThrow(() -> new IllegalStateException("No MCP client found for server: " + server.getName()));
+        Optional<McpSyncClient> maybeClient = clientFor(server);
+        if (maybeClient.isEmpty()) {
+            return List.of();
+        }
+        McpSyncClient client = maybeClient.get();
         return client.listPrompts().prompts().stream()
                 .map(prompt -> ExternalMcpDiscoveredPrompt.builder()
                         .name(prompt.name())
@@ -116,10 +135,19 @@ public class SpringAiExternalMcpClientAdapter implements ExternalMcpCapabilityDi
 
     private Optional<McpSyncClient> clientFor(String serverName) {
         String expected = normalize(serverName);
-        return mcpClients.stream()
+        List<McpSyncClient> clients = mcpClients();
+        return clients.stream()
                 .filter(client -> expected.equals(normalize(serverName(client))))
                 .findFirst()
-                .or(() -> mcpClients.size() == 1 ? Optional.of(mcpClients.get(0)) : Optional.empty());
+                .or(() -> clients.size() == 1 ? Optional.of(clients.get(0)) : Optional.empty());
+    }
+
+    private List<McpSyncClient> mcpClients() {
+        if (fixedMcpClients != null) {
+            return fixedMcpClients;
+        }
+        List<McpSyncClient> provided = mcpClientsProvider == null ? null : mcpClientsProvider.getIfAvailable();
+        return provided == null ? List.of() : provided;
     }
 
     private String serverName(McpSyncClient client) {

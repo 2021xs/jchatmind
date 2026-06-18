@@ -63,7 +63,7 @@ export function ChatPanel({
             代码助手
           </Typography.Title>
           <Typography.Text type="secondary">
-            使用代码助手能力模板，可按当前模型调用安全代码检索工具。
+            使用安全全能力代码助手模板，可按当前模型调用已启用的只读/受控工具。
           </Typography.Text>
         </div>
         <Space wrap>

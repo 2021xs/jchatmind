@@ -16,4 +16,6 @@ public interface AgentStepMapper {
     List<AgentStep> selectRunningByTaskId(String taskId);
 
     List<AgentStep> selectByTaskId(String taskId);
+
+    int deleteBySessionId(String sessionId);
 }

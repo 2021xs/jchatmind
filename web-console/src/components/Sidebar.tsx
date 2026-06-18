@@ -13,6 +13,7 @@ export function Sidebar({
   onSelectModel,
   onSelectSession,
   onCreateSession,
+  creatingSession,
   onDeleteRepo,
   onDeleteSession,
 }: {
@@ -26,6 +27,7 @@ export function Sidebar({
   onSelectModel: (model: WebConsoleModel) => void;
   onSelectSession: (sessionId: string) => void;
   onCreateSession: () => void;
+  creatingSession?: boolean;
   onDeleteRepo: (repoId: string) => Promise<void>;
   onDeleteSession: (sessionId: string) => Promise<void>;
 }) {
@@ -48,6 +50,7 @@ export function Sidebar({
         onSelectModel={onSelectModel}
         onSelectSession={onSelectSession}
         onCreateSession={onCreateSession}
+        creatingSession={creatingSession}
         onDeleteSession={onDeleteSession}
       />
     </aside>

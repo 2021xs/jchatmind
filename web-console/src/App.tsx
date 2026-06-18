@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { Alert, Button, Spin, message } from "antd";
+import { useEffect, useState } from "react";
+import { Alert, Button, Form, Input, Modal, Spin, message } from "antd";
 import { AppHeader } from "./components/AppHeader";
 import { ChatPanel } from "./components/ChatPanel";
 import { Sidebar } from "./components/Sidebar";
@@ -10,6 +10,9 @@ import { useSessionSse } from "./hooks/useSessionSse";
 
 function App() {
   const [noticeApi, contextHolder] = message.useMessage();
+  const [sessionNameForm] = Form.useForm<{ title: string }>();
+  const [createSessionModalOpen, setCreateSessionModalOpen] = useState(false);
+  const [creatingSession, setCreatingSession] = useState(false);
   const {
     state,
     setState,
@@ -25,12 +28,11 @@ function App() {
     removeRepository,
     removeSession,
     openDetail,
+    refreshCapabilities,
   } = useConsoleState();
 
   const { draft, setDraft, handleSend } = useChatSend({
     selectedSession,
-    agents: state.agents,
-    selectedAgentId: state.selectedAgentId,
     selectedModel: state.selectedModel,
     selectedRepoId: state.selectedRepoId,
     selectedSessionId: state.selectedSessionId,
@@ -43,6 +45,10 @@ function App() {
     void refreshConsole();
   }, [refreshConsole]);
 
+  useEffect(() => {
+    void refreshCapabilities(state.selectedRepoId, state.selectedModel);
+  }, [refreshCapabilities, state.selectedModel, state.selectedRepoId]);
+
   useSessionSse({
     sessionId: state.selectedSessionId,
     setState,
@@ -51,9 +57,22 @@ function App() {
 
   async function handleCreateSession() {
     try {
-      await createSession();
+      const values = await sessionNameForm.validateFields();
+      const title = values.title.trim();
+      if (!title) {
+        return;
+      }
+      setCreatingSession(true);
+      await createSession(title);
+      setCreateSessionModalOpen(false);
+      sessionNameForm.resetFields();
     } catch (error) {
+      if (isFormValidationError(error)) {
+        return;
+      }
       noticeApi.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCreatingSession(false);
     }
   }
 
@@ -61,10 +80,10 @@ function App() {
     <main className="console-shell">
       {contextHolder}
       <AppHeader
-        repo={selectedRepo}
         model={state.selectedModel}
-        session={selectedSession}
-        sseStatus={state.sseStatus}
+        capabilities={state.capabilities}
+        capabilityLoading={state.capabilityLoading}
+        capabilityError={state.capabilityError}
         detailOpen={state.detailOpen}
         onRefresh={refreshConsole}
         onToggleDetail={() =>
@@ -108,7 +127,8 @@ function App() {
               setState((previous) => ({ ...previous, selectedModel }))
             }
             onSelectSession={selectSession}
-            onCreateSession={handleCreateSession}
+            onCreateSession={() => setCreateSessionModalOpen(true)}
+            creatingSession={creatingSession}
             onDeleteRepo={async (repoId) => {
               try {
                 await removeRepository(repoId);
@@ -169,8 +189,44 @@ function App() {
           />
         </section>
       </Spin>
+
+      <Modal
+        title="新建会话"
+        open={createSessionModalOpen}
+        okText="创建"
+        cancelText="取消"
+        confirmLoading={creatingSession}
+        destroyOnHidden
+        onOk={() => void handleCreateSession()}
+        onCancel={() => {
+          setCreateSessionModalOpen(false);
+          sessionNameForm.resetFields();
+        }}
+      >
+        <Form form={sessionNameForm} layout="vertical" preserve={false}>
+          <Form.Item
+            label="会话名称"
+            name="title"
+            rules={[
+              { required: true, whitespace: true, message: "请输入会话名称" },
+              { max: 80, message: "会话名称最多 80 个字符" },
+            ]}
+          >
+            <Input
+              autoFocus
+              placeholder="例如：秒杀链路排查"
+              maxLength={80}
+              onPressEnter={() => void handleCreateSession()}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
     </main>
   );
 }
 
 export default App;
+
+function isFormValidationError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "errorFields" in error;
+}

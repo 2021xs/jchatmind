@@ -63,10 +63,6 @@ export function useSessionSse({
           typeof parsed.payload?.traceId === "string"
             ? parsed.payload.traceId
             : previous.activeRunId,
-        detailMode:
-          parsed.type === "tool_call_start" || parsed.type === "tool_call_result"
-            ? "tools"
-            : previous.detailMode,
       }));
       if (parsed.type === "done" || parsed.type === "error") {
         void refreshSessionData(activeSessionId);

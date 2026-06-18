@@ -87,7 +87,7 @@ jchatmind:
     llm-selector:
       # Tests may disable this to verify fallback; normal Agent flow keeps selector on.
       enabled: true
-      model: deepseek-official-chat
+      model: gpt-5.5
       max-candidate-chars: 600
       max-selected: 5
       timeout-ms: 30000

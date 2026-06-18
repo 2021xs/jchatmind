@@ -34,6 +34,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -55,17 +56,16 @@ public class McpClientIntegrationConfig {
     }
 
     @Bean
-    @ConditionalOnMissingBean(value = {McpSyncClient.class, ExternalMcpCapabilityDiscoveryClient.class})
-    public ExternalMcpCapabilityDiscoveryClient externalMcpCapabilityDiscoveryClient() {
-        return new NoopExternalMcpCapabilityDiscoveryClient();
+    @ConditionalOnMissingBean({ExternalMcpToolDiscoveryClient.class, ExternalMcpToolInvoker.class})
+    public SpringAiExternalMcpClientAdapter springAiExternalMcpClientAdapter(ObjectProvider<List<McpSyncClient>> mcpClientsProvider,
+                                                                             ObjectMapper objectMapper) {
+        return new SpringAiExternalMcpClientAdapter(mcpClientsProvider, objectMapper);
     }
 
     @Bean
-    @ConditionalOnBean(McpSyncClient.class)
-    @ConditionalOnMissingBean({ExternalMcpToolDiscoveryClient.class, ExternalMcpToolInvoker.class})
-    public SpringAiExternalMcpClientAdapter springAiExternalMcpClientAdapter(List<McpSyncClient> mcpClients,
-                                                                             ObjectMapper objectMapper) {
-        return new SpringAiExternalMcpClientAdapter(mcpClients, objectMapper);
+    @ConditionalOnMissingBean(value = {SpringAiExternalMcpClientAdapter.class, ExternalMcpCapabilityDiscoveryClient.class})
+    public ExternalMcpCapabilityDiscoveryClient externalMcpCapabilityDiscoveryClient() {
+        return new NoopExternalMcpCapabilityDiscoveryClient();
     }
 
     @Bean

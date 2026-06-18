@@ -18,6 +18,7 @@ export function ConversationList({
   onSelectModel,
   onSelectSession,
   onCreateSession,
+  creatingSession,
   onDeleteSession,
 }: {
   sessions: ChatSession[];
@@ -28,6 +29,7 @@ export function ConversationList({
   onSelectModel: (model: WebConsoleModel) => void;
   onSelectSession: (sessionId: string) => void;
   onCreateSession: () => void;
+  creatingSession?: boolean;
   onDeleteSession: (sessionId: string) => Promise<void>;
 }) {
   const visibleSessions = sessions.slice(0, MAX_VISIBLE_SESSIONS);
@@ -39,7 +41,12 @@ export function ConversationList({
         title="会话"
         count={sessions.length}
         action={
-          <Button size="small" icon={<PlusOutlined />} onClick={onCreateSession}>
+          <Button
+            size="small"
+            icon={<PlusOutlined />}
+            loading={creatingSession}
+            onClick={onCreateSession}
+          >
             新建
           </Button>
         }
@@ -86,7 +93,7 @@ export function ConversationList({
                   >
                     <Popconfirm
                       title="确认删除该 Web Console 会话？"
-                      description="删除后会话历史将不可恢复。消息、Trace 和工具日志是否清理取决于后端当前实现。"
+                      description="删除后会清理该 Web Console 会话、消息、Agent Trace 和工具日志，操作不可恢复。"
                       okText="删除"
                       cancelText="取消"
                       okButtonProps={{ danger: true }}

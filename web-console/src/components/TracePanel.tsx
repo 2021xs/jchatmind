@@ -38,10 +38,10 @@ export function TracePanel({
       <div className="detail-header">
         <div>
           <Typography.Title level={5} className="panel-title">
-            Trace / Audit
+            执行过程
           </Typography.Title>
           <Typography.Text type="secondary">
-            完整调试信息保留在右侧，raw detail 默认折叠
+            默认展示当前或最近一次执行摘要，调试 raw detail 默认折叠
           </Typography.Text>
         </div>
         <Button size="small" type="text" icon={<MenuFoldOutlined />} onClick={onClose} />
@@ -53,21 +53,21 @@ export function TracePanel({
           type="button"
           onClick={() => onModeChange("trace")}
         >
-          Runs <Badge count={traces.length} />
+          执行记录 <Badge count={traces.length} />
         </button>
         <button
           className={mode === "tools" ? "active" : ""}
           type="button"
           onClick={() => onModeChange("tools")}
         >
-          Tools <Badge count={toolCalls.length} />
+          工具详情 <Badge count={toolCalls.length} />
         </button>
         <button
           className={mode === "events" ? "active" : ""}
           type="button"
           onClick={() => onModeChange("events")}
         >
-          SSE <Badge count={events.length} />
+          SSE 调试 <Badge count={events.length} />
         </button>
       </div>
 
@@ -77,6 +77,7 @@ export function TracePanel({
         <TraceRunPanel
           traces={traces}
           selectedTrace={selectedTrace}
+          recentFallback={selectedTrace?.id === traces[0]?.id}
           onSelectTrace={onSelectTrace}
         />
       ) : mode === "tools" ? (

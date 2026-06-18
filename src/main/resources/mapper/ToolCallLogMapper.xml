@@ -149,4 +149,11 @@
         WHERE task_id = CAST(#{taskId} AS uuid)
         ORDER BY started_at ASC, created_at ASC
     </select>
+
+    <delete id="deleteBySessionId">
+        DELETE FROM tool_call_log
+        WHERE task_id IN (
+            SELECT id FROM agent_task WHERE session_id = CAST(#{sessionId} AS uuid)
+        )
+    </delete>
 </mapper>

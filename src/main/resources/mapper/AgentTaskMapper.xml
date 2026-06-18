@@ -193,4 +193,8 @@
         ORDER BY started_at DESC
         LIMIT #{limit}
     </select>
+
+    <delete id="deleteBySessionId">
+        DELETE FROM agent_task WHERE session_id = CAST(#{sessionId} AS uuid)
+    </delete>
 </mapper>
