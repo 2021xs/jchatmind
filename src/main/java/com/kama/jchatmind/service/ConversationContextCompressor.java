@@ -7,6 +7,8 @@ import java.util.List;
 public interface ConversationContextCompressor {
     CompressionCheck check(String sessionId, List<ChatMessageDTO> allMessages);
 
+    CompressionCheck check(String sessionId, String model, List<ChatMessageDTO> allMessages);
+
     CompressedContext compressIfNeeded(String sessionId, String model, List<ChatMessageDTO> allMessages);
 
     record CompressionCheck(boolean needed,
@@ -14,7 +16,10 @@ public interface ConversationContextCompressor {
                             int messageCount,
                             int contextTokens,
                             int maxSingleToolResultTokens,
-                            int newCompressibleMessages) {
+                            int newCompressibleMessages,
+                            String tokenSource,
+                            int maxContextTokens,
+                            int maxSingleToolResultTokensThreshold) {
     }
 
     record CompressedContext(String summary, List<ChatMessageDTO> recentMessages, boolean compressed) {

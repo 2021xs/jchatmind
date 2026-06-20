@@ -9,6 +9,8 @@ import com.kama.jchatmind.model.dto.ChatSessionDTO;
 import com.kama.jchatmind.model.entity.ChatSession;
 import com.kama.jchatmind.service.ConversationContextCompressor;
 import com.kama.jchatmind.service.ConversationSummaryClient;
+import com.kama.jchatmind.service.TokenCounter;
+import com.kama.jchatmind.service.TokenCounter.TokenCount;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -29,23 +31,36 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
     private final ConversationSummaryClient conversationSummaryClient;
     private final ChatSessionMapper chatSessionMapper;
     private final ObjectMapper objectMapper;
+    private final TokenCounter tokenCounter;
 
     public ConversationContextCompressorImpl(ContextCompressionProperties properties,
                                              ConversationSummaryClient conversationSummaryClient,
                                              ChatSessionMapper chatSessionMapper,
-                                             ObjectMapper objectMapper) {
+                                             ObjectMapper objectMapper,
+                                             TokenCounter tokenCounter) {
         this.properties = properties;
         this.conversationSummaryClient = conversationSummaryClient;
         this.chatSessionMapper = chatSessionMapper;
         this.objectMapper = objectMapper;
+        this.tokenCounter = tokenCounter;
     }
 
     @Override
     public CompressionCheck check(String sessionId, List<ChatMessageDTO> allMessages) {
+        return check(sessionId, null, allMessages);
+    }
+
+    @Override
+    public CompressionCheck check(String sessionId, String model, List<ChatMessageDTO> allMessages) {
         List<ChatMessageDTO> sortedMessages = sortedMessages(allMessages);
+        ContextCompressionProperties.TokenThreshold threshold = properties.thresholdFor(model);
+        TokenCount contextTokenCount = totalContentTokens(model, sortedMessages);
+        MaxToolResultTokenCount maxToolResultTokenCount = maxSingleToolResultTokens(model, sortedMessages);
         if (!properties.isEnabled()) {
             return new CompressionCheck(false, "disabled", sortedMessages.size(),
-                    totalContentTokens(sortedMessages), maxSingleToolResultTokens(sortedMessages), 0);
+                    contextTokenCount.tokens(), maxToolResultTokenCount.tokens(), 0,
+                    combineSources(contextTokenCount.source(), maxToolResultTokenCount.source()),
+                    threshold.getMaxContextTokens(), threshold.getMaxSingleToolResultTokens());
         }
 
         ChatSessionDTO.MetaData metadata = loadMetadata(sessionId);
@@ -53,16 +68,17 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         List<ChatMessageDTO> candidates = messagesBeforeRecentWindow(sortedMessages, recentMessages.size());
         List<ChatMessageDTO> messagesToCompress = filterAlreadySummarized(candidates,
                 metadata == null ? null : metadata.getContextSummaryLastMessageId());
-        int contextTokens = totalContentTokens(sortedMessages);
-        int maxToolResultTokens = maxSingleToolResultTokens(sortedMessages);
-        boolean overMessageCount = sortedMessages.size() >= properties.getTriggerMessageCount();
-        boolean overContextTokens = contextTokens >= properties.getMaxContextTokens();
-        boolean overToolResultTokens = maxToolResultTokens >= properties.getMaxSingleToolResultTokens();
+        int contextTokens = contextTokenCount.tokens();
+        int maxToolResultTokens = maxToolResultTokenCount.tokens();
+        boolean overContextTokens = contextTokens >= threshold.getMaxContextTokens();
+        boolean overToolResultTokens = maxToolResultTokens >= threshold.getMaxSingleToolResultTokens();
         boolean needed = !messagesToCompress.isEmpty()
-                && (overMessageCount || overContextTokens || overToolResultTokens);
-        String reason = reason(overMessageCount, overContextTokens, overToolResultTokens, messagesToCompress.isEmpty());
+                && (overContextTokens || overToolResultTokens);
+        String reason = reason(overContextTokens, overToolResultTokens, messagesToCompress.isEmpty());
         return new CompressionCheck(needed, reason, sortedMessages.size(),
-                contextTokens, maxToolResultTokens, messagesToCompress.size());
+                contextTokens, maxToolResultTokens, messagesToCompress.size(),
+                combineSources(contextTokenCount.source(), maxToolResultTokenCount.source()),
+                threshold.getMaxContextTokens(), threshold.getMaxSingleToolResultTokens());
     }
 
     @Override
@@ -74,12 +90,12 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
 
         ChatSessionDTO.MetaData metadata = loadMetadata(sessionId);
         String existingSummary = metadata == null ? null : metadata.getContextSummary();
-        CompressionCheck check = checkWithMetadata(sortedMessages, metadata);
+        CompressionCheck check = checkWithMetadata(model, sortedMessages, metadata);
         if (!check.needed()) {
-            log.info("Context compression skipped: sessionId={}, reason={}, historyMessages={}, contextTokens={}, maxToolResultTokens={}, triggerMessages={}, triggerTokens={}, triggerToolResultTokens={}",
+            log.info("Context compression skipped: sessionId={}, reason={}, historyMessages={}, contextTokens={}, maxToolResultTokens={}, tokenSource={}, maxContextTokens={}, maxSingleToolResultTokens={}",
                     sessionId, check.reason(), sortedMessages.size(), check.contextTokens(),
-                    check.maxSingleToolResultTokens(), properties.getTriggerMessageCount(),
-                    properties.getMaxContextTokens(), properties.getMaxSingleToolResultTokens());
+                    check.maxSingleToolResultTokens(), check.tokenSource(),
+                    check.maxContextTokens(), check.maxSingleToolResultTokensThreshold());
             return new CompressedContext(existingSummary, keepRecentMessages(sortedMessages), false);
         }
 
@@ -121,21 +137,27 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 .toList();
     }
 
-    private CompressionCheck checkWithMetadata(List<ChatMessageDTO> sortedMessages, ChatSessionDTO.MetaData metadata) {
+    private CompressionCheck checkWithMetadata(String model,
+                                               List<ChatMessageDTO> sortedMessages,
+                                               ChatSessionDTO.MetaData metadata) {
+        ContextCompressionProperties.TokenThreshold threshold = properties.thresholdFor(model);
         List<ChatMessageDTO> recentMessages = keepRecentMessages(sortedMessages);
         List<ChatMessageDTO> candidates = messagesBeforeRecentWindow(sortedMessages, recentMessages.size());
         List<ChatMessageDTO> messagesToCompress = filterAlreadySummarized(candidates,
                 metadata == null ? null : metadata.getContextSummaryLastMessageId());
-        int contextTokens = totalContentTokens(sortedMessages);
-        int maxToolResultTokens = maxSingleToolResultTokens(sortedMessages);
-        boolean overMessageCount = sortedMessages.size() >= properties.getTriggerMessageCount();
-        boolean overContextTokens = contextTokens >= properties.getMaxContextTokens();
-        boolean overToolResultTokens = maxToolResultTokens >= properties.getMaxSingleToolResultTokens();
+        TokenCount contextTokenCount = totalContentTokens(model, sortedMessages);
+        MaxToolResultTokenCount maxToolResultTokenCount = maxSingleToolResultTokens(model, sortedMessages);
+        int contextTokens = contextTokenCount.tokens();
+        int maxToolResultTokens = maxToolResultTokenCount.tokens();
+        boolean overContextTokens = contextTokens >= threshold.getMaxContextTokens();
+        boolean overToolResultTokens = maxToolResultTokens >= threshold.getMaxSingleToolResultTokens();
         boolean needed = !messagesToCompress.isEmpty()
-                && (overMessageCount || overContextTokens || overToolResultTokens);
-        String reason = reason(overMessageCount, overContextTokens, overToolResultTokens, messagesToCompress.isEmpty());
+                && (overContextTokens || overToolResultTokens);
+        String reason = reason(overContextTokens, overToolResultTokens, messagesToCompress.isEmpty());
         return new CompressionCheck(needed, reason, sortedMessages.size(),
-                contextTokens, maxToolResultTokens, messagesToCompress.size());
+                contextTokens, maxToolResultTokens, messagesToCompress.size(),
+                combineSources(contextTokenCount.source(), maxToolResultTokenCount.source()),
+                threshold.getMaxContextTokens(), threshold.getMaxSingleToolResultTokens());
     }
 
     private List<ChatMessageDTO> keepRecentMessages(List<ChatMessageDTO> messages) {
@@ -169,43 +191,47 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         return new ArrayList<>(candidates.subList(lastIndex + 1, candidates.size()));
     }
 
-    private int totalContentTokens(List<ChatMessageDTO> messages) {
-        return messages.stream()
-                .map(ChatMessageDTO::getContent)
-                .filter(Objects::nonNull)
-                .mapToInt(this::estimateTokens)
-                .sum();
+    private TokenCount totalContentTokens(String model, List<ChatMessageDTO> messages) {
+        return tokenCounter.countMessages(model, messages);
     }
 
-    private int maxSingleToolResultTokens(List<ChatMessageDTO> messages) {
-        return messages.stream()
+    private MaxToolResultTokenCount maxSingleToolResultTokens(String model, List<ChatMessageDTO> messages) {
+        List<TokenCount> tokenCounts = messages.stream()
                 .filter(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL)
                 .map(ChatMessageDTO::getContent)
                 .filter(Objects::nonNull)
-                .mapToInt(this::estimateTokens)
+                .map(content -> tokenCounter.countText(model, content))
+                .toList();
+        int tokens = tokenCounts.stream()
+                .mapToInt(TokenCount::tokens)
                 .max()
                 .orElse(0);
+        String source = tokenCounts.stream()
+                .map(TokenCount::source)
+                .filter(StringUtils::hasLength)
+                .distinct()
+                .collect(Collectors.joining("+"));
+        return new MaxToolResultTokenCount(tokens, source);
     }
 
-    private int estimateTokens(String content) {
-        if (!StringUtils.hasLength(content)) {
-            return 0;
+    private String combineSources(String contextSource, String toolSource) {
+        List<String> sources = new ArrayList<>();
+        if (StringUtils.hasLength(contextSource)) {
+            sources.add(contextSource);
         }
-        int charsPerToken = Math.max(1, properties.getCharsPerToken());
-        return (content.length() + charsPerToken - 1) / charsPerToken;
+        if (StringUtils.hasLength(toolSource) && !sources.contains(toolSource)) {
+            sources.add(toolSource);
+        }
+        return sources.isEmpty() ? "UNAVAILABLE" : String.join("+", sources);
     }
 
-    private String reason(boolean overMessageCount,
-                          boolean overContextTokens,
+    private String reason(boolean overContextTokens,
                           boolean overToolResultTokens,
                           boolean noNewMessages) {
         if (noNewMessages) {
             return "no_new_messages";
         }
         List<String> reasons = new ArrayList<>();
-        if (overMessageCount) {
-            reasons.add("message_count");
-        }
         if (overContextTokens) {
             reasons.add("context_tokens");
         }
@@ -294,5 +320,8 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
 
     private int length(String value) {
         return value == null ? 0 : value.length();
+    }
+
+    private record MaxToolResultTokenCount(int tokens, String source) {
     }
 }

@@ -348,7 +348,7 @@ public class JChatMind {
         }
         List<ChatMessageDTO> allMessages = chatMessageFacadeService.getChatMessageDTOsBySessionId(chatSessionId);
         ConversationContextCompressor.CompressionCheck check =
-                conversationContextCompressor.check(chatSessionId, allMessages);
+                conversationContextCompressor.check(chatSessionId, model, allMessages);
         if (!check.needed()) {
             return;
         }
