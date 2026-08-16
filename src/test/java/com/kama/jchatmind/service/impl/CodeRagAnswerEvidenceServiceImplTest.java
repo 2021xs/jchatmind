@@ -3,6 +3,7 @@ package com.kama.jchatmind.service.impl;
 import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.model.dto.CodeEvidenceCandidateCard;
 import com.kama.jchatmind.model.dto.CodeEvidenceSelectionResult;
+import com.kama.jchatmind.model.dto.CodeSearchExecutionResult;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.service.CodeSearchService;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,7 +48,7 @@ class CodeRagAnswerEvidenceServiceImplTest {
     void retrieveReturnsSelectorChosenEvidence() {
         CodeSearchResult raw1 = result("raw-1", "Controller.java", "CONTROLLER_API");
         CodeSearchResult raw2 = result("raw-2", "Service.java", "SERVICE_METHOD");
-        when(codeSearchService.search("repo", "query", 50)).thenReturn(List.of(raw1, raw2));
+        mockSearch(raw1, raw2);
         when(evidenceSelector.select(eq("query"), any()))
                 .thenReturn(selection(List.of("raw-2"), false));
 
@@ -63,7 +64,7 @@ class CodeRagAnswerEvidenceServiceImplTest {
     void retrieveFallsBackWhenSelectorReportsDisabledFallback() {
         CodeSearchResult raw1 = result("raw-1", "Controller.java", "CONTROLLER_API");
         CodeSearchResult raw2 = result("raw-2", "Service.java", "SERVICE_METHOD");
-        when(codeSearchService.search("repo", "query", 50)).thenReturn(List.of(raw1, raw2));
+        mockSearch(raw1, raw2);
         when(evidenceSelector.select(eq("query"), any()))
                 .thenReturn(selection(List.of("raw-1", "raw-2"), true));
 
@@ -77,7 +78,7 @@ class CodeRagAnswerEvidenceServiceImplTest {
     void retrieveFallsBackWhenSelectorThrows() {
         CodeSearchResult raw1 = result("raw-1", "Controller.java", "CONTROLLER_API");
         CodeSearchResult raw2 = result("raw-2", "Service.java", "SERVICE_METHOD");
-        when(codeSearchService.search("repo", "query", 50)).thenReturn(List.of(raw1, raw2));
+        mockSearch(raw1, raw2);
         when(evidenceSelector.select(eq("query"), any(List.class))).thenThrow(new RuntimeException("selector down"));
 
         var result = service.retrieve("repo", "query");
@@ -90,13 +91,15 @@ class CodeRagAnswerEvidenceServiceImplTest {
     @Test
     void retrieveBuildsCandidateCardsFromRawVectorOnly() {
         CodeSearchResult raw = result("raw", "Service.java", "SERVICE_METHOD");
-        when(codeSearchService.search("repo", "query", 50)).thenReturn(List.of(raw));
+        mockSearch(raw);
         when(evidenceSelector.select(eq("query"), any()))
                 .thenAnswer(invocation -> {
                     List<CodeEvidenceCandidateCard> cards = invocation.getArgument(1);
                     assertEquals(1, cards.size());
                     assertEquals("RAW_VECTOR", cards.get(0).getSource());
                     assertEquals("SERVICE_LOGIC", cards.get(0).getEvidenceRole());
+                    assertEquals(10, cards.get(0).getStartLine());
+                    assertEquals(20, cards.get(0).getEndLine());
                     return selection(List.of(cards.get(0).getChunkId()), false);
                 });
 
@@ -112,7 +115,7 @@ class CodeRagAnswerEvidenceServiceImplTest {
     void retrieveIgnoresIllegalSelectedChunkIds() {
         CodeSearchResult raw1 = result("raw-1", "Controller.java", "CONTROLLER_API");
         CodeSearchResult raw2 = result("raw-2", "Service.java", "SERVICE_METHOD");
-        when(codeSearchService.search("repo", "query", 50)).thenReturn(List.of(raw1, raw2));
+        mockSearch(raw1, raw2);
         when(evidenceSelector.select(eq("query"), any()))
                 .thenReturn(selection(List.of("missing-id", "raw-2"), false));
 
@@ -120,6 +123,44 @@ class CodeRagAnswerEvidenceServiceImplTest {
 
         assertFalse(result.isFallback());
         assertEquals(List.of(raw2), result.getSelectedEvidence());
+    }
+
+    @Test
+    void executeReturnsRawCandidatesAndSearchTraceWithoutChangingAnswerShape() {
+        CodeSearchResult raw = result("raw", "Service.java", "SERVICE_METHOD");
+        when(codeSearchService.searchWithTrace("repo", "query", 50)).thenReturn(CodeSearchExecutionResult.builder()
+                .candidates(List.of(raw))
+                .embeddingLatencyMs(7)
+                .retrievalLatencyMs(3)
+                .cacheHit(true)
+                .build());
+        when(evidenceSelector.select(eq("query"), any()))
+                .thenReturn(selection(List.of("raw"), false));
+
+        var execution = service.execute("repo", "query");
+
+        assertEquals(List.of(raw), execution.getRawCandidates());
+        assertEquals(List.of(raw), execution.getAnswerEvidence().getSelectedEvidence());
+        assertEquals(7, execution.getEmbeddingLatencyMs());
+        assertEquals(3, execution.getRetrievalLatencyMs());
+        assertTrue(execution.isCacheHit());
+        assertTrue(execution.getSelectorLatencyMs() >= 0);
+        assertTrue(execution.getTotalLatencyMs() >= execution.getSelectorLatencyMs());
+        assertTrue(execution.isSelectorUsageAvailable());
+        assertEquals(101, execution.getSelectorPromptTokens());
+        assertEquals(9, execution.getSelectorCompletionTokens());
+        assertEquals(110, execution.getSelectorTotalTokens());
+        assertEquals(1234, execution.getSelectorPromptChars());
+        assertEquals(900, execution.getSelectorCandidateSectionChars());
+    }
+
+    private void mockSearch(CodeSearchResult... candidates) {
+        when(codeSearchService.searchWithTrace("repo", "query", 50)).thenReturn(CodeSearchExecutionResult.builder()
+                .candidates(List.of(candidates))
+                .embeddingLatencyMs(1)
+                .retrievalLatencyMs(1)
+                .cacheHit(false)
+                .build());
     }
 
     private CodeEvidenceSelectionResult selection(List<String> ids, boolean fallback) {
@@ -130,6 +171,12 @@ class CodeRagAnswerEvidenceServiceImplTest {
                 .fallback(fallback)
                 .jsonParseOk(true)
                 .latencyMs(12)
+                .promptTokens(101)
+                .completionTokens(9)
+                .totalTokens(110)
+                .usageAvailable(true)
+                .promptChars(1234)
+                .candidateSectionChars(900)
                 .build();
     }
 
@@ -142,6 +189,8 @@ class CodeRagAnswerEvidenceServiceImplTest {
                 .symbolName(filePath + "#method")
                 .score(0.9)
                 .finalScore(0.9)
+                .startLine(10)
+                .endLine(20)
                 .contentPreview("preview")
                 .metadata("{}")
                 .build();

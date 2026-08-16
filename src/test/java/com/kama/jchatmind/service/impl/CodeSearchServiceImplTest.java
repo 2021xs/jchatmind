@@ -5,6 +5,7 @@ import com.kama.jchatmind.exception.BizException;
 import com.kama.jchatmind.mapper.CodeChunkMapper;
 import com.kama.jchatmind.mapper.CodeRepositoryMapper;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
+import com.kama.jchatmind.model.dto.CodeSearchExecutionResult;
 import com.kama.jchatmind.model.entity.CodeRepository;
 import com.kama.jchatmind.service.EmbeddingService;
 import org.junit.jupiter.api.Test;
@@ -70,6 +71,22 @@ class CodeSearchServiceImplTest {
         verify(codeChunkMapper).similaritySearch(org.mockito.ArgumentMatchers.eq("repo"),
                 org.mockito.ArgumentMatchers.eq("[0.1]"), limit.capture());
         assertTrue(limit.getValue() <= 50);
+    }
+
+    @Test
+    void searchWithTraceReportsCacheHitAndStageLatencies() {
+        CodeSearchServiceImpl service = new CodeSearchServiceImpl(
+                embeddingService, codeChunkMapper, codeRepositoryMapper, embeddingCache, new CodeRagProperties());
+        when(codeRepositoryMapper.selectById("repo")).thenReturn(CodeRepository.builder().id("repo").status("READY").build());
+        when(embeddingCache.get("query")).thenReturn(new float[]{0.1f});
+        when(codeChunkMapper.similaritySearch("repo", "[0.1]", 5)).thenReturn(List.of());
+
+        CodeSearchExecutionResult result = service.searchWithTrace("repo", "query", 5);
+
+        assertTrue(result.isCacheHit());
+        assertEquals(0, result.getEmbeddingLatencyMs());
+        assertTrue(result.getRetrievalLatencyMs() >= 0);
+        verify(embeddingService, never()).embed(any());
     }
 
     @Test
