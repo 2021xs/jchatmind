@@ -98,9 +98,14 @@ class JChatMindToolCorrectionTest {
                 .build();
         when(toolExecutionService.beforeToolCall(any(), any())).thenReturn(record);
 
-        ToolCallingManager toolCallingManager = mock(ToolCallingManager.class);
-        when(toolCallingManager.executeToolCalls(any(Prompt.class), any(ChatResponse.class)))
-                .thenThrow(new IllegalArgumentException("Failed to parse JSON argument: missing required field query"));
+        ToolCallBatchExecutor batchExecutor = mock(ToolCallBatchExecutor.class);
+        when(batchExecutor.execute(any(Prompt.class), any(ChatResponse.class), any(), any()))
+                .thenReturn(ToolCallBatchResult.builder()
+                        .status(ToolCallBatchResult.Status.FAILED)
+                        .records(List.of(record))
+                        .error(new ToolArgumentException(
+                                "Failed to parse JSON argument: missing required field query", null))
+                        .build());
 
         ChatMessageFacadeService chatMessageFacadeService = mock(ChatMessageFacadeService.class);
         when(chatMessageFacadeService.createChatMessage(any(ChatMessageDTO.class)))
@@ -132,13 +137,13 @@ class JChatMindToolCorrectionTest {
                 "user-message-1",
                 List.of("searchProjectCode"),
                 new ToolCorrectionProperties(),
-                new ToolFailureClassifier()
+                new ToolFailureClassifier(),
+                batchExecutor
         );
-        ReflectionTestUtils.setField(agent, "toolCallingManager", toolCallingManager);
 
         agent.run();
 
-        verify(toolExecutionService).afterToolFailure(any(), eq(record), any(ToolArgumentException.class), eq(true));
+        verify(batchExecutor).recordFailure(any(), eq(List.of(record)), any(ToolArgumentException.class), eq(true));
         verify(logService, never()).failTask(anyString(), anyString(), anyInt(), anyInt());
         verify(logService).finishTask(eq("task-1"), anyString(), anyInt(), anyInt());
         verify(sseService, never()).sendEvent(eq("session-1"),
@@ -195,9 +200,14 @@ class JChatMindToolCorrectionTest {
                 .build();
         when(toolExecutionService.beforeToolCall(any(), any())).thenReturn(record);
 
-        ToolCallingManager toolCallingManager = mock(ToolCallingManager.class);
-        when(toolCallingManager.executeToolCalls(any(Prompt.class), any(ChatResponse.class)))
-                .thenThrow(new IllegalArgumentException("Failed to parse JSON argument: missing required field query"));
+        ToolCallBatchExecutor batchExecutor = mock(ToolCallBatchExecutor.class);
+        when(batchExecutor.execute(any(Prompt.class), any(ChatResponse.class), any(), any()))
+                .thenReturn(ToolCallBatchResult.builder()
+                        .status(ToolCallBatchResult.Status.FAILED)
+                        .records(List.of(record))
+                        .error(new ToolArgumentException(
+                                "Failed to parse JSON argument: missing required field query", null))
+                        .build());
 
         ChatMessageFacadeService chatMessageFacadeService = mock(ChatMessageFacadeService.class);
         when(chatMessageFacadeService.createChatMessage(any(ChatMessageDTO.class)))
@@ -230,14 +240,14 @@ class JChatMindToolCorrectionTest {
                 "user-message-1",
                 List.of("searchProjectCode"),
                 properties,
-                new ToolFailureClassifier()
+                new ToolFailureClassifier(),
+                batchExecutor
         );
-        ReflectionTestUtils.setField(agent, "toolCallingManager", toolCallingManager);
 
         assertThrows(RuntimeException.class, agent::run);
 
-        verify(toolExecutionService).afterToolFailure(any(), eq(record), any(ToolArgumentException.class), eq(true));
-        verify(toolExecutionService).afterToolFailure(any(), eq(record), any(ToolArgumentException.class), eq(false));
+        verify(batchExecutor).recordFailure(any(), eq(List.of(record)), any(ToolArgumentException.class), eq(true));
+        verify(batchExecutor).recordFailure(any(), eq(List.of(record)), any(ToolArgumentException.class), eq(false));
         verify(logService).failStepAndTask(anyString(), eq("task-1"), anyString(), anyInt(), anyInt());
     }
 }

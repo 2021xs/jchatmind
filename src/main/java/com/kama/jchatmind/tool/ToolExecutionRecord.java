@@ -12,4 +12,10 @@ public class ToolExecutionRecord {
     private String toolCallLogId;
     private long startedAtMillis;
     private boolean argumentTruncated;
+    private boolean resultGuardApplied;
+    private int originalResultChars;
+    private int storedResultChars;
+    private int maxResultChars;
+    private boolean runtimeResultTruncated;
+    private boolean terminalRecorded;
 }

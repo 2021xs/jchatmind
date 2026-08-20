@@ -2,6 +2,7 @@ package com.kama.jchatmind.mcp;
 
 import com.kama.jchatmind.agent.AgentEventPublisher;
 import com.kama.jchatmind.agent.JChatMind;
+import com.kama.jchatmind.agent.ToolCallBatchExecutorFixture;
 import com.kama.jchatmind.agent.ToolCallBatchExecutor;
 import com.kama.jchatmind.config.ToolCorrectionProperties;
 import com.kama.jchatmind.converter.ChatMessageConverter;
@@ -192,7 +193,9 @@ class McpFakeEndToEndIntegrationTest {
                 new ToolFailureClassifier(),
                 provider(externalRegistry),
                 provider(auditLogger));
-        JChatMind agent = new JChatMind(
+        try (ToolCallBatchExecutorFixture toolRuntime =
+                     new ToolCallBatchExecutorFixture(executionService, new NoLocalToolRegistry())) {
+            JChatMind agent = new JChatMind(
                 "agent-1",
                 "test-model",
                 "test-agent",
@@ -213,11 +216,12 @@ class McpFakeEndToEndIntegrationTest {
                 "user-message-1",
                 runtimeNames,
                 new ToolCorrectionProperties(),
-                new ToolFailureClassifier()
-        );
-        ReflectionTestUtils.setField(agent, "toolCallingManager", new FakeToolCallingManager(callbacks));
+                new ToolFailureClassifier(),
+                toolRuntime.batchExecutor()
+            );
+            ReflectionTestUtils.setField(agent, "toolCallingManager", new FakeToolCallingManager(callbacks));
 
-        agent.run();
+            agent.run();
 
         verify(logService, atLeastOnce()).finishToolCall(eq("tool-log-1"), eq("external docs answer"),
                 anyLong(), eq(false));
@@ -227,7 +231,8 @@ class McpFakeEndToEndIntegrationTest {
                 org.mockito.ArgumentMatchers.<ChatMessageDTO>argThat(
                         message -> message.getRole() == ChatMessageDTO.RoleType.TOOL
                                 && "external docs answer".equals(message.getContent())));
-        assertEquals(List.of("start:search_docs", "success:search_docs:false"), auditLogger.events);
+            assertEquals(List.of("start:search_docs", "success:search_docs:false"), auditLogger.events);
+        }
     }
 
     private ExternalMcpServerProperties server() {
@@ -317,12 +322,15 @@ class McpFakeEndToEndIntegrationTest {
 
         @Override
         public ToolExecutionResult executeToolCalls(Prompt prompt, ChatResponse chatResponse) {
+            List<ToolCallback> executionCallbacks =
+                    ((org.springframework.ai.model.tool.ToolCallingChatOptions) prompt.getOptions())
+                            .getToolCallbacks();
             List<AssistantMessage.ToolCall> toolCalls = chatResponse.getResult().getOutput().getToolCalls();
             List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>();
             List<Message> history = new ArrayList<>(prompt.getInstructions());
             history.add(chatResponse.getResult().getOutput());
             for (AssistantMessage.ToolCall toolCall : toolCalls) {
-                ToolCallback callback = callbacks.stream()
+                ToolCallback callback = executionCallbacks.stream()
                         .filter(candidate -> candidate.getToolDefinition().name().equals(toolCall.name()))
                         .findFirst()
                         .orElseThrow();

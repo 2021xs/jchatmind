@@ -3,6 +3,7 @@ package com.kama.jchatmind.mcp;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.agent.AgentEventPublisher;
 import com.kama.jchatmind.agent.JChatMind;
+import com.kama.jchatmind.agent.ToolCallBatchExecutorFixture;
 import com.kama.jchatmind.config.ToolCorrectionProperties;
 import com.kama.jchatmind.converter.ChatMessageConverter;
 import com.kama.jchatmind.mcp.adapter.McpToolCallbackAdapter;
@@ -111,7 +112,9 @@ class JChatMindMcpRealAgentConversationManualIntegrationTest {
                     provider(registry),
                     provider(auditLogger));
 
-            JChatMind agent = new JChatMind(
+            try (ToolCallBatchExecutorFixture toolRuntime =
+                         new ToolCallBatchExecutorFixture(executionService, new NoLocalToolRegistry())) {
+                JChatMind agent = new JChatMind(
                     "real-agent",
                     scenario.model(),
                     "real-agent",
@@ -132,9 +135,10 @@ class JChatMindMcpRealAgentConversationManualIntegrationTest {
                     "real-user-message",
                     runtimeToolNames,
                     new ToolCorrectionProperties(),
-                    new ToolFailureClassifier()
-            );
-            agent.setMaxLoopSteps(4);
+                    new ToolFailureClassifier(),
+                    toolRuntime.batchExecutor()
+                );
+                agent.setMaxLoopSteps(4);
 
             agent.run();
 
@@ -155,12 +159,13 @@ class JChatMindMcpRealAgentConversationManualIntegrationTest {
                     "ToolExecutionServiceImpl preflight did not start the MCP tool call");
             assertFalse(logService.toolResults().isEmpty(), "MCP tool result was not recorded by Agent runtime");
 
-            System.out.println("real Agent MCP conversation ok: scenario=" + scenario.name()
+                System.out.println("real Agent MCP conversation ok: scenario=" + scenario.name()
                     + ", serverName=" + scenario.serverName()
                     + ", exposedTool=" + scenario.exposedToolName()
                     + ", auditEvents=" + auditLogger.events()
                     + ", toolResultLength=" + logService.toolResults().get(0).length()
-                    + ", finalAnswer=" + sanitize(capturedMessages.get(finalAssistantIndex).getContent()));
+                        + ", finalAnswer=" + sanitize(capturedMessages.get(finalAssistantIndex).getContent()));
+            }
         }
     }
 

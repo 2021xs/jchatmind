@@ -16,9 +16,11 @@ import com.kama.jchatmind.model.entity.ToolCallLog;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.tool.ToolExecutionContext;
 import com.kama.jchatmind.tool.ToolExecutionRecord;
+import com.kama.jchatmind.tool.ToolDuplicateCallException;
 import com.kama.jchatmind.tool.ToolFailureClassifier;
 import com.kama.jchatmind.tool.ToolPolicyRejectedException;
 import com.kama.jchatmind.tool.ToolRegistry;
+import com.kama.jchatmind.tool.ToolTimeoutException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -31,6 +33,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -38,6 +41,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import org.mockito.ArgumentCaptor;
 
 @ExtendWith(MockitoExtension.class)
 class ToolExecutionServiceImplTest {
@@ -86,6 +90,115 @@ class ToolExecutionServiceImplTest {
                 eq(true)
         );
         verify(agentTaskLogService, never()).finishToolCall(eq("log-1"), eq(rejected), anyLong(), anyBoolean());
+    }
+
+    @Test
+    void runtimeTimeoutIsRecordedWithDedicatedErrorType() {
+        ToolExecutionServiceImpl service = new ToolExecutionServiceImpl(
+                toolRegistry,
+                agentTaskLogService,
+                agentEventPublisher,
+                new ToolFailureClassifier(),
+                emptyProvider(),
+                emptyProvider()
+        );
+        ToolExecutionRecord record = ToolExecutionRecord.builder()
+                .toolCallId("call-1")
+                .toolCallLogId("log-timeout")
+                .canonicalToolName("slowTool")
+                .actualToolName("slowTool")
+                .startedAtMillis(System.currentTimeMillis())
+                .build();
+        ToolTimeoutException timeout = new ToolTimeoutException(
+                "Tool 'slowTool' exceeded runtime timeout of 50 ms; interrupt/cancel requested=true, Agent Task will stop",
+                null);
+
+        service.afterToolFailure(context(List.of("slowTool")), record, timeout, false);
+
+        verify(agentTaskLogService).failToolCall(
+                eq("log-timeout"),
+                eq(timeout.getMessage()),
+                anyLong(),
+                eq(AgentTaskLogService.ERROR_TYPE_TOOL_TIMEOUT),
+                eq(false)
+        );
+    }
+
+    @Test
+    void duplicateRejectionIsRecordedAsFailedWithoutClaimingCallbackFailure() {
+        ToolExecutionServiceImpl service = new ToolExecutionServiceImpl(
+                toolRegistry,
+                agentTaskLogService,
+                agentEventPublisher,
+                new ToolFailureClassifier(),
+                emptyProvider(),
+                emptyProvider()
+        );
+        ToolExecutionRecord record = ToolExecutionRecord.builder()
+                .toolCallId("call-3")
+                .toolCallLogId("log-duplicate")
+                .canonicalToolName("searchProjectCode")
+                .actualToolName("searchProjectCode")
+                .startedAtMillis(System.currentTimeMillis())
+                .build();
+        ToolDuplicateCallException duplicate = new ToolDuplicateCallException(
+                "searchProjectCode", 3, 2, false);
+
+        service.afterToolFailure(context(List.of("searchProjectCode")), record, duplicate, false);
+
+        verify(agentTaskLogService).failToolCall(
+                eq("log-duplicate"),
+                org.mockito.ArgumentMatchers.contains("consecutiveCount=3"),
+                anyLong(),
+                eq(AgentTaskLogService.ERROR_TYPE_DUPLICATE_TOOL_CALL),
+                eq(false)
+        );
+        ArgumentCaptor<java.util.Map<String, Object>> payload = ArgumentCaptor.forClass(java.util.Map.class);
+        verify(agentEventPublisher).publish(eq("task-1"), eq("session-1"),
+                eq(com.kama.jchatmind.message.AgentSseEvent.Type.TOOL_CALL_RESULT), payload.capture());
+        assertEquals(AgentTaskLogService.STATUS_FAILED, payload.getValue().get("status"));
+        assertEquals(AgentTaskLogService.ERROR_TYPE_DUPLICATE_TOOL_CALL,
+                payload.getValue().get("errorType"));
+        assertEquals(false, payload.getValue().get("correctionRequested"));
+        assertTrue(String.valueOf(payload.getValue().get("errorMessage"))
+                .contains("rejected before execution"));
+    }
+
+    @Test
+    void runtimeTruncationIsPersistedUsingExistingTraceFlag() {
+        ToolExecutionServiceImpl service = new ToolExecutionServiceImpl(
+                toolRegistry,
+                agentTaskLogService,
+                agentEventPublisher,
+                new ToolFailureClassifier(),
+                emptyProvider(),
+                emptyProvider()
+        );
+        ToolExecutionRecord record = ToolExecutionRecord.builder()
+                .toolCallId("call-1")
+                .toolCallLogId("log-guarded")
+                .canonicalToolName("largeTool")
+                .actualToolName("largeTool")
+                .startedAtMillis(System.currentTimeMillis())
+                .resultGuardApplied(true)
+                .originalResultChars(20_000)
+                .storedResultChars(8_000)
+                .maxResultChars(8_000)
+                .runtimeResultTruncated(true)
+                .build();
+        String guarded = "guarded-result";
+        when(toolRegistry.truncateResult("largeTool", guarded)).thenReturn(guarded);
+
+        service.afterToolSuccess(context(List.of("largeTool")), record, guarded);
+
+        verify(agentTaskLogService).finishToolCall(eq("log-guarded"), eq(guarded),
+                org.mockito.ArgumentMatchers.anyLong(), eq(true));
+        ArgumentCaptor<java.util.Map<String, Object>> payload = ArgumentCaptor.forClass(java.util.Map.class);
+        verify(agentEventPublisher).publish(eq("task-1"), eq("session-1"),
+                eq(com.kama.jchatmind.message.AgentSseEvent.Type.TOOL_CALL_RESULT), payload.capture());
+        assertEquals(20_000, payload.getValue().get("originalChars"));
+        assertEquals(8_000, payload.getValue().get("storedChars"));
+        assertEquals(true, payload.getValue().get("runtimeResultTruncated"));
     }
 
     @Test

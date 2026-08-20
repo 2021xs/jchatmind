@@ -115,7 +115,8 @@ class JChatMindRealRunObservabilityTest {
                 "33333333-3333-3333-3333-333333333333",
                 List.of(),
                 new ToolCorrectionProperties(),
-                new ToolFailureClassifier()
+                new ToolFailureClassifier(),
+                mock(ToolCallBatchExecutor.class)
         );
 
         agent.run();

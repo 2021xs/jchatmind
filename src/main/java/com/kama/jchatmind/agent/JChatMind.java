@@ -16,6 +16,8 @@ import com.kama.jchatmind.service.ConversationContextCompressor;
 import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.tool.ToolExecutionContext;
+import com.kama.jchatmind.tool.ToolDuplicateCallState;
+import com.kama.jchatmind.tool.ToolExecutionException;
 import com.kama.jchatmind.tool.ToolExecutionRecord;
 import com.kama.jchatmind.tool.ToolFailureClassifier;
 import com.kama.jchatmind.tool.ToolFailureDecision;
@@ -83,6 +85,9 @@ public class JChatMind {
     private String finishReason;
     private String traceId;
     private final Map<String, Integer> toolCorrectionAttempts = new HashMap<>();
+    private final ToolDuplicateCallState duplicateCallState = new ToolDuplicateCallState();
+    private boolean forceFinalAnswer;
+    private boolean finalizationRequired;
 
     private final List<ChatMessageDTO> pendingChatMessages = new ArrayList<>();
 
@@ -109,12 +114,13 @@ public class JChatMind {
                      String userMessageId,
                      List<String> runtimeToolNames,
                      ToolCorrectionProperties toolCorrectionProperties,
-                     ToolFailureClassifier toolFailureClassifier) {
+                     ToolFailureClassifier toolFailureClassifier,
+                     ToolCallBatchExecutor toolCallBatchExecutor) {
         this(agentId, model, name, description, systemPrompt, chatClient, maxMessages, memory,
                 availableTools, availableKbs, chatSessionId, sseService, new AgentEventPublisher(sseService),
                 toolExecutionService, chatMessageFacadeService, chatMessageConverter, agentTaskLogService,
                 conversationContextCompressor, userMessageId, runtimeToolNames, toolCorrectionProperties,
-                toolFailureClassifier, null, null);
+                toolFailureClassifier, null, toolCallBatchExecutor);
     }
 
     public JChatMind(String agentId,
@@ -157,9 +163,8 @@ public class JChatMind {
         this.agentRunFailureHandler = agentRunFailureHandler == null
                 ? new AgentRunFailureHandler(agentTaskLogService, this.agentEventPublisher)
                 : agentRunFailureHandler;
-        this.toolCallBatchExecutor = toolCallBatchExecutor == null
-                ? new ToolCallBatchExecutor(toolExecutionService)
-                : toolCallBatchExecutor;
+        Assert.notNull(toolCallBatchExecutor, "ToolCallBatchExecutor cannot be null");
+        this.toolCallBatchExecutor = toolCallBatchExecutor;
         this.conversationContextCompressor = conversationContextCompressor;
         this.userMessageId = userMessageId;
         this.runtimeToolNames = runtimeToolNames == null ? List.of() : runtimeToolNames;
@@ -389,8 +394,12 @@ public class JChatMind {
     }
 
     private boolean think(int loopStep) {
-        boolean finalLoop = loopStep >= maxLoopSteps;
-        String thinkPrompt = buildThinkPrompt(this.availableKbs, loopStep, maxLoopSteps);
+        boolean forcedFinalRound = forceFinalAnswer;
+        boolean finalizationRound = finalizationRequired;
+        boolean finalLoop = loopStep >= maxLoopSteps || forcedFinalRound || finalizationRound;
+        String thinkPrompt = buildThinkPrompt(this.availableKbs, loopStep, maxLoopSteps)
+                + (forcedFinalRound ? duplicateForcedFinalInstruction() : "")
+                + (finalizationRound ? terminateFinalizationInstruction() : "");
         ToolCallback[] toolCallbacks = finalLoop
                 ? new ToolCallback[0]
                 : this.availableTools.toArray(new ToolCallback[0]);
@@ -412,12 +421,40 @@ public class JChatMind {
 
         AssistantMessage output = this.lastChatResponse.getResult().getOutput();
         List<AssistantMessage.ToolCall> toolCalls = output.getToolCalls();
+        if ((forcedFinalRound || finalizationRound) && toolCalls != null && !toolCalls.isEmpty()) {
+            throw new ToolExecutionException(
+                    finalizationRound
+                            ? "Model requested another tool during terminate finalization round"
+                            : "Model requested another tool during duplicate-call forced final round",
+                    null);
+        }
+        if (finalizationRound && !StringUtils.hasText(output.getText())) {
+            throw new ToolExecutionException("Finalization returned an empty final answer", null);
+        }
 
         saveMessage(output);
         refreshPendingMessages();
         logToolCalls(toolCalls);
 
+        if (finalizationRound) {
+            finalizationRequired = false;
+        }
+
         return toolCalls != null && !toolCalls.isEmpty();
+    }
+
+    private String duplicateForcedFinalInstruction() {
+        return "\n\nDuplicate tool-call governance instruction:\n"
+                + "- The same tool call was rejected repeatedly and all tools are disabled for this final round.\n"
+                + "- Answer now using the evidence already present in the conversation.\n"
+                + "- If evidence is incomplete, state the uncertainty instead of requesting another tool.\n";
+    }
+
+    private String terminateFinalizationInstruction() {
+        return "\n\nTerminate finalization instruction:\n"
+                + "- The tool phase is complete and all tools are disabled for this final round.\n"
+                + "- Answer the user's request using the evidence already present in the conversation.\n"
+                + "- Do not request or call any additional tool.\n";
     }
 
     static String buildThinkPrompt(List<KnowledgeBaseDTO> availableKbs) {
@@ -464,9 +501,13 @@ public class JChatMind {
             return false;
         }
 
+        ChatOptions executionOptions = DefaultToolCallingChatOptions.builder()
+                .internalToolExecutionEnabled(false)
+                .toolCallbacks(this.availableTools)
+                .build();
         Prompt prompt = Prompt.builder()
                 .messages(AgentMemoryHistorySanitizer.toSafeModelMessages(this.chatMemory.get(this.chatSessionId)))
-                .chatOptions(this.chatOptions)
+                .chatOptions(executionOptions)
                 .build();
 
         List<AssistantMessage.ToolCall> toolCalls = this.lastChatResponse.getResult().getOutput().getToolCalls();
@@ -478,6 +519,7 @@ public class JChatMind {
                 .agentId(agentId)
                 .modelName(model)
                 .runtimeToolNames(runtimeToolNames)
+                .duplicateCallState(duplicateCallState)
                 .build();
 
         ToolCallBatchResult execution = toolCallBatchExecutor.execute(
@@ -510,10 +552,16 @@ public class JChatMind {
         saveMessage(toolResponseMessage);
         refreshPendingMessages();
 
+        if (duplicateCallState.isHardStopRequested()) {
+            forceFinalAnswer = true;
+            log.warn("Duplicate tool-call hard stop requested; next THINK will run without tools: taskId={}",
+                    currentTaskId);
+        }
+
         if (toolResponseMessage.getResponses().stream().anyMatch(resp -> resp.name().equals("terminate"))) {
-            this.agentState = AgentState.FINISHED;
+            finalizationRequired = true;
             this.finishReason = AgentTaskLogService.FINISH_REASON_TERMINATE_TOOL;
-            log.info("Agent task terminated by terminate tool");
+            log.info("Agent tool phase terminated; scheduling finalization round: taskId={}", currentTaskId);
         }
         return false;
     }
@@ -594,6 +642,7 @@ public class JChatMind {
 
         AgentStep thinkStep = startStep("THINK", "think with current conversation memory");
 
+        boolean finalizationRound = finalizationRequired;
         boolean hasToolCalls;
         long thinkStartedAt = System.currentTimeMillis();
         hasToolCalls = think(loopStep);
@@ -631,7 +680,9 @@ public class JChatMind {
             ));
         } else {
             agentState = AgentState.FINISHED;
-            finishReason = AgentTaskLogService.FINISH_REASON_NO_TOOL_CALLS;
+            if (!finalizationRound) {
+                finishReason = AgentTaskLogService.FINISH_REASON_NO_TOOL_CALLS;
+            }
         }
     }
 
@@ -640,6 +691,9 @@ public class JChatMind {
             throw new IllegalStateException("Agent is not idle");
         }
 
+        duplicateCallState.reset();
+        forceFinalAnswer = false;
+        finalizationRequired = false;
         String effectiveTraceId = StringUtils.hasText(this.traceId) ? this.traceId : UUID.randomUUID().toString();
         AgentTask task = agentTaskLogService.startTask(this.chatSessionId, this.agentId, this.userMessageId,
                 "chat session agent run", this.model, maxLoopSteps, effectiveTraceId);
@@ -660,10 +714,12 @@ public class JChatMind {
         ));
 
         try {
-            for (int i = 0; i < maxLoopSteps && agentState != AgentState.FINISHED; i++) {
+            for (int i = 0;
+                 agentState != AgentState.FINISHED && (i < maxLoopSteps || finalizationRequired);
+                 i++) {
                 int loopStep = i + 1;
                 step(loopStep);
-                if (loopStep >= maxLoopSteps && agentState != AgentState.FINISHED) {
+                if (loopStep >= maxLoopSteps && agentState != AgentState.FINISHED && !finalizationRequired) {
                     agentState = AgentState.FINISHED;
                     finishReason = AgentTaskLogService.FINISH_REASON_MAX_STEPS_REACHED;
                     log.warn("Max steps reached, stopping agent");

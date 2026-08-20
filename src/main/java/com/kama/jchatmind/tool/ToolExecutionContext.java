@@ -15,4 +15,5 @@ public class ToolExecutionContext {
     private String agentId;
     private String modelName;
     private List<String> runtimeToolNames;
+    private ToolDuplicateCallState duplicateCallState;
 }

@@ -200,7 +200,8 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
     public void afterToolSuccess(ToolExecutionContext context, ToolExecutionRecord record, String result) {
         long latencyMs = System.currentTimeMillis() - record.getStartedAtMillis();
         String resultSummary = toolRegistry.truncateResult(record.getCanonicalToolName(), result);
-        boolean resultTruncated = result != null && resultSummary != null && resultSummary.length() < result.length();
+        boolean traceSummaryTruncated = result != null && resultSummary != null && resultSummary.length() < result.length();
+        boolean resultTruncated = record.isRuntimeResultTruncated() || traceSummaryTruncated;
         if (isRejectedByPolicy(resultSummary)) {
             agentTaskLogService.failToolCall(
                     record.getToolCallLogId(),
@@ -235,6 +236,10 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
                 "actualToolName", record.getActualToolName(),
                 "status", AgentTaskLogService.STATUS_SUCCESS,
                 "resultTruncated", resultTruncated,
+                "runtimeResultTruncated", record.isRuntimeResultTruncated(),
+                "originalChars", record.getOriginalResultChars(),
+                "storedChars", record.getStoredResultChars(),
+                "maxResultChars", record.getMaxResultChars(),
                 "resultSummary", resultSummary,
                 "latencyMs", latencyMs
         ));

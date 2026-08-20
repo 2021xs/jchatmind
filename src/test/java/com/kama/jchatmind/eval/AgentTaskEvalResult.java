@@ -1,0 +1,40 @@
+package com.kama.jchatmind.eval;
+
+import java.util.List;
+
+record AgentTaskEvalResult(
+        AgentTaskEvalCase evalCase,
+        String taskId,
+        String taskStatus,
+        String finishReason,
+        String finalAnswer,
+        int thinkSteps,
+        int toolSteps,
+        int requestedToolCalls,
+        int executedToolCalls,
+        int rejectedToolCalls,
+        boolean executionCountReliable,
+        List<String> toolNames,
+        List<String> toolArguments,
+        int duplicateRejectCount,
+        int timeoutCount,
+        int resultTruncatedCount,
+        int hardStopCount,
+        Boolean requiredToolHit,
+        boolean forbiddenToolUsed,
+        Boolean argumentHit,
+        Boolean evidenceHit,
+        Boolean answerKeywordHit,
+        boolean finalAnswerPresent,
+        boolean runtimeSuccess,
+        boolean toolSelectionSuccess,
+        boolean taskSuccess,
+        boolean reasonableStepsExceeded,
+        AgentTaskFailureType failureType,
+        long totalLatencyMs,
+        Integer promptTokens,
+        Integer completionTokens,
+        Integer totalTokens,
+        boolean tokenUsageAvailable,
+        String trajectorySummary) {
+}

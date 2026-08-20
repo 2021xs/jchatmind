@@ -36,6 +36,25 @@ logging:
     org.springframework.web.servlet.mvc.method.annotation: INFO
 
 jchatmind:
+  async:
+    task:
+      core-pool-size: ${JCHATMIND_ASYNC_TASK_CORE_POOL_SIZE:4}
+      max-pool-size: ${JCHATMIND_ASYNC_TASK_MAX_POOL_SIZE:8}
+      queue-capacity: ${JCHATMIND_ASYNC_TASK_QUEUE_CAPACITY:16}
+      keep-alive-seconds: ${JCHATMIND_ASYNC_TASK_KEEP_ALIVE_SECONDS:60}
+      await-termination-seconds: ${JCHATMIND_ASYNC_TASK_AWAIT_TERMINATION_SECONDS:60}
+    code-evidence-selector:
+      core-pool-size: ${JCHATMIND_SELECTOR_CORE_POOL_SIZE:4}
+      max-pool-size: ${JCHATMIND_SELECTOR_MAX_POOL_SIZE:4}
+      queue-capacity: ${JCHATMIND_SELECTOR_QUEUE_CAPACITY:6}
+      keep-alive-seconds: ${JCHATMIND_SELECTOR_KEEP_ALIVE_SECONDS:60}
+      await-termination-seconds: ${JCHATMIND_SELECTOR_AWAIT_TERMINATION_SECONDS:60}
+    tool:
+      core-pool-size: ${JCHATMIND_TOOL_CORE_POOL_SIZE:4}
+      max-pool-size: ${JCHATMIND_TOOL_MAX_POOL_SIZE:8}
+      queue-capacity: ${JCHATMIND_TOOL_QUEUE_CAPACITY:16}
+      keep-alive-seconds: ${JCHATMIND_TOOL_KEEP_ALIVE_SECONDS:60}
+      await-termination-seconds: ${JCHATMIND_TOOL_AWAIT_TERMINATION_SECONDS:30}
   feishu:
     enabled: ${JCHATMIND_FEISHU_ENABLED:false}
     app-id: ${JCHATMIND_FEISHU_APP_ID:}
@@ -97,6 +116,15 @@ jchatmind:
       final-top-k: 5
       include-selector-debug: true
   agent:
+    tool-timeout:
+      default-timeout: ${JCHATMIND_AGENT_TOOL_TIMEOUT:60s}
+      overrides: {}
+    tool-result:
+      default-max-result-chars: ${JCHATMIND_AGENT_TOOL_MAX_RESULT_CHARS:8000}
+      overrides: {}
+    duplicate-detection:
+      enabled: ${JCHATMIND_AGENT_DUPLICATE_DETECTION_ENABLED:true}
+      max-consecutive-same-calls: ${JCHATMIND_AGENT_MAX_CONSECUTIVE_SAME_CALLS:2}
     database-tool:
       max-rows: ${AGENT_DB_TOOL_MAX_ROWS:50}
       query-timeout-seconds: ${AGENT_DB_TOOL_QUERY_TIMEOUT_SECONDS:5}
