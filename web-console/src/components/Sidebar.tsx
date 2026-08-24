@@ -16,6 +16,9 @@ export function Sidebar({
   creatingSession,
   onDeleteRepo,
   onDeleteSession,
+  onDeleteAllSessions,
+  onImportLocal,
+  onImportGithub,
 }: {
   repositories: CodeRepository[];
   sessions: ChatSession[];
@@ -30,6 +33,9 @@ export function Sidebar({
   creatingSession?: boolean;
   onDeleteRepo: (repoId: string) => Promise<void>;
   onDeleteSession: (sessionId: string) => Promise<void>;
+  onDeleteAllSessions: () => Promise<void>;
+  onImportLocal: () => void;
+  onImportGithub: () => void;
 }) {
   const selectedRepo = repositories.find((repo) => repo.id === selectedRepoId);
 
@@ -38,11 +44,15 @@ export function Sidebar({
       <RepositoryList
         repositories={repositories}
         selectedRepoId={selectedRepoId}
+        selectionDisabled={Boolean(selectedSessionId)}
         onSelectRepo={onSelectRepo}
         onDeleteRepo={onDeleteRepo}
+        onImportLocal={onImportLocal}
+        onImportGithub={onImportGithub}
       />
       <ConversationList
         sessions={sessions}
+        repositories={repositories}
         agents={agents}
         selectedRepo={selectedRepo}
         selectedSessionId={selectedSessionId}
@@ -52,6 +62,7 @@ export function Sidebar({
         onCreateSession={onCreateSession}
         creatingSession={creatingSession}
         onDeleteSession={onDeleteSession}
+        onDeleteAllSessions={onDeleteAllSessions}
       />
     </aside>
   );

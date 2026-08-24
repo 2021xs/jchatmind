@@ -7,9 +7,12 @@ import com.kama.jchatmind.mapper.AgentStepMapper;
 import com.kama.jchatmind.mapper.AgentTaskMapper;
 import com.kama.jchatmind.mapper.ChatMessageMapper;
 import com.kama.jchatmind.mapper.ChatSessionMapper;
+import com.kama.jchatmind.mapper.CodeRepositoryMapper;
 import com.kama.jchatmind.mapper.ToolCallLogMapper;
 import com.kama.jchatmind.model.entity.ChatSession;
+import com.kama.jchatmind.model.entity.CodeRepository;
 import com.kama.jchatmind.model.request.CreateChatSessionRequest;
+import com.kama.jchatmind.model.request.UpdateChatSessionRequest;
 import com.kama.jchatmind.model.response.GetChatSessionsResponse;
 import com.kama.jchatmind.model.vo.ChatSessionVO;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,6 +37,7 @@ class ChatSessionFacadeServiceImplTest {
     private AgentTaskMapper agentTaskMapper;
     private AgentStepMapper agentStepMapper;
     private ToolCallLogMapper toolCallLogMapper;
+    private CodeRepositoryMapper codeRepositoryMapper;
     private ChatSessionFacadeServiceImpl service;
 
     @BeforeEach
@@ -43,6 +47,9 @@ class ChatSessionFacadeServiceImplTest {
         agentTaskMapper = mock(AgentTaskMapper.class);
         agentStepMapper = mock(AgentStepMapper.class);
         toolCallLogMapper = mock(ToolCallLogMapper.class);
+        codeRepositoryMapper = mock(CodeRepositoryMapper.class);
+        when(codeRepositoryMapper.selectById("repo-1")).thenReturn(CodeRepository.builder()
+                .id("repo-1").name("demo").status("READY").build());
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.findAndRegisterModules();
         service = new ChatSessionFacadeServiceImpl(
@@ -51,7 +58,8 @@ class ChatSessionFacadeServiceImplTest {
                 chatMessageMapper,
                 agentTaskMapper,
                 agentStepMapper,
-                toolCallLogMapper);
+                toolCallLogMapper,
+                codeRepositoryMapper);
     }
 
     @Test
@@ -147,6 +155,48 @@ class ChatSessionFacadeServiceImplTest {
         assertThatThrownBy(() -> service.createChatSession(request))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("Web Console 会话名称不能为空");
+    }
+
+    @Test
+    void createWebConsoleSessionRequiresRepositoryBinding() {
+        CreateChatSessionRequest request = new CreateChatSessionRequest();
+        request.setAgentId("agent-1");
+        request.setTitle("Unbound session");
+        request.setChannel("WEB_CONSOLE");
+
+        assertThatThrownBy(() -> service.createChatSession(request))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("SESSION_REPOSITORY_UNBOUND");
+    }
+
+    @Test
+    void createWebConsoleSessionRejectsNonReadyRepository() {
+        when(codeRepositoryMapper.selectById("repo-importing")).thenReturn(CodeRepository.builder()
+                .id("repo-importing").status("IMPORTING").build());
+        CreateChatSessionRequest request = new CreateChatSessionRequest();
+        request.setAgentId("agent-1");
+        request.setTitle("Importing session");
+        request.setChannel("WEB_CONSOLE");
+        request.setRepoId("repo-importing");
+
+        assertThatThrownBy(() -> service.createChatSession(request))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("REPOSITORY_NOT_READY");
+    }
+
+    @Test
+    void updatingSessionTitlePreservesImmutableRepositoryBinding() {
+        when(chatSessionMapper.selectById("session-a")).thenReturn(
+                chatSession("session-a", "agent-1", "{\"channel\":\"WEB_CONSOLE\",\"repoId\":\"repo-a\"}"));
+        when(chatSessionMapper.updateById(isA(ChatSession.class))).thenReturn(1);
+        UpdateChatSessionRequest request = new UpdateChatSessionRequest();
+        request.setTitle("renamed");
+
+        service.updateChatSession("session-a", request);
+
+        ArgumentCaptor<ChatSession> captor = ArgumentCaptor.forClass(ChatSession.class);
+        verify(chatSessionMapper).updateById(captor.capture());
+        assertThat(captor.getValue().getMetadata()).contains("\"repoId\":\"repo-a\"");
     }
 
     @Test

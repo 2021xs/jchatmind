@@ -1,21 +1,22 @@
 import { useCallback, useState } from "react";
-import { sendChatMessage } from "../api/client";
+import { cancelAgentTask, sendChatMessage } from "../api/client";
 import type { ChatSession, RuntimeState, WebConsoleModel } from "../types";
 import { errorMessage, upsertMessage } from "../utils/messageDisplay";
+import { discardTerminalProvisionalMessages } from "../utils/streamingMessage";
 
 export function useChatSend({
   selectedSession,
   selectedModel,
-  selectedRepoId,
   selectedSessionId,
+  activeTaskId,
   setState,
   refreshSessionData,
   onError,
 }: {
   selectedSession?: ChatSession;
   selectedModel: WebConsoleModel;
-  selectedRepoId?: string;
   selectedSessionId?: string;
+  activeTaskId?: string;
   setState: React.Dispatch<React.SetStateAction<RuntimeState>>;
   refreshSessionData: (sessionId: string) => Promise<void>;
   onError: (message: string) => void;
@@ -27,13 +28,13 @@ export function useChatSend({
     if (!content) {
       return;
     }
-    const repoId = selectedRepoId;
+    const repoId = selectedSession?.repoId;
     if (!selectedSessionId || !selectedSession) {
       onError("请选择或新建会话");
       return;
     }
     if (!repoId) {
-      onError("请选择仓库");
+      onError("SESSION_REPOSITORY_UNBOUND: 请新建会话");
       return;
     }
     setDraft("");
@@ -42,8 +43,11 @@ export function useChatSend({
       sending: true,
       messageStatus: "sending",
       activeRunId: undefined,
+      activeTaskId: undefined,
       activeUserMessageId: undefined,
+      selectedTraceId: undefined,
       sessionError: undefined,
+      messages: discardTerminalProvisionalMessages(previous.messages),
     }));
     try {
       const response = await sendChatMessage(
@@ -57,7 +61,9 @@ export function useChatSend({
         sending: false,
         messageStatus: "generating",
         activeRunId: response.runId,
+        activeTaskId: response.taskId,
         activeUserMessageId: response.userMessageId,
+        selectedTraceId: response.taskId,
         messages: upsertMessage(previous.messages, {
           id: response.userMessageId,
           sessionId: response.conversationId,
@@ -84,15 +90,40 @@ export function useChatSend({
     onError,
     refreshSessionData,
     selectedModel,
-    selectedRepoId,
     selectedSession,
     selectedSessionId,
     setState,
   ]);
 
+  const handleStop = useCallback(async () => {
+    if (!selectedSessionId) {
+      return;
+    }
+    const taskId = activeTaskId;
+    setState((previous) => taskId ? { ...previous, messageStatus: "cancelling" } : previous);
+    if (!taskId) {
+      return;
+    }
+    try {
+      const response = await cancelAgentTask(taskId, selectedSessionId);
+      if (response.status === "TASK_ALREADY_FINISHED") {
+        await refreshSessionData(selectedSessionId);
+        setState((previous) => ({
+          ...previous,
+          messageStatus: "completed",
+          activeTaskId: undefined,
+        }));
+      }
+    } catch (error) {
+      onError(errorMessage(error));
+      setState((previous) => ({ ...previous, messageStatus: "generating" }));
+    }
+  }, [activeTaskId, onError, refreshSessionData, selectedSessionId, setState]);
+
   return {
     draft,
     setDraft,
     handleSend,
+    handleStop,
   };
 }

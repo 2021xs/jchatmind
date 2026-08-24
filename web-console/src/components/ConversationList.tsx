@@ -11,6 +11,7 @@ import { SectionHeader } from "./common";
 
 export function ConversationList({
   sessions,
+  repositories,
   agents,
   selectedRepo,
   selectedSessionId,
@@ -20,8 +21,10 @@ export function ConversationList({
   onCreateSession,
   creatingSession,
   onDeleteSession,
+  onDeleteAllSessions,
 }: {
   sessions: ChatSession[];
+  repositories: CodeRepository[];
   agents: Agent[];
   selectedRepo?: CodeRepository;
   selectedSessionId?: string;
@@ -31,6 +34,7 @@ export function ConversationList({
   onCreateSession: () => void;
   creatingSession?: boolean;
   onDeleteSession: (sessionId: string) => Promise<void>;
+  onDeleteAllSessions: () => Promise<void>;
 }) {
   const visibleSessions = sessions.slice(0, MAX_VISIBLE_SESSIONS);
 
@@ -41,6 +45,20 @@ export function ConversationList({
         title="会话"
         count={sessions.length}
         action={
+          <span className="section-header-actions">
+            <Popconfirm
+              title="确认删除全部会话？"
+              description="会清理所有会话、消息、Trace 和工具日志，操作不可恢复。"
+              okText="全部删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              disabled={sessions.length === 0}
+              onConfirm={onDeleteAllSessions}
+            >
+              <Button size="small" danger icon={<DeleteOutlined />} disabled={sessions.length === 0}>
+                删除全部
+              </Button>
+            </Popconfirm>
           <Button
             size="small"
             icon={<PlusOutlined />}
@@ -49,6 +67,7 @@ export function ConversationList({
           >
             新建
           </Button>
+          </span>
         }
       />
       <Select
@@ -110,6 +129,7 @@ export function ConversationList({
                   </span>
                 </span>
                 <span className="row-meta">
+                  <span>{repositoryName(session.repoId, repositories)}</span>
                   <span>模型：{modelLabel(session.model)}</span>
                   {!session.model ? (
                     <span title="历史会话未记录 model">
@@ -132,6 +152,13 @@ export function ConversationList({
       )}
     </section>
   );
+}
+
+function repositoryName(repoId: string | undefined, repositories: CodeRepository[]): string {
+  if (!repoId) {
+    return "repository: unbound";
+  }
+  return repositories.find((repository) => repository.id === repoId)?.name ?? repoId;
 }
 
 function agentModel(agents: Agent[], agentId: string): string | undefined {

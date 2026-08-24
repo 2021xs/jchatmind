@@ -30,8 +30,13 @@ The dev proxy target is only used by Vite during `npm run dev`.
 npm install
 npm run dev
 npm run build
+npm test
 npm run lint
 ```
+
+`npm test` first compiles the tested TypeScript utilities into the ignored
+`target/deterministic-tests` directory and then runs the repository's assertion
+scripts. It does not depend on pre-existing build artifacts.
 
 ## Backend Integration
 
@@ -41,9 +46,15 @@ Current real backend integrations:
 - `GET /api/agents`
 - `GET /api/chat-sessions`
 - `POST /api/chat-sessions`
+- session-level `repoId` and `model` selection
 - `GET /api/chat-messages/session/{sessionId}`
 - `POST /api/chat-messages`
+- Agent cancellation
 - `GET /api/agent-traces`
 - `GET /sse/connect/{chatSessionId}`
 
-Conversation to repo binding is only represented in the UI for now because the existing backend `chat_session` model does not expose a `repoId` field.
+The SSE reducer scopes events to the active task/run and reconciles them with
+durable messages loaded from the backend. Final Provider chunks are buffered and
+validated server-side; after the Final transaction commits, the console receives
+TOKEN replay (when enabled) and can always recover the durable answer by reloading
+the session.

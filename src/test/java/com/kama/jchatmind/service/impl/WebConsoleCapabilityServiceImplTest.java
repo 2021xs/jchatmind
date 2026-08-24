@@ -153,6 +153,29 @@ class WebConsoleCapabilityServiceImplTest {
     }
 
     @Test
+    void mcpDiscoveryFailureLeavesCapabilityResponseAvailableAndMcpDisabled() {
+        com.kama.jchatmind.tool.ToolRegistry localRegistry = mock(com.kama.jchatmind.tool.ToolRegistry.class);
+        when(localRegistry.canExposeToAgent(anyString())).thenReturn(false);
+        KnowledgeBaseMapper knowledgeBaseMapper = mock(KnowledgeBaseMapper.class);
+        CodeRepositoryMapper codeRepositoryMapper = mock(CodeRepositoryMapper.class);
+        when(knowledgeBaseMapper.selectAll()).thenReturn(List.of());
+        ExternalMcpToolRegistry mcpRegistry = mock(ExternalMcpToolRegistry.class);
+        when(mcpRegistry.exposedTools()).thenThrow(new IllegalStateException("server unavailable"));
+
+        WebConsoleCapabilityServiceImpl service = new WebConsoleCapabilityServiceImpl(
+                localRegistry, knowledgeBaseMapper, codeRepositoryMapper, objectProvider(mcpRegistry));
+
+        GetWebConsoleCapabilitiesResponse response = service.getCapabilities(null, "gpt-5.5");
+
+        Map<String, WebConsoleCapabilityVO> byKey = response.getCapabilities().stream()
+                .collect(Collectors.toMap(WebConsoleCapabilityVO::getKey, Function.identity()));
+        assertThat(byKey.get("mcp_docs").isEnabled()).isFalse();
+        assertThat(byKey.get("mcp_docs").getTools()).isEmpty();
+        assertThat(byKey.get("mcp_docs").getReason()).contains("MCP server unavailable");
+        assertThat(response.getNotSupported()).contains("shell");
+    }
+
+    @Test
     void runtimeCapabilityContextSeparatesEnabledUnavailableAndUnsupported() {
         WebConsoleCapabilityServiceImpl service = new WebConsoleCapabilityServiceImpl(
                 mock(com.kama.jchatmind.tool.ToolRegistry.class),

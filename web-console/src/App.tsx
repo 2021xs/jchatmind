@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert, Button, Form, Input, Modal, Spin, message } from "antd";
+import { Alert, Button, Form, Input, Modal, Select, Spin, message } from "antd";
 import { AppHeader } from "./components/AppHeader";
 import { ChatPanel } from "./components/ChatPanel";
 import { Sidebar } from "./components/Sidebar";
@@ -7,12 +7,18 @@ import { TracePanel } from "./components/TracePanel";
 import { useChatSend } from "./hooks/useChatSend";
 import { useConsoleState } from "./hooks/useConsoleState";
 import { useSessionSse } from "./hooks/useSessionSse";
+import { importGithubRepository, importLocalRepository } from "./api/client";
+import { filterExecutionEvents } from "./utils/executionScope";
 
 function App() {
   const [noticeApi, contextHolder] = message.useMessage();
-  const [sessionNameForm] = Form.useForm<{ title: string }>();
+  const [sessionNameForm] = Form.useForm<{ title: string; repoId: string }>();
+  const [localImportForm] = Form.useForm<{ name: string; rootPath: string }>();
+  const [githubImportForm] = Form.useForm<{ name?: string; url: string }>();
   const [createSessionModalOpen, setCreateSessionModalOpen] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
+  const [importMode, setImportMode] = useState<"local" | "github">();
+  const [importing, setImporting] = useState(false);
   const {
     state,
     setState,
@@ -27,15 +33,16 @@ function App() {
     selectSession,
     removeRepository,
     removeSession,
+    removeAllSessions,
     openDetail,
     refreshCapabilities,
   } = useConsoleState();
 
-  const { draft, setDraft, handleSend } = useChatSend({
+  const { draft, setDraft, handleSend, handleStop } = useChatSend({
     selectedSession,
     selectedModel: state.selectedModel,
-    selectedRepoId: state.selectedRepoId,
     selectedSessionId: state.selectedSessionId,
+    activeTaskId: state.activeTaskId,
     setState,
     refreshSessionData,
     onError: (text) => noticeApi.error(text),
@@ -44,6 +51,16 @@ function App() {
   useEffect(() => {
     void refreshConsole();
   }, [refreshConsole]);
+
+  useEffect(() => {
+    if (state.loadState !== "error") {
+      return;
+    }
+    const retryTimer = window.setTimeout(() => {
+      void refreshConsole();
+    }, 3_000);
+    return () => window.clearTimeout(retryTimer);
+  }, [refreshConsole, state.loadState]);
 
   useEffect(() => {
     void refreshCapabilities(state.selectedRepoId, state.selectedModel);
@@ -55,6 +72,13 @@ function App() {
     refreshSessionData,
   });
 
+  const selectedTaskId = state.activeTaskId ?? state.selectedTraceId ?? selectedTrace?.id;
+  const visibleSseEvents = filterExecutionEvents(
+    state.sseEvents,
+    selectedTaskId,
+    state.selectedSessionId,
+  );
+
   async function handleCreateSession() {
     try {
       const values = await sessionNameForm.validateFields();
@@ -63,7 +87,7 @@ function App() {
         return;
       }
       setCreatingSession(true);
-      await createSession(title);
+      await createSession(title, values.repoId);
       setCreateSessionModalOpen(false);
       sessionNameForm.resetFields();
     } catch (error) {
@@ -73,6 +97,31 @@ function App() {
       noticeApi.error(error instanceof Error ? error.message : String(error));
     } finally {
       setCreatingSession(false);
+    }
+  }
+
+  async function handleImport() {
+    try {
+      setImporting(true);
+      if (importMode === "github") {
+        const values = await githubImportForm.validateFields();
+        await importGithubRepository(values.url.trim(), values.name);
+      } else {
+        const values = await localImportForm.validateFields();
+        await importLocalRepository(values.name.trim(), values.rootPath.trim());
+      }
+      await refreshConsole();
+      setImportMode(undefined);
+      localImportForm.resetFields();
+      githubImportForm.resetFields();
+      noticeApi.success("Repository import completed");
+    } catch (error) {
+      if (isFormValidationError(error)) {
+        return;
+      }
+      noticeApi.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -100,11 +149,11 @@ function App() {
           type="warning"
           showIcon
           closable
-          message="后端接口暂不可用"
+          message="后端接口暂不可用，正在自动重试"
           description={state.error}
           action={
             <Button size="small" onClick={refreshConsole}>
-              重试
+              立即重试
             </Button>
           }
           onClose={() => setState((previous) => ({ ...previous, error: undefined }))}
@@ -121,7 +170,9 @@ function App() {
             selectedSessionId={state.selectedSessionId}
             selectedModel={state.selectedModel}
             onSelectRepo={(selectedRepoId) =>
-              setState((previous) => ({ ...previous, selectedRepoId }))
+              setState((previous) => previous.selectedSessionId
+                ? previous
+                : { ...previous, selectedRepoId })
             }
             onSelectModel={(selectedModel) =>
               setState((previous) => ({ ...previous, selectedModel }))
@@ -147,6 +198,17 @@ function App() {
                 throw error;
               }
             }}
+            onDeleteAllSessions={async () => {
+              try {
+                await removeAllSessions();
+                noticeApi.success("全部会话已删除");
+              } catch (error) {
+                noticeApi.error(error instanceof Error ? error.message : String(error));
+                throw error;
+              }
+            }}
+            onImportLocal={() => setImportMode("local")}
+            onImportGithub={() => setImportMode("github")}
           />
 
           <ChatPanel
@@ -155,6 +217,7 @@ function App() {
             model={state.selectedModel}
             messages={state.messages}
             traces={state.traces}
+            executionTrace={selectedTrace}
             draft={draft}
             sending={state.sending}
             messageStatus={state.messageStatus}
@@ -162,6 +225,7 @@ function App() {
             sseStatus={state.sseStatus}
             onDraftChange={setDraft}
             onSend={handleSend}
+            onStop={handleStop}
             onOpenTrace={(traceId) => openDetail("trace", traceId)}
             onOpenTools={() => openDetail("tools")}
             onRetrySession={() =>
@@ -177,8 +241,9 @@ function App() {
             traces={state.traces}
             selectedTrace={selectedTrace}
             toolCalls={visibleToolCalls}
-            events={state.sseEvents}
+            events={visibleSseEvents}
             sessionId={state.selectedSessionId}
+            activeTaskId={state.activeTaskId}
             onModeChange={(detailMode) =>
               setState((previous) => ({ ...previous, detailMode }))
             }
@@ -219,7 +284,68 @@ function App() {
               onPressEnter={() => void handleCreateSession()}
             />
           </Form.Item>
+          <Form.Item
+            label="Repository"
+            name="repoId"
+            initialValue={state.selectedRepoId}
+            rules={[{ required: true, message: "请选择 Repository" }]}
+          >
+            <Select
+              placeholder="选择 Repository"
+              options={state.repositories.map((repo) => ({
+                value: repo.id,
+                label: `${repo.name}${repo.status && repo.status !== "READY" ? ` (${repo.status})` : ""}`,
+              }))}
+            />
+          </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title={importMode === "github" ? "Import GitHub Repository" : "Import Local Repository"}
+        open={Boolean(importMode)}
+        okText="Import"
+        cancelText="Cancel"
+        confirmLoading={importing}
+        destroyOnHidden
+        onOk={() => void handleImport()}
+        onCancel={() => {
+          setImportMode(undefined);
+          localImportForm.resetFields();
+          githubImportForm.resetFields();
+        }}
+      >
+        {importMode === "github" ? (
+          <Form form={githubImportForm} layout="vertical" preserve={false}>
+            <Form.Item
+              label="GitHub URL"
+              name="url"
+              rules={[{ required: true, whitespace: true, message: "Enter a GitHub URL" }]}
+            >
+              <Input placeholder="https://github.com/owner/repository" autoFocus />
+            </Form.Item>
+            <Form.Item label="Display name" name="name">
+              <Input placeholder="Optional" />
+            </Form.Item>
+          </Form>
+        ) : (
+          <Form form={localImportForm} layout="vertical" preserve={false}>
+            <Form.Item
+              label="Name"
+              name="name"
+              rules={[{ required: true, whitespace: true, message: "Enter a repository name" }]}
+            >
+              <Input autoFocus />
+            </Form.Item>
+            <Form.Item
+              label="Root path"
+              name="rootPath"
+              rules={[{ required: true, whitespace: true, message: "Enter a local root path" }]}
+            >
+              <Input placeholder="Allowed by server configuration" />
+            </Form.Item>
+          </Form>
+        )}
       </Modal>
     </main>
   );

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Badge, Tag } from "antd";
+import { Tag } from "antd";
 import type { SectionHeaderProps } from "../types";
 import { repoStatusColor } from "../utils/messageDisplay";
 
@@ -13,12 +13,20 @@ export function ContextPill({ label, value }: { label: string; value: string }) 
 }
 
 export function SectionHeader({ icon, title, count, action }: SectionHeaderProps) {
+  const countDescription = `共 ${count} 个${title}`;
+
   return (
     <div className="section-header">
       <span className="section-header-title">
         {icon}
         <strong>{title}</strong>
-        <Badge count={count} />
+        <span
+          className="section-count"
+          aria-label={countDescription}
+          title={countDescription}
+        >
+          {count}
+        </span>
       </span>
       {action}
     </div>

@@ -12,6 +12,8 @@ export type MessageStatus =
   | "idle"
   | "sending"
   | "generating"
+  | "cancelling"
+  | "cancelled"
   | "completed"
   | "failed";
 
@@ -21,8 +23,19 @@ export interface CodeRepository {
   rootPath?: string;
   language?: string;
   status?: string;
+  sourceType?: "LOCAL" | "GITHUB" | string;
+  remoteUrl?: string;
+  branch?: string;
+  commitSha?: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface RepositoryImportResponse {
+  repoId?: string;
+  fileCount?: number;
+  chunkCount?: number;
+  message?: string;
 }
 
 export interface Agent {
@@ -48,14 +61,21 @@ export interface ChatSession {
 
 export type MessageRole = "user" | "assistant" | "system" | "tool";
 
+export type StreamingMessageStatus = "streaming" | "complete" | "aborted" | "failed";
+
 export interface ChatMessage {
-  id: string;
+  id?: string;
   sessionId: string;
   role: MessageRole;
   content: string;
   metadata?: ChatMessageMetadata;
   createdAt?: string;
   updatedAt?: string;
+  streamId?: string;
+  taskId?: string;
+  status?: StreamingMessageStatus;
+  provisional?: boolean;
+  lastSequence?: number;
 }
 
 export interface ChatMessageMetadata {
@@ -141,6 +161,37 @@ export interface AgentSseEvent {
   payload?: Record<string, unknown>;
 }
 
+export interface FinalMessageStartPayload {
+  streamId: string;
+  stepId: string;
+  phase: "final_answer";
+}
+
+export interface FinalMessageTokenPayload {
+  streamId: string;
+  stepId: string;
+  sequence: number;
+  delta: string;
+}
+
+export interface FinalMessageDonePayload {
+  streamId: string;
+  stepId: string;
+  messageId: string;
+}
+
+export interface FinalMessageAbortPayload {
+  streamId: string;
+  stepId: string;
+  reason: string;
+}
+
+export type FinalStreamingSseEvent =
+  | (AgentSseEvent & { type: "final_message_start"; payload: FinalMessageStartPayload })
+  | (AgentSseEvent & { type: "token"; payload: FinalMessageTokenPayload })
+  | (AgentSseEvent & { type: "final_message_done"; payload: FinalMessageDonePayload })
+  | (AgentSseEvent & { type: "final_message_abort"; payload: FinalMessageAbortPayload });
+
 export interface LegacySseMessage {
   type?: string;
   payload?: {
@@ -155,6 +206,7 @@ export interface WebConsoleChatSendResponse {
   userMessageId: string;
   assistantMessageId?: string;
   runId?: string;
+  taskId: string;
   conversationId: string;
   sseUrl?: string;
 }
@@ -178,6 +230,7 @@ export interface WebConsoleCapabilitiesResponse {
 }
 
 export interface CodeEvidence {
+  index?: number;
   filePath?: string;
   lineRange?: string;
   chunkType?: string;
@@ -185,6 +238,7 @@ export interface CodeEvidence {
   apiPath?: string;
   httpMethod?: string;
   score?: string;
+  snippet?: string;
 }
 
 export interface ToolMessageSummary {
@@ -214,6 +268,7 @@ export interface RuntimeState {
   sending: boolean;
   messageStatus: MessageStatus;
   activeRunId?: string;
+  activeTaskId?: string;
   activeUserMessageId?: string;
   detailOpen: boolean;
   detailMode: DetailMode;

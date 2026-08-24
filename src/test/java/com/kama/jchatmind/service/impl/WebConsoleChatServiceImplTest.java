@@ -2,6 +2,7 @@ package com.kama.jchatmind.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.agent.AgentEventPublisher;
+import com.kama.jchatmind.agent.AgentTaskRuntimeRegistry;
 import com.kama.jchatmind.agent.JChatMind;
 import com.kama.jchatmind.agent.JChatMindFactory;
 import com.kama.jchatmind.config.ChatClientRegistry;
@@ -10,6 +11,7 @@ import com.kama.jchatmind.mapper.CodeRepositoryMapper;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.entity.ChatSession;
 import com.kama.jchatmind.model.entity.CodeRepository;
+import com.kama.jchatmind.model.entity.AgentTask;
 import com.kama.jchatmind.model.request.CreateChatMessageRequest;
 import com.kama.jchatmind.model.request.WebConsoleChatSendRequest;
 import com.kama.jchatmind.model.response.CreateChatMessageResponse;
@@ -17,6 +19,8 @@ import com.kama.jchatmind.model.response.GetWebConsoleCapabilitiesResponse;
 import com.kama.jchatmind.model.response.WebConsoleChatSendResponse;
 import com.kama.jchatmind.model.vo.WebConsoleCapabilityVO;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
+import com.kama.jchatmind.service.AgentTaskLifecycleService;
+import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.WebConsoleCapabilityService;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -29,7 +33,9 @@ import java.util.concurrent.Executor;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.isA;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
@@ -37,6 +43,60 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class WebConsoleChatServiceImplTest {
+
+    @Test
+    void sendRejectsRepositoryMismatchBeforeUserMessageOrTaskReservation() {
+        ChatSessionMapper chatSessionMapper = mock(ChatSessionMapper.class);
+        CodeRepositoryMapper codeRepositoryMapper = mock(CodeRepositoryMapper.class);
+        ChatMessageFacadeService chatMessageFacadeService = mock(ChatMessageFacadeService.class);
+        JChatMindFactory jChatMindFactory = mock(JChatMindFactory.class);
+        ChatClientRegistry chatClientRegistry = new ChatClientRegistry(
+                Map.of("gpt-compatible-chat", mock(ChatClient.class, RETURNS_DEEP_STUBS)));
+        WebConsoleCapabilityService capabilityService = mock(WebConsoleCapabilityService.class);
+
+        when(chatSessionMapper.selectById("session-bound")).thenReturn(ChatSession.builder()
+                .id("session-bound")
+                .agentId("agent-1")
+                .metadata("{\"channel\":\"WEB_CONSOLE\",\"repoId\":\"repo-a\"}")
+                .build());
+        WebConsoleChatServiceImpl service = new WebConsoleChatServiceImpl(
+                chatSessionMapper, codeRepositoryMapper, chatMessageFacadeService, jChatMindFactory,
+                chatClientRegistry, new ObjectMapper(), mock(AgentEventPublisher.class), capabilityService,
+                Runnable::run);
+        WebConsoleChatSendRequest request = new WebConsoleChatSendRequest();
+        request.setConversationId("session-bound");
+        request.setRepoId("repo-b");
+        request.setContent("question");
+
+        assertThatThrownBy(() -> service.send(request))
+                .isInstanceOf(com.kama.jchatmind.exception.BizException.class)
+                .hasMessageContaining("SESSION_REPOSITORY_MISMATCH");
+        org.mockito.Mockito.verifyNoInteractions(chatMessageFacadeService, codeRepositoryMapper);
+    }
+
+    @Test
+    void sendRejectsLegacyUnboundSessionWithoutGuessingRepository() {
+        ChatSessionMapper chatSessionMapper = mock(ChatSessionMapper.class);
+        ChatMessageFacadeService chatMessageFacadeService = mock(ChatMessageFacadeService.class);
+        ChatClientRegistry chatClientRegistry = new ChatClientRegistry(
+                Map.of("gpt-compatible-chat", mock(ChatClient.class, RETURNS_DEEP_STUBS)));
+        when(chatSessionMapper.selectById("legacy-session")).thenReturn(ChatSession.builder()
+                .id("legacy-session").agentId("agent-1")
+                .metadata("{\"channel\":\"WEB_CONSOLE\"}").build());
+        WebConsoleChatServiceImpl service = new WebConsoleChatServiceImpl(
+                chatSessionMapper, mock(CodeRepositoryMapper.class), chatMessageFacadeService,
+                mock(JChatMindFactory.class), chatClientRegistry, new ObjectMapper(),
+                mock(AgentEventPublisher.class), mock(WebConsoleCapabilityService.class), Runnable::run);
+        WebConsoleChatSendRequest request = new WebConsoleChatSendRequest();
+        request.setConversationId("legacy-session");
+        request.setRepoId("repo-a");
+        request.setContent("question");
+
+        assertThatThrownBy(() -> service.send(request))
+                .isInstanceOf(com.kama.jchatmind.exception.BizException.class)
+                .hasMessageContaining("SESSION_REPOSITORY_UNBOUND");
+        org.mockito.Mockito.verifyNoInteractions(chatMessageFacadeService);
+    }
 
     @Test
     void sendCreatesPlainUserMessageAndRunsExistingAgentWithWebConsoleRepoContext() {
@@ -55,7 +115,7 @@ class WebConsoleChatServiceImplTest {
                 .id("session-1")
                 .agentId("agent-1")
                 .title("web")
-                .metadata("{\"channel\":\"WEB_CONSOLE\",\"model\":\"gpt-5.5\"}")
+                .metadata("{\"channel\":\"WEB_CONSOLE\",\"repoId\":\"repo-1\",\"model\":\"gpt-5.5\"}")
                 .build());
         when(codeRepositoryMapper.selectById("repo-1")).thenReturn(CodeRepository.builder()
                 .id("repo-1")
@@ -115,13 +175,61 @@ class WebConsoleChatServiceImplTest {
                 .contains("capability context")
                 .contains("Do not add or mention Feishu context");
         verify(agent).setMaxLoopSteps(12);
-        verify(agent).run();
+        verify(agent).setFinalStreamingEnabled(false);
+        verify(agent).run(anyString());
 
         assertEquals("user-message-1", response.getUserMessageId());
         assertEquals("session-1", response.getConversationId());
         assertEquals("/sse/connect/session-1", response.getSseUrl());
         assertEquals(traceIdCaptor.getValue(), response.getRunId());
         assertNotNull(response.getRunId());
+    }
+
+    @Test
+    void enabledFlagIsAppliedOnlyToWebConsoleAgentRuntime() {
+        ChatSessionMapper chatSessionMapper = mock(ChatSessionMapper.class);
+        CodeRepositoryMapper codeRepositoryMapper = mock(CodeRepositoryMapper.class);
+        AgentTaskLifecycleService lifecycleService = mock(AgentTaskLifecycleService.class);
+        AgentTaskLogService logService = mock(AgentTaskLogService.class);
+        AgentTaskRuntimeRegistry runtimeRegistry = new AgentTaskRuntimeRegistry();
+        JChatMindFactory factory = mock(JChatMindFactory.class);
+        JChatMind agent = mock(JChatMind.class);
+        ChatClientRegistry clients = new ChatClientRegistry(
+                Map.of("gpt-compatible-chat", mock(ChatClient.class, RETURNS_DEEP_STUBS)));
+        WebConsoleCapabilityService capabilityService = mock(WebConsoleCapabilityService.class);
+
+        when(chatSessionMapper.selectById("session-stream")).thenReturn(ChatSession.builder()
+                .id("session-stream").agentId("agent-1")
+                .metadata("{\"channel\":\"WEB_CONSOLE\",\"repoId\":\"repo-1\",\"model\":\"gpt-5.5\"}")
+                .build());
+        when(codeRepositoryMapper.selectById("repo-1")).thenReturn(CodeRepository.builder()
+                .id("repo-1").name("repo").status("READY").build());
+        GetWebConsoleCapabilitiesResponse capabilities = capabilities("repo-1", "gpt-5.5");
+        when(capabilityService.getCapabilities("repo-1", "gpt-5.5")).thenReturn(capabilities);
+        when(capabilityService.runtimeCapabilityContext(capabilities)).thenReturn("capability context");
+        when(capabilityService.safeFullOptionalToolNames()).thenReturn(List.of("searchProjectCode", "databaseQuery"));
+        when(lifecycleService.reserve(eq("session-stream"), eq("agent-1"), eq("gpt-5.5"),
+                eq(12), anyString(), isA(CreateChatMessageRequest.class)))
+                .thenReturn(new AgentTaskLifecycleService.ReservedTask(
+                        AgentTask.builder().id("task-stream").sessionId("session-stream").build(),
+                        "user-message-stream"));
+        when(factory.create(eq("agent-1"), eq("session-stream"), eq("user-message-stream"),
+                anyString(), anyString(), eq("gpt-5.5"), isA(List.class))).thenReturn(agent);
+
+        WebConsoleChatServiceImpl service = new WebConsoleChatServiceImpl(
+                chatSessionMapper, codeRepositoryMapper, lifecycleService, logService, runtimeRegistry,
+                factory, clients, new ObjectMapper(), mock(AgentEventPublisher.class), capabilityService,
+                Runnable::run, true);
+        WebConsoleChatSendRequest request = new WebConsoleChatSendRequest();
+        request.setConversationId("session-stream");
+        request.setRepoId("repo-1");
+        request.setModel("gpt-5.5");
+        request.setContent("question");
+
+        service.send(request);
+
+        verify(agent).setFinalStreamingEnabled(true);
+        verify(agent).run("task-stream");
     }
 
     @Test
@@ -141,7 +249,7 @@ class WebConsoleChatServiceImplTest {
                 .id("session-cn")
                 .agentId("agent-1")
                 .title("Web Console 中文测试")
-                .metadata("{\"channel\":\"WEB_CONSOLE\",\"model\":\"deepseek-chat\"}")
+                .metadata("{\"channel\":\"WEB_CONSOLE\",\"repoId\":\"repo-1\",\"model\":\"deepseek-chat\"}")
                 .build());
         when(codeRepositoryMapper.selectById("repo-1")).thenReturn(CodeRepository.builder()
                 .id("repo-1")
@@ -201,7 +309,7 @@ class WebConsoleChatServiceImplTest {
                 .id("session-mcp")
                 .agentId("agent-1")
                 .title("MCP runtime")
-                .metadata("{\"channel\":\"WEB_CONSOLE\",\"model\":\"gpt-5.5\"}")
+                .metadata("{\"channel\":\"WEB_CONSOLE\",\"repoId\":\"repo-1\",\"model\":\"gpt-5.5\"}")
                 .build());
         when(codeRepositoryMapper.selectById("repo-1")).thenReturn(CodeRepository.builder()
                 .id("repo-1")

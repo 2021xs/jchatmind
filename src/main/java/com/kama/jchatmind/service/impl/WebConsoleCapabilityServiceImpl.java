@@ -11,6 +11,8 @@ import com.kama.jchatmind.model.vo.WebConsoleCapabilityVO;
 import com.kama.jchatmind.service.WebConsoleCapabilityService;
 import com.kama.jchatmind.tool.ToolRegistry;
 import org.springframework.beans.factory.ObjectProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -20,6 +22,7 @@ import java.util.UUID;
 
 @Service
 public class WebConsoleCapabilityServiceImpl implements WebConsoleCapabilityService {
+    private static final Logger log = LoggerFactory.getLogger(WebConsoleCapabilityServiceImpl.class);
     private static final String ASSISTANT_NAME = "代码助手";
     private static final List<String> SAFE_FULL_OPTIONAL_TOOLS = List.of(
             "searchProjectCode",
@@ -224,10 +227,19 @@ public class WebConsoleCapabilityServiceImpl implements WebConsoleCapabilityServ
                     .reason("MCP client 未启用")
                     .build();
         }
-        List<String> tools = registry.exposedTools().stream()
-                .filter(tool -> type == tool.getServerType())
-                .map(ExternalMcpToolRegistration::getExposedName)
-                .toList();
+        List<String> tools;
+        boolean discoveryFailed = false;
+        try {
+            tools = registry.exposedTools().stream()
+                    .filter(tool -> type == tool.getServerType())
+                    .map(ExternalMcpToolRegistration::getExposedName)
+                    .toList();
+        } catch (RuntimeException e) {
+            log.warn("MCP capability discovery unavailable: serverType={}, status=UNAVAILABLE, "
+                            + "failureType=MCP_DISCOVERY_FAILED, message=MCP tools are not exposed", type, e);
+            tools = List.of();
+            discoveryFailed = true;
+        }
         return WebConsoleCapabilityVO.builder()
                 .key(key)
                 .label(label)
@@ -235,6 +247,8 @@ public class WebConsoleCapabilityServiceImpl implements WebConsoleCapabilityServ
                 .tools(tools)
                 .description(description)
                 .reason(tools.isEmpty() ? "MCP server 未启用、无 allowed tool、风险级别不允许或 auto-invoke 未允许" : null)
+                .reason(discoveryFailed ? "MCP server unavailable: discovery failed"
+                        : tools.isEmpty() ? "MCP server not enabled or no allowed auto-invokable tool" : null)
                 .build();
     }
 
@@ -243,8 +257,14 @@ public class WebConsoleCapabilityServiceImpl implements WebConsoleCapabilityServ
         if (registry == null) {
             return List.of();
         }
-        return registry.exposedTools().stream()
-                .map(ExternalMcpToolRegistration::getExposedName)
-                .toList();
+        try {
+            return registry.exposedTools().stream()
+                    .map(ExternalMcpToolRegistration::getExposedName)
+                    .toList();
+        } catch (RuntimeException e) {
+            log.warn("MCP optional tools unavailable for runtime: status=UNAVAILABLE, "
+                    + "failureType=MCP_DISCOVERY_FAILED, message=MCP tools are not exposed", e);
+            return List.of();
+        }
     }
 }

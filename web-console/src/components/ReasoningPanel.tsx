@@ -1,6 +1,7 @@
 import { Button, Collapse, Space, Tag } from "antd";
 import type { AgentTaskTrace, CodeRepository } from "../types";
 import { formatEvidenceRef, parseCodeEvidence } from "../utils/evidence";
+import { stepDisplay, toolDisplayName } from "../utils/executionDisplay";
 import { formatLatency, modelLabel } from "../utils/messageDisplay";
 import { ToolCallSummaryCard } from "./ToolCallCard";
 
@@ -22,6 +23,7 @@ export function ReasoningPanel({
   const primaryTools = toolCalls
     .map((call) => call.actualToolName ?? call.toolName)
     .filter(Boolean)
+    .map((name) => toolDisplayName(name))
     .slice(0, 2)
     .join(", ");
   const title = trace
@@ -48,7 +50,7 @@ export function ReasoningPanel({
                     <p>使用助手：代码助手 · {modelLabel(trace.modelName)}</p>
                     {steps.slice(0, 3).map((step) => (
                       <p key={step.id}>
-                        执行步骤：{step.outputSummary ?? step.inputSummary ?? step.stepType ?? "step 摘要"}
+                        {stepDisplay(step).title}：{stepDisplay(step).description}
                       </p>
                     ))}
                     {toolCalls.length === 0 ? (

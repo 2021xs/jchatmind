@@ -70,7 +70,16 @@ function AssistantMessageContent({
       />
       <section className="answer-section">
         <div className="answer-title">正式回答</div>
-        <MarkdownContent content={message.content} />
+        {message.content || !message.provisional ? (
+          <MarkdownContent content={message.content} />
+        ) : null}
+        {message.status === "streaming" ? (
+          <span className="streaming-cursor" aria-label="streaming">▍</span>
+        ) : message.status === "aborted" ? (
+          <span className="streaming-status">生成已中断</span>
+        ) : message.status === "failed" ? (
+          <span className="streaming-status streaming-status-failed">回答生成失败</span>
+        ) : null}
       </section>
     </div>
   );

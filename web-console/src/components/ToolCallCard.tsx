@@ -1,6 +1,12 @@
 import { Collapse, Space, Tag } from "antd";
 import type { ToolCallTrace } from "../types";
 import { parseCodeEvidence } from "../utils/evidence";
+import type { ToolInvocationDisplay } from "../utils/executionDisplay";
+import {
+  statusLabel,
+  toolCallDiagnostics,
+  toolDisplayName,
+} from "../utils/executionDisplay";
 import { formatLatency, statusColor, toolKind } from "../utils/messageDisplay";
 import { RawBlock } from "./common";
 import { EvidenceList } from "./EvidenceList";
@@ -8,15 +14,15 @@ import { EvidenceList } from "./EvidenceList";
 export function ToolCallSummaryCard({ call }: { call: ToolCallTrace }) {
   const summary = call.errorMessage ?? call.resultSummary ?? "暂无结果摘要";
   const evidence = parseCodeEvidence(summary);
-  const diagnostics = selectorDiagnostics(summary, call);
+  const diagnostics = toolCallDiagnostics(call);
 
   return (
     <div className="reasoning-tool-row">
       <div className="tool-card-head">
         <Space wrap size={6}>
-          <strong>{call.actualToolName ?? call.toolName ?? "unknown_tool"}</strong>
+          <strong>{toolDisplayName(call.actualToolName ?? call.toolName)}</strong>
           <Tag>{toolKind(call)}</Tag>
-          <Tag color={statusColor(call.status)}>{call.status ?? "UNKNOWN"}</Tag>
+          <Tag color={statusColor(call.status)}>{statusLabel(call.status)}</Tag>
         </Space>
         <span className="muted">{formatLatency(call.latencyMs)}</span>
       </div>
@@ -38,24 +44,39 @@ export function ToolCallSummaryCard({ call }: { call: ToolCallTrace }) {
   );
 }
 
-export function ToolCallCard({ call }: { call: ToolCallTrace }) {
+export function ToolCallCard({
+  call,
+  invocation,
+}: {
+  call: ToolCallTrace;
+  invocation?: ToolInvocationDisplay;
+}) {
   const denied = call.blockedByPolicy === true;
   const summary = call.errorMessage ?? call.resultSummary ?? "暂无结果摘要";
   const evidence = parseCodeEvidence(summary);
-  const diagnostics = selectorDiagnostics(summary, call);
+  const diagnostics = toolCallDiagnostics(call);
 
   return (
     <article className="tool-call-card">
       <div className="tool-card-head">
         <Space wrap size={6}>
           <Tag color={denied ? "red" : statusColor(call.status)}>
-            {denied ? "DENIED" : call.status ?? "UNKNOWN"}
+            {denied ? "已拦截" : statusLabel(call.status)}
           </Tag>
           <Tag>{toolKind(call)}</Tag>
-          <strong>{call.actualToolName ?? call.toolName ?? "unknown_tool"}</strong>
+          <strong>{toolDisplayName(call.actualToolName ?? call.toolName)}</strong>
         </Space>
         <span className="muted">{formatLatency(call.latencyMs)}</span>
       </div>
+      <code className="tool-technical-name">
+        {call.actualToolName ?? call.toolName ?? "unknown_tool"}
+      </code>
+      {invocation?.query ? (
+        <div className="tool-query">
+          <span>查询主题</span>
+          <strong>{invocation.query}</strong>
+        </div>
+      ) : null}
       <div className="tool-summary-text">{toolEvidenceSummary(summary, evidence.length)}</div>
       <Diagnostics diagnostics={diagnostics} />
       <EvidenceList evidence={evidence} />
@@ -70,7 +91,7 @@ export function ToolCallCard({ call }: { call: ToolCallTrace }) {
         items={[
           {
             key: "tool-raw",
-            label: "raw tool detail",
+            label: "工具原始详情",
             children: <RawBlock value={call} />,
           },
         ]}
@@ -83,27 +104,14 @@ function toolEvidenceSummary(summary: string, evidenceCount: number): string {
   if (evidenceCount > 0) {
     return `检索结果：命中 ${evidenceCount} 个代码片段`;
   }
-  return firstMeaningfulLine(summary);
-}
-
-function selectorDiagnostics(summary: string, call: ToolCallTrace): string[] {
-  const diagnostics: string[] = [];
-  if (call.errorMessage) {
-    diagnostics.push(`工具失败：${firstMeaningfulLine(call.errorMessage)}`);
+  if (/no related code evidence found/i.test(summary)) {
+    return "本次检索没有找到相关代码证据。";
   }
-  if (/selectorFallback:\s*true/i.test(summary) || /fallback=true/i.test(summary)) {
-    diagnostics.push("选择器：失败，已使用 fallback 证据选择");
+  const firstLine = firstMeaningfulLine(summary);
+  if (/selected code evidence/i.test(firstLine)) {
+    return "已获得代码检索结果，完整内容可在原始详情中查看。";
   }
-  if (/selectorJsonParseOk:\s*false/i.test(summary)) {
-    diagnostics.push("选择器：JSON 解析失败");
-  }
-  if (/auth|unauthorized|401|403/i.test(summary)) {
-    diagnostics.push("LLM 选择器认证失败或无权限");
-  }
-  if (call.blockedByPolicy) {
-    diagnostics.push("安全策略：已拦截本次工具调用");
-  }
-  return Array.from(new Set(diagnostics));
+  return firstLine || "工具已执行，完整结果可在原始详情中查看。";
 }
 
 function Diagnostics({ diagnostics }: { diagnostics: string[] }) {
@@ -127,6 +135,6 @@ function firstMeaningfulLine(value: string): string {
       .split(/\r?\n/)
       .map((line) => line.trim())
       .find((line) => line.length > 0)
-      ?.slice(0, 260) ?? "暂无结果摘要"
+      ?.slice(0, 260) ?? ""
   );
 }

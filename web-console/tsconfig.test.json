@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "verbatimModuleSyntax": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "rootDir": "src",
+    "outDir": "target/deterministic-tests",
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": [
+    "src/types.ts",
+    "src/utils/evidence.ts",
+    "src/utils/executionDisplay.ts",
+    "src/utils/executionScope.ts",
+    "src/utils/scroll.ts",
+    "src/utils/streamingMessage.ts"
+  ]
+}

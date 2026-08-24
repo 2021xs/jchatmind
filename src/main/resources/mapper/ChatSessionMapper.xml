@@ -83,6 +83,19 @@
         ORDER BY updated_at DESC
     </select>
 
+    <select id="selectByIdForUpdate" resultMap="BaseResultMap">
+        SELECT
+            id,
+            agent_id,
+            title,
+            metadata::text AS metadata,
+            created_at,
+            updated_at
+        FROM chat_session
+        WHERE id = CAST(#{id} AS uuid)
+        FOR UPDATE
+    </select>
+
     <select id="selectByChannel" resultMap="BaseResultMap">
         SELECT
             id,

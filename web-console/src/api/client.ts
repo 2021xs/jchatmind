@@ -7,6 +7,7 @@ import type {
   WebConsoleCapabilitiesResponse,
   WebConsoleChatSendResponse,
   WebConsoleModel,
+  RepositoryImportResponse,
 } from "../types";
 
 interface ApiResponse<T> {
@@ -82,6 +83,26 @@ export async function deleteRepository(repoId: string): Promise<void> {
   });
 }
 
+export async function importLocalRepository(
+  name: string,
+  rootPath: string,
+): Promise<RepositoryImportResponse> {
+  return request<RepositoryImportResponse>("/code-repositories/import", {
+    method: "POST",
+    body: JSON.stringify({ name, rootPath }),
+  });
+}
+
+export async function importGithubRepository(
+  url: string,
+  name?: string,
+): Promise<RepositoryImportResponse> {
+  return request<RepositoryImportResponse>("/code-repositories/import/github", {
+    method: "POST",
+    body: JSON.stringify({ url, name: name?.trim() || undefined }),
+  });
+}
+
 export async function getAgents(): Promise<Agent[]> {
   const data = await request<{ agents: Agent[] }>("/agents");
   return data.agents ?? [];
@@ -147,6 +168,17 @@ export async function sendChatMessage(
       content,
     }),
   });
+}
+
+export async function cancelAgentTask(
+  taskId: string,
+  conversationId: string,
+): Promise<{ taskId: string; status: string }> {
+  return request<{ taskId: string; status: string }>(
+    `/web-console/tasks/${encodeURIComponent(taskId)}/cancel`,
+    { method: "POST" },
+    { conversationId },
+  );
 }
 
 export async function getWebConsoleCapabilities(

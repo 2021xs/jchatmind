@@ -20,6 +20,8 @@ import {
   readyRepositories,
   sortSessions,
 } from "../utils/messageDisplay";
+import { selectExecutionTrace } from "../utils/executionScope";
+import { reconcileLoadedMessages } from "../utils/streamingMessage";
 
 export const defaultConsoleState: RuntimeState = {
   repositories: [],
@@ -53,17 +55,28 @@ export function useConsoleState() {
   );
 
   const selectedTrace = useMemo(
-    () =>
-      state.traces.find((trace) => trace.id === state.selectedTraceId) ??
-      state.traces.find((trace) => trace.userMessageId === state.activeUserMessageId) ??
-      state.traces.find((trace) => trace.traceId === state.activeRunId) ??
-      state.traces[0],
-    [state.activeRunId, state.activeUserMessageId, state.traces, state.selectedTraceId],
+    () => selectExecutionTrace({
+      traces: state.traces,
+      activeTaskId: state.activeTaskId,
+      selectedTraceId: state.selectedTraceId,
+      activeUserMessageId: state.activeUserMessageId,
+      activeRunId: state.activeRunId,
+      taskPending: state.sending || state.messageStatus === "sending",
+    }),
+    [
+      state.activeRunId,
+      state.activeTaskId,
+      state.activeUserMessageId,
+      state.messageStatus,
+      state.sending,
+      state.traces,
+      state.selectedTraceId,
+    ],
   );
 
   const visibleToolCalls = useMemo(
-    () => state.traces.flatMap((trace) => trace.toolCalls ?? []),
-    [state.traces],
+    () => selectedTrace?.toolCalls ?? [],
+    [selectedTrace],
   );
 
   const refreshConsole = useCallback(async () => {
@@ -84,13 +97,18 @@ export function useConsoleState() {
           previous.selectedSessionId && hasId(sorted, previous.selectedSessionId)
             ? previous.selectedSessionId
             : sorted[0]?.id;
+        const sessionChanged = previous.selectedSessionId !== selectedSessionId;
+        const selectedSession = sorted.find((session) => session.id === selectedSessionId);
         const assistantAgent = codeAssistantAgent(agents);
         const selectedRepoId =
-          previous.selectedRepoId && hasId(repositories, previous.selectedRepoId)
-            ? previous.selectedRepoId
-            : readyRepositories(repositories)[0]?.id ?? repositories[0]?.id;
+          selectedSession?.repoId ??
+          (selectedSessionId
+            ? undefined
+            : previous.selectedRepoId && hasId(repositories, previous.selectedRepoId)
+              ? previous.selectedRepoId
+              : readyRepositories(repositories)[0]?.id ?? repositories[0]?.id);
         const selectedModel = normalizeWebConsoleModel(
-          sorted.find((session) => session.id === selectedSessionId)?.model ??
+            selectedSession?.model ??
             previous.selectedModel,
         );
         return {
@@ -103,6 +121,13 @@ export function useConsoleState() {
           selectedAgentId: assistantAgent?.id,
           selectedModel,
           loadState: "ready",
+          messages: sessionChanged ? [] : previous.messages,
+          traces: sessionChanged ? [] : previous.traces,
+          sseEvents: sessionChanged ? [] : previous.sseEvents,
+          selectedTraceId: sessionChanged ? undefined : previous.selectedTraceId,
+          activeRunId: sessionChanged ? undefined : previous.activeRunId,
+          activeTaskId: sessionChanged ? undefined : previous.activeTaskId,
+          activeUserMessageId: sessionChanged ? undefined : previous.activeUserMessageId,
         };
       });
     } catch (error) {
@@ -120,21 +145,34 @@ export function useConsoleState() {
         getChatMessages(sessionId),
         getAgentTraces(sessionId),
       ]);
-      setState((previous) => ({
-        ...previous,
-        messages,
-        traces,
-        selectedTraceId:
-          previous.selectedTraceId && hasId(traces, previous.selectedTraceId)
-            ? previous.selectedTraceId
-            : traces[0]?.id,
-        sessionError: undefined,
-      }));
+      setState((previous) => {
+        if (previous.selectedSessionId !== sessionId) {
+          return previous;
+        }
+        return {
+          ...previous,
+          messages: reconcileLoadedMessages(
+            previous.messages,
+            messages,
+            sessionId,
+            traces,
+          ),
+          traces,
+          selectedTraceId:
+            previous.activeTaskId ??
+            (previous.selectedTraceId && hasId(traces, previous.selectedTraceId)
+              ? previous.selectedTraceId
+              : traces[0]?.id),
+          sessionError: undefined,
+        };
+      });
     } catch (error) {
-      setState((previous) => ({
-        ...previous,
-        sessionError: errorMessage(error),
-      }));
+      setState((previous) => previous.selectedSessionId === sessionId
+        ? {
+            ...previous,
+            sessionError: errorMessage(error),
+          }
+        : previous);
     }
   }, []);
 
@@ -165,7 +203,7 @@ export function useConsoleState() {
   }, []);
 
   const createSession = useCallback(
-    async (title: string) => {
+    async (title: string, repoId?: string) => {
       const trimmedTitle = title.trim();
       if (!trimmedTitle) {
         throw new Error("请输入会话名称");
@@ -178,16 +216,24 @@ export function useConsoleState() {
         agentId,
         trimmedTitle,
         state.selectedModel,
-        state.selectedRepoId,
+        repoId ?? state.selectedRepoId,
       );
       const sessions = await getChatSessions();
       setState((previous) => ({
         ...previous,
         sessions: sortSessions(sessions),
         selectedSessionId: sessionId,
+        selectedRepoId: repoId ?? state.selectedRepoId,
         selectedAgentId: agentId,
         selectedModel: state.selectedModel,
         detailMode: "trace",
+        messages: [],
+        traces: [],
+        sseEvents: [],
+        selectedTraceId: undefined,
+        activeRunId: undefined,
+        activeTaskId: undefined,
+        activeUserMessageId: undefined,
       }));
       return sessionId;
     },
@@ -200,9 +246,17 @@ export function useConsoleState() {
       setState((previous) => ({
         ...previous,
         selectedSessionId: sessionId,
+        selectedRepoId: session?.repoId,
         selectedAgentId: codeAssistantAgent(previous.agents)?.id,
         selectedModel: normalizeWebConsoleModel(session?.model ?? previous.selectedModel),
+        messages: [],
+        traces: [],
+        sseEvents: [],
         selectedTraceId: undefined,
+        activeRunId: undefined,
+        activeTaskId: undefined,
+        activeUserMessageId: undefined,
+        messageStatus: "idle",
       }));
     },
     [state.sessions],
@@ -238,15 +292,21 @@ export function useConsoleState() {
             ? previous.selectedSessionId
             : sessions[0]?.id;
       const selectedSession = sessions.find((session) => session.id === selectedSessionId);
+      const sessionChanged = previous.selectedSessionId !== selectedSessionId;
       return {
         ...previous,
         sessions,
         selectedSessionId,
+        selectedRepoId: selectedSession?.repoId,
         selectedModel: normalizeWebConsoleModel(selectedSession?.model ?? previous.selectedModel),
-        messages: selectedSessionId ? previous.messages : [],
-        traces: selectedSessionId ? previous.traces : [],
-        sseEvents: selectedSessionId ? previous.sseEvents : [],
-        selectedTraceId: selectedSessionId ? previous.selectedTraceId : undefined,
+        messages: sessionChanged ? [] : previous.messages,
+        traces: sessionChanged ? [] : previous.traces,
+        sseEvents: sessionChanged ? [] : previous.sseEvents,
+        selectedTraceId: sessionChanged ? undefined : previous.selectedTraceId,
+        activeRunId: sessionChanged ? undefined : previous.activeRunId,
+        activeTaskId: sessionChanged ? undefined : previous.activeTaskId,
+        activeUserMessageId: sessionChanged ? undefined : previous.activeUserMessageId,
+        messageStatus: sessionChanged ? "idle" : previous.messageStatus,
       };
     });
   }, []);
@@ -259,6 +319,25 @@ export function useConsoleState() {
       selectedTraceId: traceId ?? previous.selectedTraceId,
     }));
   }, []);
+
+  const removeAllSessions = useCallback(async () => {
+    const sessionIds = state.sessions.map((session) => session.id);
+    await Promise.all(sessionIds.map((sessionId) => deleteChatSession(sessionId)));
+    const sessions = sortSessions(await getChatSessions());
+    setState((previous) => ({
+      ...previous,
+      sessions,
+      selectedSessionId: undefined,
+      selectedRepoId: undefined,
+      messages: [],
+      traces: [],
+      sseEvents: [],
+      selectedTraceId: undefined,
+      activeRunId: undefined,
+      activeTaskId: undefined,
+      activeUserMessageId: undefined,
+    }));
+  }, [state.sessions]);
 
   return {
     state,
@@ -274,6 +353,7 @@ export function useConsoleState() {
     selectSession,
     removeRepository,
     removeSession,
+    removeAllSessions,
     openDetail,
     refreshCapabilities,
   };

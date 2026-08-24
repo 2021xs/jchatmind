@@ -7,10 +7,12 @@ import com.kama.jchatmind.mapper.AgentStepMapper;
 import com.kama.jchatmind.mapper.AgentTaskMapper;
 import com.kama.jchatmind.mapper.ChatMessageMapper;
 import com.kama.jchatmind.mapper.ChatSessionMapper;
+import com.kama.jchatmind.mapper.CodeRepositoryMapper;
 import com.kama.jchatmind.mapper.ToolCallLogMapper;
 import com.kama.jchatmind.model.common.ChatSessionChannel;
 import com.kama.jchatmind.model.dto.ChatSessionDTO;
 import com.kama.jchatmind.model.entity.ChatSession;
+import com.kama.jchatmind.model.entity.CodeRepository;
 import com.kama.jchatmind.model.request.CreateChatSessionRequest;
 import com.kama.jchatmind.model.request.UpdateChatSessionRequest;
 import com.kama.jchatmind.model.response.CreateChatSessionResponse;
@@ -18,7 +20,6 @@ import com.kama.jchatmind.model.response.GetChatSessionResponse;
 import com.kama.jchatmind.model.response.GetChatSessionsResponse;
 import com.kama.jchatmind.model.vo.ChatSessionVO;
 import com.kama.jchatmind.service.ChatSessionFacadeService;
-import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -27,7 +28,6 @@ import java.util.List;
 import org.springframework.util.StringUtils;
 
 @Service
-@AllArgsConstructor
 public class ChatSessionFacadeServiceImpl implements ChatSessionFacadeService {
 
     private final ChatSessionMapper chatSessionMapper;
@@ -36,6 +36,34 @@ public class ChatSessionFacadeServiceImpl implements ChatSessionFacadeService {
     private final AgentTaskMapper agentTaskMapper;
     private final AgentStepMapper agentStepMapper;
     private final ToolCallLogMapper toolCallLogMapper;
+    private final CodeRepositoryMapper codeRepositoryMapper;
+
+    public ChatSessionFacadeServiceImpl(ChatSessionMapper chatSessionMapper,
+                                        ChatSessionConverter chatSessionConverter,
+                                        ChatMessageMapper chatMessageMapper,
+                                        AgentTaskMapper agentTaskMapper,
+                                        AgentStepMapper agentStepMapper,
+                                        ToolCallLogMapper toolCallLogMapper) {
+        this(chatSessionMapper, chatSessionConverter, chatMessageMapper, agentTaskMapper,
+                agentStepMapper, toolCallLogMapper, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ChatSessionFacadeServiceImpl(ChatSessionMapper chatSessionMapper,
+                                        ChatSessionConverter chatSessionConverter,
+                                        ChatMessageMapper chatMessageMapper,
+                                        AgentTaskMapper agentTaskMapper,
+                                        AgentStepMapper agentStepMapper,
+                                        ToolCallLogMapper toolCallLogMapper,
+                                        CodeRepositoryMapper codeRepositoryMapper) {
+        this.chatSessionMapper = chatSessionMapper;
+        this.chatSessionConverter = chatSessionConverter;
+        this.chatMessageMapper = chatMessageMapper;
+        this.agentTaskMapper = agentTaskMapper;
+        this.agentStepMapper = agentStepMapper;
+        this.toolCallLogMapper = toolCallLogMapper;
+        this.codeRepositoryMapper = codeRepositoryMapper;
+    }
 
     @Override
     public GetChatSessionsResponse getChatSessions() {
@@ -147,6 +175,18 @@ public class ChatSessionFacadeServiceImpl implements ChatSessionFacadeService {
                 ChatSessionChannel channel = ChatSessionChannel.parse(request.getChannel());
                 if (channel == ChatSessionChannel.WEB_CONSOLE && !StringUtils.hasText(request.getTitle())) {
                     throw new BizException("Web Console 会话名称不能为空");
+                }
+                if (channel == ChatSessionChannel.WEB_CONSOLE && !StringUtils.hasText(request.getRepoId())) {
+                    throw new BizException("SESSION_REPOSITORY_UNBOUND: Web Console session requires a repository");
+                }
+                if (channel == ChatSessionChannel.WEB_CONSOLE && codeRepositoryMapper != null) {
+                    CodeRepository repository = codeRepositoryMapper.selectById(request.getRepoId().trim());
+                    if (repository == null) {
+                        throw new BizException("REPOSITORY_NOT_READY: repository does not exist");
+                    }
+                    if (!"READY".equalsIgnoreCase(repository.getStatus())) {
+                        throw new BizException("REPOSITORY_NOT_READY: repository is not ready");
+                    }
                 }
             } catch (IllegalArgumentException e) {
                 throw new BizException("Unsupported chat session channel: " + request.getChannel());

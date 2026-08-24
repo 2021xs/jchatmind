@@ -1,5 +1,6 @@
-import { AuditOutlined, SendOutlined, ToolOutlined } from "@ant-design/icons";
+import { AuditOutlined, SendOutlined, StopOutlined, ToolOutlined } from "@ant-design/icons";
 import { Alert, Button, Empty, Input, Space, Tag, Typography } from "antd";
+import { useCallback, useLayoutEffect, useRef, type UIEvent } from "react";
 import type {
   AgentTaskTrace,
   ChatMessage,
@@ -13,6 +14,7 @@ import {
   isPrimaryChatMessage,
   modelLabel,
 } from "../utils/messageDisplay";
+import { isNearBottom } from "../utils/scroll";
 import { MessageBubble } from "./MessageBubble";
 
 export function ChatPanel({
@@ -21,6 +23,7 @@ export function ChatPanel({
   model,
   messages,
   traces,
+  executionTrace,
   draft,
   sending,
   messageStatus,
@@ -28,6 +31,7 @@ export function ChatPanel({
   sseStatus,
   onDraftChange,
   onSend,
+  onStop,
   onOpenTrace,
   onOpenTools,
   onRetrySession,
@@ -37,6 +41,7 @@ export function ChatPanel({
   model: WebConsoleModel;
   messages: ChatMessage[];
   traces: AgentTaskTrace[];
+  executionTrace?: AgentTaskTrace;
   draft: string;
   sending: boolean;
   messageStatus: MessageStatus;
@@ -44,17 +49,57 @@ export function ChatPanel({
   sseStatus: SseStatus;
   onDraftChange: (value: string) => void;
   onSend: () => void;
+  onStop: () => void;
   onOpenTrace: (traceId?: string) => void;
   onOpenTools: () => void;
   onRetrySession: () => void;
 }) {
-  const latestTrace = traces[0];
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScrollRef = useRef(true);
+  const currentTrace = executionTrace;
   const visibleMessages = messages.filter(isPrimaryChatMessage);
-  const busy = sending || messageStatus === "generating";
-  const toolCallCount = traces.reduce(
-    (count, trace) => count + (trace.toolCalls?.length ?? 0),
-    0,
+  const hasStreamingAssistant = visibleMessages.some(
+    (message) => message.provisional && message.status === "streaming",
   );
+  const busy = sending || messageStatus === "generating" || messageStatus === "cancelling";
+  const toolCallCount = currentTrace?.toolCalls?.length ?? 0;
+
+  const scrollToBottom = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    shouldAutoScrollRef.current = true;
+    const frameId = requestAnimationFrame(scrollToBottom);
+    return () => cancelAnimationFrame(frameId);
+  }, [scrollToBottom, session?.id]);
+
+  useLayoutEffect(() => {
+    if (!shouldAutoScrollRef.current) {
+      return;
+    }
+    const frameId = requestAnimationFrame(() => {
+      if (shouldAutoScrollRef.current) {
+        scrollToBottom();
+      }
+    });
+    return () => cancelAnimationFrame(frameId);
+  }, [messageStatus, messages, scrollToBottom]);
+
+  const handleMessageListScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
+    shouldAutoScrollRef.current = isNearBottom(event.currentTarget);
+  }, []);
+
+  const handleSend = useCallback(() => {
+    if (draft.trim()) {
+      shouldAutoScrollRef.current = true;
+    }
+    onSend();
+  }, [draft, onSend]);
+
   return (
     <section className="chat-panel">
       <div className="chat-heading">
@@ -67,14 +112,15 @@ export function ChatPanel({
           </Typography.Text>
         </div>
         <Space wrap>
+          {session?.title ? <Tag>{session.title}</Tag> : null}
           <Tag>{repo?.name ?? "未选择 repo"}</Tag>
           <Tag color="green">代码助手</Tag>
           <Tag color="blue">{modelLabel(model)}</Tag>
-          {latestTrace ? (
+          {currentTrace ? (
             <Button
               size="small"
               icon={<AuditOutlined />}
-              onClick={() => onOpenTrace(latestTrace.id)}
+              onClick={() => onOpenTrace(currentTrace.id)}
             >
               Trace
             </Button>
@@ -100,15 +146,19 @@ export function ChatPanel({
         />
       ) : null}
 
-      <div className="message-list">
+      <div
+        className="message-list"
+        ref={scrollContainerRef}
+        onScroll={handleMessageListScroll}
+      >
         {!session ? (
           <Empty description="请选择或新建会话后开始提问" />
         ) : visibleMessages.length === 0 ? (
           <Empty description="新建会话开始提问" />
         ) : (
-          visibleMessages.map((item) => (
+          visibleMessages.map((item, index) => (
             <MessageBubble
-              key={item.id}
+              key={item.id ?? item.streamId ?? `message-${index}`}
               message={item}
               trace={item.role === "assistant" ? traceForAssistant(item, messages, traces) : undefined}
               question={item.role === "assistant" ? questionForAssistant(item, messages) : undefined}
@@ -122,11 +172,13 @@ export function ChatPanel({
             <span className="typing-dot" />
             正在发送消息
           </div>
-        ) : messageStatus === "generating" ? (
+        ) :
+          (messageStatus === "generating" || messageStatus === "cancelling") &&
+          !hasStreamingAssistant ? (
           <article className="message-bubble role-assistant transient-message">
             <div className="message-meta">
               <span>Assistant</span>
-              <span>generating</span>
+              <span>{messageStatus === "cancelling" ? "正在停止" : "generating"}</span>
             </div>
             <div className="typing-row">
               <span className="typing-dot" />
@@ -153,19 +205,24 @@ export function ChatPanel({
           onPressEnter={(event) => {
             if (!event.shiftKey) {
               event.preventDefault();
-              onSend();
+              handleSend();
             }
           }}
           autoSize={{ minRows: 2, maxRows: 6 }}
           placeholder="向代码助手提问。Shift + Enter 换行。"
-          disabled={!session}
+          disabled={!session || busy}
         />
+        {busy ? (
+          <Button danger icon={<StopOutlined />} onClick={onStop}>
+            停止
+          </Button>
+        ) : null}
         <Button
           type="primary"
           icon={<SendOutlined />}
-          loading={busy}
+          hidden={busy}
           disabled={!session || busy || !draft.trim()}
-          onClick={onSend}
+          onClick={handleSend}
         >
           发送
         </Button>
@@ -179,7 +236,7 @@ function traceForAssistant(
   messages: ChatMessage[],
   traces: AgentTaskTrace[],
 ): AgentTaskTrace | undefined {
-  const assistantIndex = messages.findIndex((message) => message.id === assistant.id);
+  const assistantIndex = messages.findIndex((message) => message === assistant);
   const priorUser = findPriorUserMessage(messages, assistantIndex);
   if (!priorUser) {
     return undefined;
@@ -188,7 +245,7 @@ function traceForAssistant(
 }
 
 function questionForAssistant(assistant: ChatMessage, messages: ChatMessage[]): string | undefined {
-  const assistantIndex = messages.findIndex((message) => message.id === assistant.id);
+  const assistantIndex = messages.findIndex((message) => message === assistant);
   return findPriorUserMessage(messages, assistantIndex)?.content;
 }
 

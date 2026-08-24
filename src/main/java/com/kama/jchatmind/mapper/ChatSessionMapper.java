@@ -20,6 +20,8 @@ public interface ChatSessionMapper {
 
     ChatSession selectById(String id);
 
+    ChatSession selectByIdForUpdate(String id);
+
     List<ChatSession> selectAll();
 
     List<ChatSession> selectByChannel(@Param("channel") String channel);

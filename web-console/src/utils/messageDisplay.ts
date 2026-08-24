@@ -8,6 +8,7 @@ import type {
   ToolCallTrace,
   WebConsoleModel,
 } from "../types";
+import { upsertPersistedMessage } from "./streamingMessage";
 
 export const MAX_VISIBLE_SESSIONS = 24;
 export const LONG_TEXT_LIMIT = 24000;
@@ -16,7 +17,7 @@ export const WEB_CONSOLE_MODELS: Array<{ value: WebConsoleModel; label: string }
   { value: "deepseek-chat", label: "DeepSeek Chat" },
 ];
 
-export const DEFAULT_WEB_CONSOLE_MODEL: WebConsoleModel = "gpt-5.5";
+export const DEFAULT_WEB_CONSOLE_MODEL: WebConsoleModel = "deepseek-chat";
 
 export function isPrimaryChatMessage(message: ChatMessage): boolean {
   if (message.role === "tool" || message.role === "system") {
@@ -45,10 +46,7 @@ export function hasId<T extends { id: string }>(items: T[], id: string): boolean
 }
 
 export function upsertMessage(messages: ChatMessage[], incoming: ChatMessage): ChatMessage[] {
-  if (messages.some((item) => item.id === incoming.id)) {
-    return messages.map((item) => (item.id === incoming.id ? incoming : item));
-  }
-  return [...messages, incoming];
+  return upsertPersistedMessage(messages, incoming);
 }
 
 export function errorMessage(error: unknown): string {
