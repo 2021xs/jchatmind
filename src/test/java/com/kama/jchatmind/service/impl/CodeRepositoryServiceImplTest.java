@@ -2,7 +2,10 @@ package com.kama.jchatmind.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.config.CodeRagProperties;
+import com.kama.jchatmind.config.GithubImportProperties;
 import com.kama.jchatmind.exception.CodeRepositoryImportException;
+import com.kama.jchatmind.exception.BizException;
+import com.kama.jchatmind.github.GithubWorkspaceManager;
 import com.kama.jchatmind.mapper.CodeChunkMapper;
 import com.kama.jchatmind.mapper.CodeFileMapper;
 import com.kama.jchatmind.mapper.CodeRepositoryMapper;
@@ -12,6 +15,7 @@ import com.kama.jchatmind.model.dto.ParsedCodeFile;
 import com.kama.jchatmind.model.entity.CodeChunk;
 import com.kama.jchatmind.model.entity.CodeFile;
 import com.kama.jchatmind.model.entity.CodeRepository;
+import com.kama.jchatmind.model.common.RepositorySourceType;
 import com.kama.jchatmind.model.request.ImportCodeRepositoryRequest;
 import com.kama.jchatmind.model.response.ImportCodeRepositoryResponse;
 import com.kama.jchatmind.service.CodeChunkEmbeddingTextBuilder;
@@ -32,10 +36,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @ExtendWith(OutputCaptureExtension.class)
 class CodeRepositoryServiceImplTest {
@@ -125,6 +131,100 @@ class CodeRepositoryServiceImplTest {
     }
 
     @Test
+    void deleteGithubRepositoryRemovesOnlyManagedWorkspace() throws Exception {
+        FakeCodeRepositoryMapper repositoryMapper = new FakeCodeRepositoryMapper();
+        FakeCodeFileMapper fileMapper = new FakeCodeFileMapper();
+        FakeCodeChunkMapper chunkMapper = new FakeCodeChunkMapper();
+        GithubImportProperties properties = new GithubImportProperties();
+        properties.setWorkspaceRoot(tempDir.resolve("github-workspace").toString());
+        CodeRagProperties ragProperties = codeRagProperties(2);
+        ragProperties.setAllowedRoots(List.of(tempDir.toString()));
+        GithubWorkspaceManager workspaceManager = new GithubWorkspaceManager(properties, ragProperties);
+        String repositoryId = UUID.randomUUID().toString();
+        GithubWorkspaceManager.PreparedWorkspace workspace = workspaceManager.prepare(
+                repositoryId, "example", "source");
+        Path managedPath = workspace.path();
+        Files.writeString(managedPath.resolve("source.java"), "class Source {}");
+        repositoryMapper.selectedRepository = CodeRepository.builder()
+                .id(repositoryId)
+                .rootPath(managedPath.toString())
+                .sourceType(RepositorySourceType.GITHUB)
+                .remoteUrl("https://github.com/example/source.git")
+                .build();
+
+        CodeRepositoryServiceImpl service = new CodeRepositoryServiceImpl(
+                repositoryMapper, fileMapper, chunkMapper,
+                rootPath -> new CodeFileScanner.ScanResult(rootPath, List.of(), false, "ok"),
+                (rootPath, filePath) -> ParsedCodeFile.builder().chunks(List.of()).build(),
+                (parsed, chunk) -> "", new SuccessfulEmbeddingService(), new NoopTransactionManager(),
+                new ObjectMapper(), ragProperties, properties, workspaceManager);
+
+        service.deleteRepository(repositoryId);
+
+        assertThat(Files.exists(managedPath)).isFalse();
+        assertThat(chunkMapper.calls).containsExactly("deleteChunks");
+        assertThat(fileMapper.calls).containsExactly("deleteFiles");
+        assertThat(repositoryMapper.calls).containsExactly("deleteRepository");
+    }
+
+    @Test
+    void deleteGithubRepositoryRejectsWorkspaceOutsideManagedRoot() {
+        FakeCodeRepositoryMapper repositoryMapper = new FakeCodeRepositoryMapper();
+        FakeCodeFileMapper fileMapper = new FakeCodeFileMapper();
+        FakeCodeChunkMapper chunkMapper = new FakeCodeChunkMapper();
+        GithubImportProperties properties = new GithubImportProperties();
+        properties.setWorkspaceRoot(tempDir.resolve("github-workspace").toString());
+        CodeRagProperties ragProperties = codeRagProperties(2);
+        ragProperties.setAllowedRoots(List.of(tempDir.toString()));
+        GithubWorkspaceManager workspaceManager = new GithubWorkspaceManager(properties, ragProperties);
+        String repositoryId = UUID.randomUUID().toString();
+        repositoryMapper.selectedRepository = CodeRepository.builder()
+                .id(repositoryId)
+                .rootPath(tempDir.resolve("user-source").toString())
+                .sourceType(RepositorySourceType.GITHUB)
+                .build();
+
+        CodeRepositoryServiceImpl service = new CodeRepositoryServiceImpl(
+                repositoryMapper, fileMapper, chunkMapper,
+                rootPath -> new CodeFileScanner.ScanResult(rootPath, List.of(), false, "ok"),
+                (rootPath, filePath) -> ParsedCodeFile.builder().chunks(List.of()).build(),
+                (parsed, chunk) -> "", new SuccessfulEmbeddingService(), new NoopTransactionManager(),
+                new ObjectMapper(), ragProperties, properties, workspaceManager);
+
+        assertThatThrownBy(() -> service.deleteRepository(repositoryId))
+                .isInstanceOf(BizException.class)
+                .hasMessage("GITHUB_WORKSPACE_PATH_REJECTED");
+        assertThat(repositoryMapper.calls).isEmpty();
+    }
+
+    @Test
+    void deleteLocalRepositoryDoesNotDeleteLocalRoot() throws Exception {
+        FakeCodeRepositoryMapper repositoryMapper = new FakeCodeRepositoryMapper();
+        FakeCodeFileMapper fileMapper = new FakeCodeFileMapper();
+        FakeCodeChunkMapper chunkMapper = new FakeCodeChunkMapper();
+        Path localRoot = tempDir.resolve("local-source");
+        Files.createDirectories(localRoot);
+        Path marker = localRoot.resolve("marker.java");
+        Files.writeString(marker, "class Marker {}");
+        repositoryMapper.selectedRepository = CodeRepository.builder()
+                .id("local-1")
+                .rootPath(localRoot.toString())
+                .sourceType(RepositorySourceType.LOCAL)
+                .build();
+
+        CodeRepositoryServiceImpl service = new CodeRepositoryServiceImpl(
+                repositoryMapper, fileMapper, chunkMapper,
+                rootPath -> new CodeFileScanner.ScanResult(rootPath, List.of(), false, "ok"),
+                (rootPath, filePath) -> ParsedCodeFile.builder().chunks(List.of()).build(),
+                (parsed, chunk) -> "", new SuccessfulEmbeddingService(), new NoopTransactionManager(),
+                new ObjectMapper(), codeRagProperties(2));
+
+        service.deleteRepository("local-1");
+
+        assertThat(Files.exists(marker)).isTrue();
+    }
+
+    @Test
     void existingRepositoryRequiresSameNameAndRootPathAtSqlLayer() throws Exception {
         String xml = Files.readString(Path.of("src/main/resources/mapper/CodeRepositoryMapper.xml"));
         org.assertj.core.api.Assertions.assertThat(xml)
@@ -179,6 +279,36 @@ class CodeRepositoryServiceImplTest {
         assertEquals(2, summary.getEmbeddedChunkCount());
         assertEquals("READY", summary.getStatus());
         assertEquals(List.of("IMPORTING", "READY"), repositoryMapper.updatedStatuses);
+    }
+
+    @Test
+    void localReimportClearsExistingGithubProvenance() throws Exception {
+        Path sourceFile = tempDir.resolve("LocalReimport.java");
+        Files.writeString(sourceFile, "class LocalReimport {}");
+        FakeCodeRepositoryMapper repositoryMapper = new FakeCodeRepositoryMapper();
+        repositoryMapper.existingRepository = CodeRepository.builder()
+                .id("repo-1")
+                .name("demo")
+                .rootPath(tempDir.toString())
+                .sourceType(RepositorySourceType.GITHUB)
+                .remoteUrl("https://github.com/a/b.git")
+                .branch("main")
+                .commitSha("abc")
+                .build();
+
+        CodeRepositoryServiceImpl service = new CodeRepositoryServiceImpl(
+                repositoryMapper, new FakeCodeFileMapper(), new FakeCodeChunkMapper(),
+                rootPath -> new CodeFileScanner.ScanResult(rootPath, List.of(sourceFile), false, "ok"),
+                (rootPath, filePath) -> ParsedCodeFile.builder().chunks(List.of()).build(),
+                (parsed, chunk) -> "", new SuccessfulEmbeddingService(), new NoopTransactionManager(),
+                new ObjectMapper(), codeRagProperties(2));
+
+        ImportCodeRepositoryRequest request = new ImportCodeRepositoryRequest();
+        request.setName("demo");
+        request.setRootPath(tempDir.toString());
+        service.importRepository(request);
+
+        assertEquals(1, repositoryMapper.clearProvenanceCount);
     }
 
     @Test
@@ -601,6 +731,9 @@ class CodeRepositoryServiceImplTest {
     private static class FakeCodeRepositoryMapper implements CodeRepositoryMapper {
         private final List<String> updatedStatuses = new ArrayList<>();
         private List<String> calls = new ArrayList<>();
+        private CodeRepository selectedRepository;
+        private CodeRepository existingRepository;
+        private int clearProvenanceCount;
 
         @Override
         public int insert(CodeRepository codeRepository) {
@@ -609,18 +742,19 @@ class CodeRepositoryServiceImplTest {
         }
 
         @Override
+        public int insertWithId(CodeRepository codeRepository) {
+            return insert(codeRepository);
+        }
+
+        @Override
         public CodeRepository selectById(String id) {
-            return null;
+            return selectedRepository;
         }
 
         @Override
         public CodeRepository selectExisting(String name, String rootPath) {
-            return CodeRepository.builder()
-                    .id("repo-1")
-                    .name(name)
-                    .rootPath(rootPath)
-                    .status("READY")
-                    .build();
+            return existingRepository != null ? existingRepository : CodeRepository.builder()
+                    .id("repo-1").name(name).rootPath(rootPath).status("READY").build();
         }
 
         @Override
@@ -631,6 +765,12 @@ class CodeRepositoryServiceImplTest {
         @Override
         public int updateById(CodeRepository codeRepository) {
             updatedStatuses.add(codeRepository.getStatus());
+            return 1;
+        }
+
+        @Override
+        public int clearProvenanceById(String id) {
+            clearProvenanceCount++;
             return 1;
         }
 

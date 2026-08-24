@@ -10,6 +10,8 @@ import java.util.List;
 public interface CodeRepositoryMapper {
     int insert(CodeRepository codeRepository);
 
+    int insertWithId(CodeRepository codeRepository);
+
     CodeRepository selectById(String id);
 
     CodeRepository selectExisting(@Param("name") String name, @Param("rootPath") String rootPath);
@@ -17,6 +19,8 @@ public interface CodeRepositoryMapper {
     List<CodeRepository> selectAll();
 
     int updateById(CodeRepository codeRepository);
+
+    int clearProvenanceById(String id);
 
     int deleteById(String id);
 }

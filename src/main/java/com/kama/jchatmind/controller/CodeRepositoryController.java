@@ -3,11 +3,13 @@ package com.kama.jchatmind.controller;
 import com.kama.jchatmind.model.common.ApiResponse;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.model.request.ImportCodeRepositoryRequest;
+import com.kama.jchatmind.model.request.GithubRepositoryImportRequest;
 import com.kama.jchatmind.model.response.GetCodeRepositoriesResponse;
 import com.kama.jchatmind.model.response.ImportCodeRepositoryResponse;
 import com.kama.jchatmind.model.response.SearchCodeRepositoryResponse;
 import com.kama.jchatmind.service.CodeRepositoryService;
 import com.kama.jchatmind.service.CodeSearchService;
+import com.kama.jchatmind.service.GithubRepositoryImportService;
 import lombok.AllArgsConstructor;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -26,10 +28,17 @@ import java.util.List;
 public class CodeRepositoryController {
     private final CodeRepositoryService codeRepositoryService;
     private final CodeSearchService codeSearchService;
+    private final GithubRepositoryImportService githubRepositoryImportService;
 
     @PostMapping("/code-repositories/import")
     public ApiResponse<ImportCodeRepositoryResponse> importRepository(@RequestBody ImportCodeRepositoryRequest request) {
         return ApiResponse.success(codeRepositoryService.importRepository(request));
+    }
+
+    @PostMapping("/code-repositories/import/github")
+    public ApiResponse<ImportCodeRepositoryResponse> importGithubRepository(
+            @RequestBody GithubRepositoryImportRequest request) {
+        return ApiResponse.success(githubRepositoryImportService.importRepository(request));
     }
 
     @GetMapping("/code-repositories")
