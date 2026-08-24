@@ -2,13 +2,11 @@ package com.kama.jchatmind.service.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.kama.jchatmind.config.ChatClientRegistry;
 import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.model.dto.CodeEvidenceCandidateCard;
 import com.kama.jchatmind.model.dto.CodeEvidenceSelectionResult;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.metadata.Usage;
-import org.springframework.ai.chat.model.ChatResponse;
+import com.kama.jchatmind.model.dto.SelectorModelResponse;
+import com.kama.jchatmind.service.LlmSelectorClient;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.stereotype.Component;
@@ -23,17 +21,17 @@ import java.util.concurrent.TimeoutException;
 
 @Component
 public class CodeLlmEvidenceSelector {
-    private final ChatClientRegistry chatClientRegistry;
+    private final LlmSelectorClient llmSelectorClient;
     private final CodeRagProperties properties;
     private final ObjectMapper objectMapper;
     private final AsyncTaskExecutor executor;
     private final CodeEvidenceCandidateFormatter candidateFormatter;
 
-    public CodeLlmEvidenceSelector(ChatClientRegistry chatClientRegistry,
+    public CodeLlmEvidenceSelector(LlmSelectorClient llmSelectorClient,
                                    CodeRagProperties properties,
                                    ObjectMapper objectMapper,
                                    @Qualifier("codeEvidenceSelectorExecutor") AsyncTaskExecutor executor) {
-        this.chatClientRegistry = chatClientRegistry;
+        this.llmSelectorClient = llmSelectorClient;
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.executor = executor;
@@ -44,49 +42,58 @@ public class CodeLlmEvidenceSelector {
         // Answer-time evidence selection only. This prompt is standalone and does not use ChatMemory or tools.
         long started = System.nanoTime();
         if (!properties.getLlmSelector().isEnabled()) {
-            return fallbackResult(candidates, started, "llm selector disabled; fallback to candidate order");
+            return fallbackResult(candidates, started,
+                    "SELECTOR_DISABLED: llm selector disabled; fallback to candidate order");
         }
 
         List<LocalCandidate> localCandidates = localCandidates(candidates);
         PromptPayload prompt = buildPrompt(query, localCandidates);
-        ModelCallResult modelCall;
+        SelectorModelResponse modelCall;
         try {
             modelCall = callModel(prompt.text());
         } catch (Exception e) {
             CodeEvidenceSelectionResult fallback = fallbackResult(candidates, started,
-                    "selector execution failed: " + e.getMessage());
+                    executionFailureReason(e));
             fallback.setJsonParseOk(false);
             fallback.setExecutionError(true);
             applyPromptSize(fallback, prompt);
             return fallback;
         }
-        String response = modelCall.content();
+        String response = modelCall.getContent();
         try {
             CodeEvidenceSelectionResult parsed = parseResponse(response, candidates, localCandidates);
             parsed.setRawResponse(response);
             parsed.setLatencyMs(elapsedMs(started));
             applyUsage(parsed, modelCall);
+            applyResponseDiagnostics(parsed, modelCall);
             applyPromptSize(parsed, prompt);
+            applyResponseSize(parsed, response);
             return parsed;
         } catch (Exception e) {
             CodeEvidenceSelectionResult fallback = fallbackResult(candidates, started,
-                    "selector response parse failed: " + e.getMessage());
+                    "JSON_PARSE_ERROR: selector response parse failed: " + e.getMessage());
             fallback.setRawResponse(response);
             fallback.setJsonParseOk(false);
             fallback.setExecutionError(false);
             applyUsage(fallback, modelCall);
+            applyResponseDiagnostics(fallback, modelCall);
             applyPromptSize(fallback, prompt);
+            applyResponseSize(fallback, response);
             return fallback;
         }
     }
 
-    private ModelCallResult callModel(String prompt) throws Exception {
-        ChatClient chatClient = chatClientRegistry.get(properties.getLlmSelector().getModel());
-        if (chatClient == null) {
-            throw new IllegalStateException("ChatClient not found for model: " + properties.getLlmSelector().getModel());
-        }
-        Future<ModelCallResult> future = executor.submit(() -> toModelCallResult(
-                chatClient.prompt().user(prompt).call().chatResponse()));
+    private String executionFailureReason(Exception exception) {
+        String message = exception.getMessage();
+        String normalized = message == null ? "" : message.toLowerCase(java.util.Locale.ROOT);
+        String category = exception instanceof TimeoutException || normalized.contains("timed out")
+                ? "SELECTOR_TIMEOUT"
+                : "MODEL_ERROR";
+        return category + ": selector execution failed: " + message;
+    }
+
+    private SelectorModelResponse callModel(String prompt) throws Exception {
+        Future<SelectorModelResponse> future = executor.submit(() -> llmSelectorClient.call(prompt));
         try {
             return future.get(properties.getLlmSelector().getTimeoutMs(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
@@ -103,31 +110,28 @@ public class CodeLlmEvidenceSelector {
         }
     }
 
-    static ModelCallResult toModelCallResult(ChatResponse response) {
-        String content = response == null || response.getResult() == null
-                || response.getResult().getOutput() == null
-                ? null
-                : response.getResult().getOutput().getText();
-        Usage usage = response == null || response.getMetadata() == null
-                ? null
-                : response.getMetadata().getUsage();
-        Integer promptTokens = usage == null ? null : usage.getPromptTokens();
-        Integer completionTokens = usage == null ? null : usage.getCompletionTokens();
-        Integer totalTokens = usage == null ? null : usage.getTotalTokens();
-        boolean usageAvailable = promptTokens != null || completionTokens != null || totalTokens != null;
-        return new ModelCallResult(content, promptTokens, completionTokens, totalTokens, usageAvailable);
+    private void applyUsage(CodeEvidenceSelectionResult result, SelectorModelResponse modelCall) {
+        result.setPromptTokens(modelCall.getPromptTokens());
+        result.setCompletionTokens(modelCall.getCompletionTokens());
+        result.setTotalTokens(modelCall.getTotalTokens());
+        result.setUsageAvailable(modelCall.getPromptTokens() != null
+                || modelCall.getCompletionTokens() != null
+                || modelCall.getTotalTokens() != null);
     }
 
-    private void applyUsage(CodeEvidenceSelectionResult result, ModelCallResult modelCall) {
-        result.setPromptTokens(modelCall.promptTokens());
-        result.setCompletionTokens(modelCall.completionTokens());
-        result.setTotalTokens(modelCall.totalTokens());
-        result.setUsageAvailable(modelCall.usageAvailable());
+    private void applyResponseDiagnostics(CodeEvidenceSelectionResult result, SelectorModelResponse modelCall) {
+        result.setReasoningContentChars(modelCall.getReasoningContentChars());
+        result.setReasoningContentPresent(modelCall.getReasoningContentPresent());
+        result.setFinishReason(modelCall.getFinishReason());
     }
 
     private void applyPromptSize(CodeEvidenceSelectionResult result, PromptPayload prompt) {
         result.setPromptChars(prompt.text().length());
         result.setCandidateSectionChars(prompt.candidateSectionChars());
+    }
+
+    private void applyResponseSize(CodeEvidenceSelectionResult result, String response) {
+        result.setResponseChars(response == null ? 0 : response.length());
     }
 
     private CodeEvidenceSelectionResult parseResponse(String response,
@@ -165,7 +169,9 @@ public class CodeLlmEvidenceSelector {
         }
         if (selectedChunkIds.isEmpty()) {
             CodeEvidenceSelectionResult fallback = fallbackResult(candidates, System.nanoTime(),
-                    "selector returned no valid candidate chunk id");
+                    invalidCandidateIds.isEmpty()
+                            ? "EMPTY_SELECTION: selector returned no valid candidate chunk id"
+                            : "INVALID_CANDIDATE_ID: selector returned no valid candidate chunk id");
             fallback.setProposedChunkIds(proposedChunkIds);
             fallback.setValidChunkIds(List.of());
             fallback.setInvalidChunkIds(List.of());
@@ -234,7 +240,8 @@ public class CodeLlmEvidenceSelector {
         sb.append("- Field, constant, static initializer, injected config, or class dependency queries: prefer JAVA_CLASS_MEMBER.\n");
         sb.append("- Select at most ").append(properties.getLlmSelector().getMaxSelected()).append(" candidates.\n");
         sb.append("- Return candidate ids in descending relevance order.\n");
-        sb.append("- Select only ids shown in the candidate cards, formatted as C01 through C20.\n");
+        sb.append("- Candidate cards use local ids such as C01, C02, and so on.\n");
+        sb.append("- Select only ids shown in the candidate cards.\n");
         sb.append("- Do not invent candidate ids or facts outside the candidate cards.\n");
         sb.append("- If no candidate is relevant, return an empty selectedCandidateIds array.\n");
         sb.append("- Return JSON only, with no Markdown, explanation, or extra fields.\n\n");
@@ -272,10 +279,6 @@ public class CodeLlmEvidenceSelector {
 
     private String safe(String value) {
         return value == null ? "" : value;
-    }
-
-    record ModelCallResult(String content, Integer promptTokens, Integer completionTokens,
-                           Integer totalTokens, boolean usageAvailable) {
     }
 
     private record PromptPayload(String text, int candidateSectionChars) {

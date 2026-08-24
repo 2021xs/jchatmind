@@ -1,15 +1,16 @@
 package com.kama.jchatmind.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.kama.jchatmind.config.ChatClientRegistry;
 import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.model.dto.CodeEvidenceCandidateCard;
+import com.kama.jchatmind.model.dto.SelectorModelResponse;
+import com.kama.jchatmind.service.LlmSelectorClient;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.core.task.AsyncTaskExecutor;
 
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -19,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -57,29 +59,29 @@ class CodeLlmEvidenceSelectorTest {
         assertEquals(List.of(), result.getInvalidChunkIds());
         assertEquals(List.of("C99"), result.getProposedCandidateIds());
         assertEquals(List.of("C99"), result.getInvalidCandidateIds());
+        assertTrue(result.getReason().startsWith("INVALID_CANDIDATE_ID:"));
     }
 
     @Test
     void timeoutCancelsSharedExecutorTaskAndFallsBackToCandidateOrder() throws Exception {
-        ChatClientRegistry registry = mock(ChatClientRegistry.class);
-        ChatClient chatClient = mock(ChatClient.class);
+        LlmSelectorClient client = mock(LlmSelectorClient.class);
         AsyncTaskExecutor executor = mock(AsyncTaskExecutor.class);
-        Future<CodeLlmEvidenceSelector.ModelCallResult> future = mock(Future.class);
+        Future<SelectorModelResponse> future = mock(Future.class);
         CodeRagProperties properties = new CodeRagProperties();
         properties.getLlmSelector().setTimeoutMs(10);
 
-        when(registry.get(properties.getLlmSelector().getModel())).thenReturn(chatClient);
         when(executor.submit(any(Callable.class))).thenReturn(future);
         when(future.get(anyLong(), eq(TimeUnit.MILLISECONDS))).thenThrow(new TimeoutException("timed out"));
 
         CodeLlmEvidenceSelector selector =
-                new CodeLlmEvidenceSelector(registry, properties, new ObjectMapper(), executor);
+                new CodeLlmEvidenceSelector(client, properties, new ObjectMapper(), executor);
         var result = selector.select("query", List.of(candidate("raw-1"), candidate("raw-2")));
 
         assertTrue(result.isFallback());
         assertFalse(result.isJsonParseOk());
         assertTrue(result.isExecutionError());
-        assertEquals("selector execution failed: selector timed out after 10 ms", result.getReason());
+        assertEquals("SELECTOR_TIMEOUT: selector execution failed: selector timed out after 10 ms",
+                result.getReason());
         assertEquals(List.of("raw-1", "raw-2"), result.getSelectedChunkIds());
         verify(future).cancel(true);
     }
@@ -152,6 +154,7 @@ class CodeLlmEvidenceSelectorTest {
 
         assertTrue(missing.isFallback());
         assertTrue(missing.isEmptySelectorResult());
+        assertTrue(missing.getReason().startsWith("EMPTY_SELECTION:"));
         assertEquals(List.of("uuid-1", "uuid-2", "uuid-3", "uuid-4", "uuid-5"),
                 missing.getSelectedChunkIds());
         assertTrue(nonArray.isFallback());
@@ -167,6 +170,7 @@ class CodeLlmEvidenceSelectorTest {
         assertTrue(parseFailure.isFallback());
         assertFalse(parseFailure.isJsonParseOk());
         assertFalse(parseFailure.isExecutionError());
+        assertTrue(parseFailure.getReason().startsWith("JSON_PARSE_ERROR:"));
         assertFalse(fenced.isFallback());
         assertEquals(List.of("uuid-1"), fenced.getSelectedChunkIds());
     }
@@ -211,34 +215,55 @@ class CodeLlmEvidenceSelectorTest {
         assertEquals(List.of("uuid-1"), result.getSelectedChunkIds());
         assertTrue(result.getPromptChars() > result.getCandidateSectionChars());
         assertTrue(result.getCandidateSectionChars() > 0);
+        assertEquals("{\"selectedCandidateIds\":[\"C01\"]}".length(), result.getResponseChars());
+    }
+
+    @Test
+    void promptDoesNotAssumeATwentyCandidateMaximum() throws Exception {
+        CodeLlmEvidenceSelector selector = selectorReturning("{}");
+
+        for (int count : List.of(6, 20, 25)) {
+            List<CodeEvidenceCandidateCard> candidates = java.util.stream.IntStream.rangeClosed(1, count)
+                    .mapToObj(index -> candidate("uuid-" + index)).toList();
+
+            String prompt = selector.buildPromptForCandidates("query", candidates);
+
+            assertTrue(prompt.contains("Candidate cards use local ids such as C01, C02, and so on."));
+            assertFalse(prompt.contains("C01 through C20"));
+            assertFalse(prompt.contains("C01-C20"));
+            if (count > 20) {
+                assertTrue(prompt.contains("[C25]"));
+            }
+        }
     }
 
     private CodeLlmEvidenceSelector selectorReturning(String response) throws Exception {
-        ChatClientRegistry registry = mock(ChatClientRegistry.class);
-        ChatClient chatClient = mock(ChatClient.class);
+        LlmSelectorClient client = mock(LlmSelectorClient.class);
         AsyncTaskExecutor executor = mock(AsyncTaskExecutor.class);
-        Future<CodeLlmEvidenceSelector.ModelCallResult> future = mock(Future.class);
         CodeRagProperties properties = new CodeRagProperties();
-        when(registry.get(properties.getLlmSelector().getModel())).thenReturn(chatClient);
-        when(executor.submit(any(Callable.class))).thenReturn(future);
-        when(future.get(anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(
-                new CodeLlmEvidenceSelector.ModelCallResult(response, null, null, null, false));
-        return new CodeLlmEvidenceSelector(registry, properties, new ObjectMapper(), executor);
+        when(client.call(anyString())).thenReturn(
+                new SelectorModelResponse(response, null, null, null, null, null, null));
+        completeSubmittedTasks(executor);
+        return new CodeLlmEvidenceSelector(client, properties, new ObjectMapper(), executor);
     }
 
     private CodeLlmEvidenceSelector selectorReturning(String response, int promptTokens,
                                                        int completionTokens, int totalTokens) throws Exception {
-        ChatClientRegistry registry = mock(ChatClientRegistry.class);
-        ChatClient chatClient = mock(ChatClient.class);
+        LlmSelectorClient client = mock(LlmSelectorClient.class);
         AsyncTaskExecutor executor = mock(AsyncTaskExecutor.class);
-        Future<CodeLlmEvidenceSelector.ModelCallResult> future = mock(Future.class);
         CodeRagProperties properties = new CodeRagProperties();
-        when(registry.get(properties.getLlmSelector().getModel())).thenReturn(chatClient);
-        when(executor.submit(any(Callable.class))).thenReturn(future);
-        when(future.get(anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(
-                new CodeLlmEvidenceSelector.ModelCallResult(
-                        response, promptTokens, completionTokens, totalTokens, true));
-        return new CodeLlmEvidenceSelector(registry, properties, new ObjectMapper(), executor);
+        when(client.call(anyString())).thenReturn(new SelectorModelResponse(
+                response, null, null, promptTokens, completionTokens, totalTokens, null));
+        completeSubmittedTasks(executor);
+        return new CodeLlmEvidenceSelector(client, properties, new ObjectMapper(), executor);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void completeSubmittedTasks(AsyncTaskExecutor executor) {
+        when(executor.submit(any(Callable.class))).thenAnswer(invocation -> {
+            Callable<SelectorModelResponse> task = invocation.getArgument(0);
+            return CompletableFuture.completedFuture(task.call());
+        });
     }
 
     private CodeEvidenceCandidateCard candidate(String chunkId) {

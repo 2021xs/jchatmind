@@ -9,6 +9,7 @@ import com.kama.jchatmind.config.MultiChatClientConfig;
 import com.kama.jchatmind.model.dto.CodeEvidenceCandidateCard;
 import com.kama.jchatmind.model.dto.CodeEvidenceSelectionResult;
 import com.kama.jchatmind.service.impl.CodeLlmEvidenceSelector;
+import com.kama.jchatmind.service.impl.SpringAiLlmSelectorClient;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -259,7 +260,8 @@ class CodeLlmSelectorThreadPoolEvaluationTest {
         properties.getLlmSelector().setMaxCandidateChars(600);
         properties.getLlmSelector().setMaxSelected(3);
         properties.getLlmSelector().setTimeoutMs(SELECTOR_TIMEOUT_MS);
-        return new CodeLlmEvidenceSelector(registry, properties, new ObjectMapper(), executor);
+        return new CodeLlmEvidenceSelector(
+                new SpringAiLlmSelectorClient(registry, properties), properties, new ObjectMapper(), executor);
     }
 
     private List<CodeEvidenceCandidateCard> candidates() {

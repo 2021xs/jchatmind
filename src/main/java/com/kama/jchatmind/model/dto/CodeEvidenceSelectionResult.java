@@ -29,4 +29,8 @@ public class CodeEvidenceSelectionResult {
     private boolean usageAvailable;
     private int promptChars;
     private int candidateSectionChars;
+    private int responseChars;
+    private Integer reasoningContentChars;
+    private Boolean reasoningContentPresent;
+    private String finishReason;
 }

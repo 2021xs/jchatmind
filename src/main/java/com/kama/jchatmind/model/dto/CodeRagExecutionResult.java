@@ -30,4 +30,9 @@ public class CodeRagExecutionResult {
     private boolean selectorUsageAvailable;
     private int selectorPromptChars;
     private int selectorCandidateSectionChars;
+    private int selectorResponseChars;
+    private String selectorVisibleContent;
+    private Integer selectorReasoningContentChars;
+    private Boolean selectorReasoningContentPresent;
+    private String selectorFinishReason;
 }

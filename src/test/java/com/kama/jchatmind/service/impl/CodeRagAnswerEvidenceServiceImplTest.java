@@ -89,6 +89,25 @@ class CodeRagAnswerEvidenceServiceImplTest {
     }
 
     @Test
+    void selectorExceptionKeepsFallbackEvidenceAndUsesMeasuredLatency() throws Exception {
+        CodeSearchResult raw = result("raw", "Service.java", "SERVICE_METHOD");
+        mockSearch(raw);
+        when(evidenceSelector.select(eq("query"), any(List.class)))
+                .thenAnswer(invocation -> {
+                    Thread.sleep(5);
+                    throw new RuntimeException("selector down");
+                });
+
+        var execution = service.execute("repo", "query");
+
+        assertTrue(execution.getAnswerEvidence().isFallback());
+        assertFalse(execution.getAnswerEvidence().isJsonParseOk());
+        assertTrue(execution.getAnswerEvidence().getSelectorLatencyMs() > 0);
+        assertTrue(execution.getSelectorLatencyMs() > 0);
+        assertTrue(execution.getSelectorFallbackReason().startsWith("MODEL_ERROR:"));
+    }
+
+    @Test
     void retrieveBuildsCandidateCardsFromRawVectorOnly() {
         CodeSearchResult raw = result("raw", "Service.java", "SERVICE_METHOD");
         mockSearch(raw);
@@ -141,6 +160,8 @@ class CodeRagAnswerEvidenceServiceImplTest {
 
         assertEquals(List.of(raw), execution.getRawCandidates());
         assertEquals(List.of(raw), execution.getAnswerEvidence().getSelectedEvidence());
+        assertFalse(execution.getAnswerEvidence().isFallback());
+        assertTrue(execution.getAnswerEvidence().isJsonParseOk());
         assertEquals(7, execution.getEmbeddingLatencyMs());
         assertEquals(3, execution.getRetrievalLatencyMs());
         assertTrue(execution.isCacheHit());
@@ -152,6 +173,11 @@ class CodeRagAnswerEvidenceServiceImplTest {
         assertEquals(110, execution.getSelectorTotalTokens());
         assertEquals(1234, execution.getSelectorPromptChars());
         assertEquals(900, execution.getSelectorCandidateSectionChars());
+        assertEquals(24, execution.getSelectorResponseChars());
+        assertEquals("{\"selectedCandidateIds\":[]}", execution.getSelectorVisibleContent());
+        assertEquals(300, execution.getSelectorReasoningContentChars());
+        assertTrue(execution.getSelectorReasoningContentPresent());
+        assertEquals("STOP", execution.getSelectorFinishReason());
     }
 
     private void mockSearch(CodeSearchResult... candidates) {
@@ -177,6 +203,11 @@ class CodeRagAnswerEvidenceServiceImplTest {
                 .usageAvailable(true)
                 .promptChars(1234)
                 .candidateSectionChars(900)
+                .responseChars(24)
+                .rawResponse("{\"selectedCandidateIds\":[]}")
+                .reasoningContentChars(300)
+                .reasoningContentPresent(true)
+                .finishReason("STOP")
                 .build();
     }
 
