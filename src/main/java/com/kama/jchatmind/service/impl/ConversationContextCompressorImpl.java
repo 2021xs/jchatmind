@@ -18,8 +18,10 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -54,67 +56,59 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
     public CompressionCheck check(String sessionId, String model, List<ChatMessageDTO> allMessages) {
         List<ChatMessageDTO> sortedMessages = sortedMessages(allMessages);
         ContextCompressionProperties.TokenThreshold threshold = properties.thresholdFor(model);
-        TokenCount contextTokenCount = totalContentTokens(model, sortedMessages);
-        MaxToolResultTokenCount maxToolResultTokenCount = maxSingleToolResultTokens(model, sortedMessages);
         if (!properties.isEnabled()) {
+            TokenCount rawHistoryTokenCount = totalContentTokens(model, sortedMessages);
+            MaxToolResultTokenCount maxToolResultTokenCount = maxSingleToolResultTokens(model, sortedMessages);
             return new CompressionCheck(false, "disabled", sortedMessages.size(),
-                    contextTokenCount.tokens(), maxToolResultTokenCount.tokens(), 0,
-                    combineSources(contextTokenCount.source(), maxToolResultTokenCount.source()),
+                    rawHistoryTokenCount.tokens(), rawHistoryTokenCount.tokens(),
+                    maxToolResultTokenCount.tokens(), 0,
+                    combineSources(rawHistoryTokenCount.source(), maxToolResultTokenCount.source()),
                     threshold.getMaxContextTokens(), threshold.getMaxSingleToolResultTokens());
         }
 
         ChatSessionDTO.MetaData metadata = loadMetadata(sessionId);
-        List<ChatMessageDTO> recentMessages = keepRecentMessages(sortedMessages);
-        List<ChatMessageDTO> candidates = messagesBeforeRecentWindow(sortedMessages, recentMessages.size());
-        List<ChatMessageDTO> messagesToCompress = filterAlreadySummarized(candidates,
-                metadata == null ? null : metadata.getContextSummaryLastMessageId());
-        int contextTokens = contextTokenCount.tokens();
-        int maxToolResultTokens = maxToolResultTokenCount.tokens();
-        boolean overContextTokens = contextTokens >= threshold.getMaxContextTokens();
-        boolean overToolResultTokens = maxToolResultTokens >= threshold.getMaxSingleToolResultTokens();
-        boolean needed = !messagesToCompress.isEmpty()
-                && (overContextTokens || overToolResultTokens);
-        String reason = reason(overContextTokens, overToolResultTokens, messagesToCompress.isEmpty());
-        return new CompressionCheck(needed, reason, sortedMessages.size(),
-                contextTokens, maxToolResultTokens, messagesToCompress.size(),
-                combineSources(contextTokenCount.source(), maxToolResultTokenCount.source()),
-                threshold.getMaxContextTokens(), threshold.getMaxSingleToolResultTokens());
+        ContextState state = buildContextState(sessionId, model, sortedMessages, metadata);
+        return compressionCheck(sortedMessages.size(), threshold, state);
     }
 
     @Override
     public CompressedContext compressIfNeeded(String sessionId, String model, List<ChatMessageDTO> allMessages) {
         List<ChatMessageDTO> sortedMessages = sortedMessages(allMessages);
         if (!properties.isEnabled()) {
-            return new CompressedContext(null, keepRecentMessages(sortedMessages), false);
+            return new CompressedContext(null,
+                    keepRecentMessages(sortedMessages, logicalMessageGroups(sortedMessages)), false);
         }
 
         ChatSessionDTO.MetaData metadata = loadMetadata(sessionId);
-        String existingSummary = metadata == null ? null : metadata.getContextSummary();
-        CompressionCheck check = checkWithMetadata(model, sortedMessages, metadata);
+        ContextCompressionProperties.TokenThreshold threshold = properties.thresholdFor(model);
+        ContextState state = buildContextState(sessionId, model, sortedMessages, metadata);
+        CompressionCheck check = compressionCheck(sortedMessages.size(), threshold, state);
         if (!check.needed()) {
-            log.info("Context compression skipped: sessionId={}, reason={}, historyMessages={}, contextTokens={}, maxToolResultTokens={}, tokenSource={}, maxContextTokens={}, maxSingleToolResultTokens={}",
-                    sessionId, check.reason(), sortedMessages.size(), check.contextTokens(),
+            log.info("Context compression skipped: sessionId={}, reason={}, historyMessages={}, rawHistoryTokens={}, effectiveContextTokens={}, maxToolResultTokens={}, tokenSource={}, maxContextTokens={}, maxSingleToolResultTokens={}",
+                    sessionId, check.reason(), sortedMessages.size(), check.rawHistoryTokens(),
+                    check.effectiveContextTokens(),
                     check.maxSingleToolResultTokens(), check.tokenSource(),
                     check.maxContextTokens(), check.maxSingleToolResultTokensThreshold());
-            return new CompressedContext(existingSummary, keepRecentMessages(sortedMessages), false);
+            List<ChatMessageDTO> currentMessages = state.summaryUsable()
+                    ? state.effectiveTail()
+                    : state.recentMessages();
+            return new CompressedContext(state.effectiveSummary(), currentMessages, false);
         }
 
-        List<ChatMessageDTO> recentMessages = keepRecentMessages(sortedMessages);
-        List<ChatMessageDTO> candidates = messagesBeforeRecentWindow(sortedMessages, recentMessages.size());
-        List<ChatMessageDTO> messagesToCompress = filterAlreadySummarized(candidates,
-                metadata == null ? null : metadata.getContextSummaryLastMessageId());
+        List<ChatMessageDTO> recentMessages = state.recentMessages();
+        List<ChatMessageDTO> messagesToCompress = state.messagesToCompress();
 
         if (messagesToCompress.isEmpty()) {
             log.info("Context compression skipped: sessionId={}, reason=no_new_messages, summaryChars={}, recentMessages={}",
-                    sessionId, length(existingSummary), recentMessages.size());
-            return new CompressedContext(existingSummary, recentMessages, false);
+                    sessionId, length(state.effectiveSummary()), recentMessages.size());
+            return new CompressedContext(state.effectiveSummary(), recentMessages, false);
         }
 
         long start = System.currentTimeMillis();
         try {
             log.info("Context compression started: sessionId={}, historyMessages={}, toCompress={}, recentMessages={}",
                     sessionId, sortedMessages.size(), messagesToCompress.size(), recentMessages.size());
-            String summary = summarize(model, existingSummary, messagesToCompress);
+            String summary = summarize(model, state.effectiveSummary(), messagesToCompress);
             String boundedSummary = limit(summary, properties.getMaxSummaryChars());
             String lastCompressedMessageId = messagesToCompress.get(messagesToCompress.size() - 1).getId();
             saveMetadata(sessionId, metadata, boundedSummary, lastCompressedMessageId);
@@ -126,7 +120,10 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
             long latencyMs = System.currentTimeMillis() - start;
             log.warn("Context compression failed, fallback to recent messages: sessionId={}, historyMessages={}, recentMessages={}, latencyMs={}, error={}",
                     sessionId, sortedMessages.size(), recentMessages.size(), latencyMs, e.getMessage(), e);
-            return new CompressedContext(existingSummary, recentMessages, false);
+            List<ChatMessageDTO> fallbackMessages = state.summaryUsable()
+                    ? state.effectiveTail()
+                    : recentMessages;
+            return new CompressedContext(state.effectiveSummary(), fallbackMessages, false);
         }
     }
 
@@ -137,58 +134,198 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 .toList();
     }
 
-    private CompressionCheck checkWithMetadata(String model,
-                                               List<ChatMessageDTO> sortedMessages,
-                                               ChatSessionDTO.MetaData metadata) {
-        ContextCompressionProperties.TokenThreshold threshold = properties.thresholdFor(model);
-        List<ChatMessageDTO> recentMessages = keepRecentMessages(sortedMessages);
-        List<ChatMessageDTO> candidates = messagesBeforeRecentWindow(sortedMessages, recentMessages.size());
-        List<ChatMessageDTO> messagesToCompress = filterAlreadySummarized(candidates,
-                metadata == null ? null : metadata.getContextSummaryLastMessageId());
-        TokenCount contextTokenCount = totalContentTokens(model, sortedMessages);
-        MaxToolResultTokenCount maxToolResultTokenCount = maxSingleToolResultTokens(model, sortedMessages);
-        int contextTokens = contextTokenCount.tokens();
-        int maxToolResultTokens = maxToolResultTokenCount.tokens();
-        boolean overContextTokens = contextTokens >= threshold.getMaxContextTokens();
-        boolean overToolResultTokens = maxToolResultTokens >= threshold.getMaxSingleToolResultTokens();
-        boolean needed = !messagesToCompress.isEmpty()
-                && (overContextTokens || overToolResultTokens);
-        String reason = reason(overContextTokens, overToolResultTokens, messagesToCompress.isEmpty());
-        return new CompressionCheck(needed, reason, sortedMessages.size(),
-                contextTokens, maxToolResultTokens, messagesToCompress.size(),
-                combineSources(contextTokenCount.source(), maxToolResultTokenCount.source()),
-                threshold.getMaxContextTokens(), threshold.getMaxSingleToolResultTokens());
+    private ContextState buildContextState(String sessionId,
+                                           String model,
+                                           List<ChatMessageDTO> sortedMessages,
+                                           ChatSessionDTO.MetaData metadata) {
+        List<LogicalMessageGroup> groups = logicalMessageGroups(sortedMessages);
+        List<ChatMessageDTO> recentMessages = keepRecentMessages(sortedMessages, groups);
+        int recentStartIndex = sortedMessages.size() - recentMessages.size();
+
+        String existingSummary = metadata == null ? null : metadata.getContextSummary();
+        String summaryBoundaryMessageId = metadata == null
+                ? null
+                : metadata.getContextSummaryLastMessageId();
+        int summaryBoundaryIndex = summaryBoundaryIndex(
+                sortedMessages, groups, summaryBoundaryMessageId);
+        boolean summaryUsable = StringUtils.hasText(existingSummary)
+                && StringUtils.hasText(summaryBoundaryMessageId)
+                && summaryBoundaryIndex >= 0;
+        if (StringUtils.hasText(existingSummary) && !summaryUsable) {
+            log.warn("Ignoring context summary with missing or protocol-unsafe boundary: sessionId={}, boundaryMessageId={}",
+                    sessionId, summaryBoundaryMessageId);
+        }
+
+        int compressStartIndex = summaryUsable ? summaryBoundaryIndex + 1 : 0;
+        int compressEndIndex = recentStartIndex;
+        List<ChatMessageDTO> messagesToCompress = compressStartIndex < compressEndIndex
+                ? new ArrayList<>(sortedMessages.subList(compressStartIndex, compressEndIndex))
+                : List.of();
+        List<ChatMessageDTO> effectiveTail = summaryUsable
+                ? new ArrayList<>(sortedMessages.subList(summaryBoundaryIndex + 1, sortedMessages.size()))
+                : new ArrayList<>(sortedMessages);
+        List<ChatMessageDTO> effectiveMessages = new ArrayList<>();
+        if (summaryUsable) {
+            effectiveMessages.add(summaryMessage(existingSummary));
+        }
+        effectiveMessages.addAll(effectiveTail);
+
+        TokenCount rawHistoryTokenCount = totalContentTokens(model, sortedMessages);
+        TokenCount effectiveContextTokenCount = totalContentTokens(model, effectiveMessages);
+        MaxToolResultTokenCount maxToolResultTokenCount = maxSingleToolResultTokens(model, effectiveMessages);
+        return new ContextState(
+                recentMessages,
+                effectiveTail,
+                messagesToCompress,
+                summaryUsable ? existingSummary : null,
+                summaryUsable,
+                rawHistoryTokenCount.tokens(),
+                effectiveContextTokenCount.tokens(),
+                maxToolResultTokenCount.tokens(),
+                combineSources(effectiveContextTokenCount.source(), maxToolResultTokenCount.source()));
     }
 
-    private List<ChatMessageDTO> keepRecentMessages(List<ChatMessageDTO> messages) {
+    private CompressionCheck compressionCheck(int messageCount,
+                                              ContextCompressionProperties.TokenThreshold threshold,
+                                              ContextState state) {
+        boolean overContextTokens = state.effectiveContextTokens() >= threshold.getMaxContextTokens();
+        boolean overToolResultTokens = state.maxSingleToolResultTokens()
+                >= threshold.getMaxSingleToolResultTokens();
+        boolean needed = !state.messagesToCompress().isEmpty()
+                && (overContextTokens || overToolResultTokens);
+        String reason = reason(overContextTokens, overToolResultTokens,
+                state.messagesToCompress().isEmpty());
+        return new CompressionCheck(
+                needed,
+                reason,
+                messageCount,
+                state.rawHistoryTokens(),
+                state.effectiveContextTokens(),
+                state.maxSingleToolResultTokens(),
+                state.messagesToCompress().size(),
+                state.tokenSource(),
+                threshold.getMaxContextTokens(),
+                threshold.getMaxSingleToolResultTokens());
+    }
+
+    private List<ChatMessageDTO> keepRecentMessages(List<ChatMessageDTO> messages,
+                                                    List<LogicalMessageGroup> groups) {
+        if (messages.isEmpty()) {
+            return List.of();
+        }
         int keepMessages = Math.max(1, properties.getKeepRecentRounds() * 2);
         int maxMessages = Math.max(keepMessages, properties.getMaxHistoryMessages());
-        int limit = Math.min(messages.size(), maxMessages);
-        return new ArrayList<>(messages.subList(messages.size() - limit, messages.size()));
+        int retainedMessages = 0;
+        int firstGroupIndex = groups.size();
+        while (firstGroupIndex > 0 && retainedMessages < maxMessages) {
+            LogicalMessageGroup group = groups.get(--firstGroupIndex);
+            retainedMessages += group.endExclusive() - group.startInclusive();
+        }
+        int startIndex = groups.get(firstGroupIndex).startInclusive();
+        return new ArrayList<>(messages.subList(startIndex, messages.size()));
     }
 
-    private List<ChatMessageDTO> messagesBeforeRecentWindow(List<ChatMessageDTO> messages, int recentMessageCount) {
-        int endExclusive = Math.max(0, messages.size() - recentMessageCount);
-        if (endExclusive == 0) {
-            return List.of();
+    private List<LogicalMessageGroup> logicalMessageGroups(List<ChatMessageDTO> messages) {
+        List<LogicalMessageGroup> groups = new ArrayList<>();
+        Set<String> historyToolCallIds = new HashSet<>();
+        int index = 0;
+        while (index < messages.size()) {
+            ChatMessageDTO message = messages.get(index);
+            if (message.getRole() == null) {
+                throw new IllegalStateException("Context history contains message without role");
+            }
+            if (message.getRole() == ChatMessageDTO.RoleType.TOOL) {
+                throw new IllegalStateException("Context history contains orphan tool response: messageId="
+                        + message.getId());
+            }
+            if (!hasToolCalls(message)) {
+                groups.add(new LogicalMessageGroup(index, index + 1));
+                index++;
+                continue;
+            }
+
+            Set<String> expectedResponseIds = new HashSet<>();
+            for (org.springframework.ai.chat.messages.AssistantMessage.ToolCall toolCall
+                    : message.getMetadata().getToolCalls()) {
+                if (toolCall == null || !StringUtils.hasText(toolCall.id())) {
+                    throw new IllegalStateException("Context history contains assistant tool call without id: messageId="
+                            + message.getId());
+                }
+                if (!expectedResponseIds.add(toolCall.id()) || !historyToolCallIds.add(toolCall.id())) {
+                    throw new IllegalStateException("Context history contains duplicate toolCallId: " + toolCall.id());
+                }
+            }
+
+            Set<String> actualResponseIds = new HashSet<>();
+            int groupEnd = index + 1;
+            while (groupEnd < messages.size()
+                    && messages.get(groupEnd).getRole() == ChatMessageDTO.RoleType.TOOL) {
+                ChatMessageDTO toolMessage = messages.get(groupEnd);
+                String responseId = toolResponseId(toolMessage);
+                if (!StringUtils.hasText(responseId)) {
+                    throw new IllegalStateException("Context history contains tool response without toolCallId: messageId="
+                            + toolMessage.getId());
+                }
+                if (!expectedResponseIds.contains(responseId) || !actualResponseIds.add(responseId)) {
+                    throw new IllegalStateException("Context history contains unexpected or duplicate tool response: toolCallId="
+                            + responseId);
+                }
+                groupEnd++;
+            }
+            if (!actualResponseIds.equals(expectedResponseIds)) {
+                throw new IllegalStateException("Context history contains incomplete tool response batch: messageId="
+                        + message.getId());
+            }
+            groups.add(new LogicalMessageGroup(index, groupEnd));
+            index = groupEnd;
         }
-        return new ArrayList<>(messages.subList(0, endExclusive));
+        return groups;
     }
 
-    private List<ChatMessageDTO> filterAlreadySummarized(List<ChatMessageDTO> candidates, String lastMessageId) {
-        if (!StringUtils.hasLength(lastMessageId)) {
-            return candidates;
+    private int summaryBoundaryIndex(List<ChatMessageDTO> messages,
+                                     List<LogicalMessageGroup> groups,
+                                     String boundaryMessageId) {
+        if (!StringUtils.hasText(boundaryMessageId)) {
+            return -1;
         }
-        int lastIndex = -1;
-        for (int i = 0; i < candidates.size(); i++) {
-            if (lastMessageId.equals(candidates.get(i).getId())) {
-                lastIndex = i;
+        int boundaryIndex = -1;
+        for (int i = 0; i < messages.size(); i++) {
+            if (boundaryMessageId.equals(messages.get(i).getId())) {
+                boundaryIndex = i;
+                break;
             }
         }
-        if (lastIndex < 0 || lastIndex + 1 >= candidates.size()) {
-            return List.of();
+        if (boundaryIndex < 0) {
+            return -1;
         }
-        return new ArrayList<>(candidates.subList(lastIndex + 1, candidates.size()));
+        for (LogicalMessageGroup group : groups) {
+            if (group.endExclusive() - 1 == boundaryIndex) {
+                return boundaryIndex;
+            }
+        }
+        return -1;
+    }
+
+    private boolean hasToolCalls(ChatMessageDTO message) {
+        return message.getRole() == ChatMessageDTO.RoleType.ASSISTANT
+                && message.getMetadata() != null
+                && message.getMetadata().getToolCalls() != null
+                && !message.getMetadata().getToolCalls().isEmpty();
+    }
+
+    private String toolResponseId(ChatMessageDTO message) {
+        if (message.getMetadata() == null || message.getMetadata().getToolResponse() == null) {
+            return null;
+        }
+        return message.getMetadata().getToolResponse().id();
+    }
+
+    private ChatMessageDTO summaryMessage(String summary) {
+        return ChatMessageDTO.builder()
+                .id("context-summary")
+                .role(ChatMessageDTO.RoleType.SYSTEM)
+                .content(ConversationContextCompressor.summaryMessageContent(summary))
+                .build();
     }
 
     private TokenCount totalContentTokens(String model, List<ChatMessageDTO> messages) {
@@ -320,6 +457,20 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
 
     private int length(String value) {
         return value == null ? 0 : value.length();
+    }
+
+    private record ContextState(List<ChatMessageDTO> recentMessages,
+                                List<ChatMessageDTO> effectiveTail,
+                                List<ChatMessageDTO> messagesToCompress,
+                                String effectiveSummary,
+                                boolean summaryUsable,
+                                int rawHistoryTokens,
+                                int effectiveContextTokens,
+                                int maxSingleToolResultTokens,
+                                String tokenSource) {
+    }
+
+    private record LogicalMessageGroup(int startInclusive, int endExclusive) {
     }
 
     private record MaxToolResultTokenCount(int tokens, String source) {

@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -300,6 +301,10 @@ public class ToolCallBatchExecutor {
 
         @Override
         public String call(String toolInput, ToolContext toolContext) {
+            AgentTaskControl cancellationControl = executionContext.getCancellationControl();
+            if (cancellationControl != null) {
+                cancellationControl.throwIfCancellationRequested();
+            }
             AssistantMessage.ToolCall toolCall = pendingCalls.pollFirst();
             if (toolCall == null) {
                 throw new ToolExecutionException("Missing requested tool call for " + actualToolName, null);
@@ -309,6 +314,13 @@ public class ToolCallBatchExecutor {
             records.add(record);
             if (delegate == null) {
                 throw new ToolExecutionException("Tool callback not found for " + actualToolName, null);
+            }
+
+            TaskEvidenceState taskEvidenceState = executionContext.getTaskEvidenceState();
+            if (TaskEvidenceState.CODE_SEARCH_TOOL_NAME.equals(record.getCanonicalToolName())
+                    && taskEvidenceState != null
+                    && taskEvidenceState.isCodeSearchBlocked()) {
+                return rejectCodeSearchWithoutNovelty(record, taskEvidenceState);
             }
 
             ToolDuplicateCallDetector.DuplicateCheck duplicateCheck = duplicateCallDetector.check(
@@ -322,15 +334,34 @@ public class ToolCallBatchExecutor {
             Duration timeout = timeoutProperties.timeoutFor(
                     record.getActualToolName(), record.getCanonicalToolName());
             Future<String> future = toolExecutor.submit(() -> delegate.call(toolInput, toolContext));
+            if (cancellationControl != null) {
+                cancellationControl.attachToolFuture(future);
+            }
             try {
                 String rawResult = future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
-                ToolResultGuard.GuardedToolResult guarded = toolResultGuard.guard(
-                        record.getActualToolName(), record.getCanonicalToolName(), rawResult);
-                applyResultMetrics(record, guarded);
-                String result = guarded.value();
-                toolExecutionService.afterToolSuccess(executionContext, record, result);
-                record.setTerminalRecorded(true);
-                return result;
+                if (cancellationControl != null && cancellationControl.isCancellationRequested()) {
+                    toolExecutionService.afterToolCancellation(executionContext, record);
+                    record.setTerminalRecorded(true);
+                    throw new AgentTaskCancelledException(executionContext.getTaskId());
+                }
+                final String[] acceptedResult = new String[1];
+                Runnable success = () -> {
+                    ToolResultGuard.GuardedToolResult guarded = toolResultGuard.guard(
+                            record.getActualToolName(), record.getCanonicalToolName(), rawResult);
+                    applyResultMetrics(record, guarded);
+                    acceptedResult[0] = guarded.value();
+                    toolExecutionService.afterToolSuccess(executionContext, record, acceptedResult[0]);
+                    record.setTerminalRecorded(true);
+                };
+                boolean accepted = cancellationControl == null
+                        ? runSuccess(success)
+                        : cancellationControl.runIfActive(success);
+                if (!accepted) {
+                    toolExecutionService.afterToolCancellation(executionContext, record);
+                    record.setTerminalRecorded(true);
+                    throw new AgentTaskCancelledException(executionContext.getTaskId());
+                }
+                return acceptedResult[0];
             } catch (TimeoutException e) {
                 boolean cancelRequested = future.cancel(true);
                 ToolTimeoutException timeoutError = new ToolTimeoutException(
@@ -343,15 +374,36 @@ public class ToolCallBatchExecutor {
                 log.warn("Tool runtime timeout: taskId={}, toolName={}, timeoutMs={}, cancelRequested={}",
                         executionContext.getTaskId(), record.getCanonicalToolName(), timeout.toMillis(), cancelRequested);
                 throw timeoutError;
+            } catch (CancellationException e) {
+                if (cancellationControl != null && cancellationControl.isCancellationRequested()) {
+                    toolExecutionService.afterToolCancellation(executionContext, record);
+                    record.setTerminalRecorded(true);
+                    throw new AgentTaskCancelledException(executionContext.getTaskId());
+                }
+                throw new ToolExecutionException("Tool Future was cancelled", e);
             } catch (InterruptedException e) {
                 future.cancel(true);
                 Thread.currentThread().interrupt();
+                if (cancellationControl != null && cancellationControl.isCancellationRequested()) {
+                    toolExecutionService.afterToolCancellation(executionContext, record);
+                    record.setTerminalRecorded(true);
+                    throw new AgentTaskCancelledException(executionContext.getTaskId());
+                }
                 throw new ToolExecutionException("Agent thread interrupted while waiting for tool "
                         + record.getCanonicalToolName(), e);
             } catch (ExecutionException e) {
                 resetDuplicateSequenceForCorrectableFailure(e.getCause());
                 throw propagate(e.getCause());
+            } finally {
+                if (cancellationControl != null) {
+                    cancellationControl.detachToolFuture(future);
+                }
             }
+        }
+
+        private boolean runSuccess(Runnable success) {
+            success.run();
+            return true;
         }
 
         private void resetDuplicateSequenceForCorrectableFailure(Throwable error) {
@@ -388,6 +440,25 @@ public class ToolCallBatchExecutor {
             log.warn("Duplicate tool call rejected: taskId={}, toolName={}, consecutiveCount={}, hardStop={}",
                     executionContext.getTaskId(), record.getCanonicalToolName(),
                     duplicateCheck.consecutiveCount(), duplicateCheck.hardStop());
+            return guarded.value();
+        }
+
+        private String rejectCodeSearchWithoutNovelty(ToolExecutionRecord record,
+                                                      TaskEvidenceState taskEvidenceState) {
+            taskEvidenceState.recordGuardedSearchRequest();
+            String feedback = "CODE_SEARCH_NO_NOVELTY_GUARD:\n"
+                    + "reason=CONSECUTIVE_NO_NEW_EVIDENCE\n"
+                    + "message=Code search stopped because the previous two searches produced no new evidence. "
+                    + "Use the evidence already collected and proceed to Final unless another non-code-search "
+                    + "tool is genuinely required by the user's request.";
+            ToolResultGuard.GuardedToolResult guarded = toolResultGuard.guard(
+                    record.getActualToolName(), record.getCanonicalToolName(), feedback);
+            applyResultMetrics(record, guarded);
+            toolExecutionService.afterToolSuccess(executionContext, record, guarded.value());
+            record.setTerminalRecorded(true);
+            log.warn("Code search no-novelty guard rejected retrieval: taskId={}, toolName={}, searchCallCount={}",
+                    executionContext.getTaskId(), record.getCanonicalToolName(),
+                    taskEvidenceState.snapshot().searchCallCount());
             return guarded.value();
         }
 

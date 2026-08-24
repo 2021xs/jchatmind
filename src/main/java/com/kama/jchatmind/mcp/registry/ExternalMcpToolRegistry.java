@@ -3,6 +3,7 @@ package com.kama.jchatmind.mcp.registry;
 import com.kama.jchatmind.mcp.config.ExternalMcpToolProperties;
 import com.kama.jchatmind.mcp.safety.McpExternalToolPolicy;
 import com.kama.jchatmind.mcp.safety.McpToolRiskLevel;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
@@ -12,6 +13,7 @@ import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+@Slf4j
 public class ExternalMcpToolRegistry {
     private static final String DEFAULT_INPUT_SCHEMA = "{\"type\":\"object\",\"additionalProperties\":true}";
 
@@ -65,7 +67,23 @@ public class ExternalMcpToolRegistry {
         if (allowList.isEmpty()) {
             return List.of();
         }
-        List<ExternalMcpDiscoveredTool> discoveredTools = discoveryClient.discoverTools(server);
+        List<ExternalMcpDiscoveredTool> discoveredTools;
+        try {
+            discoveredTools = discoveryClient.discoverTools(server);
+        } catch (RuntimeException e) {
+            log.warn("External MCP server unavailable after tool discovery failure: serverName={}, serverType={}, "
+                            + "status=UNAVAILABLE, failureType=MCP_DISCOVERY_FAILED, "
+                            + "message=External MCP tool discovery failed",
+                    server.getName(), server.getType(), e);
+            return List.of();
+        }
+        if (discoveredTools == null) {
+            log.warn("External MCP server unavailable after empty tool discovery response: serverName={}, serverType={}, "
+                            + "status=UNAVAILABLE, failureType=MCP_DISCOVERY_FAILED, "
+                            + "message=External MCP tool discovery returned no response",
+                    server.getName(), server.getType());
+            return List.of();
+        }
         return discoveredTools.stream()
                 .filter(tool -> allowList.containsKey(tool.getName()))
                 .map(tool -> toRegistration(server, tool, allowList.get(tool.getName())))

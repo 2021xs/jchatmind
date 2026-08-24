@@ -10,6 +10,7 @@ import com.kama.jchatmind.model.response.CreateChatMessageResponse;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
 import com.kama.jchatmind.service.ConversationContextCompressor;
+import com.kama.jchatmind.service.FinalCompletionService;
 import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.tool.ToolExecutionRecord;
@@ -70,6 +71,8 @@ class JChatMindToolCorrectionTest {
                 .chatClientResponse())
                 .thenReturn(new ChatClientResponse(toolCallResponse, Map.of()))
                 .thenReturn(new ChatClientResponse(finalResponse, Map.of()));
+        ChatClient.ChatClientRequestSpec requestSpec = chatClient.prompt(
+                Prompt.builder().messages(List.of(new UserMessage("fixture"))).build());
 
         AgentTaskLogService logService = mock(AgentTaskLogService.class);
         when(logService.startTask(anyString(), anyString(), anyString(), anyString(), anyString(), anyInt(), anyString()))
@@ -140,12 +143,15 @@ class JChatMindToolCorrectionTest {
                 new ToolFailureClassifier(),
                 batchExecutor
         );
+        FinalCompletionService finalCompletionService = JChatMindSafeFinalTestSupport.configure(
+                agent, requestSpec, "validated final answer");
 
         agent.run();
 
         verify(batchExecutor).recordFailure(any(), eq(List.of(record)), any(ToolArgumentException.class), eq(true));
         verify(logService, never()).failTask(anyString(), anyString(), anyInt(), anyInt());
-        verify(logService).finishTask(eq("task-1"), anyString(), anyInt(), anyInt());
+        verify(finalCompletionService).complete(any());
+        verify(logService, never()).finishTask(anyString(), anyString(), anyInt(), anyInt());
         verify(sseService, never()).sendEvent(eq("session-1"),
                 org.mockito.ArgumentMatchers.argThat(event -> event.getType() == AgentSseEvent.Type.ERROR));
 

@@ -5,6 +5,7 @@ import com.kama.jchatmind.config.AgentObservabilityProperties;
 import com.kama.jchatmind.exception.AgentAlreadyRunningException;
 import com.kama.jchatmind.mapper.AgentStepMapper;
 import com.kama.jchatmind.mapper.AgentTaskMapper;
+import com.kama.jchatmind.mapper.ChatSessionMapper;
 import com.kama.jchatmind.mapper.ToolCallLogMapper;
 import com.kama.jchatmind.model.entity.AgentStep;
 import com.kama.jchatmind.model.entity.AgentTask;
@@ -21,7 +22,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
-@AllArgsConstructor
 @Slf4j
 public class AgentTaskLogServiceImpl implements AgentTaskLogService {
     private static final int MAX_TEXT_LENGTH = 4000;
@@ -29,19 +29,47 @@ public class AgentTaskLogServiceImpl implements AgentTaskLogService {
     private final AgentTaskMapper agentTaskMapper;
     private final AgentStepMapper agentStepMapper;
     private final ToolCallLogMapper toolCallLogMapper;
+    private final ChatSessionMapper chatSessionMapper;
     private final ObjectMapper objectMapper;
     private final AgentObservabilityProperties observabilityProperties;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    public AgentTaskLogServiceImpl(AgentTaskMapper agentTaskMapper,
+                                   AgentStepMapper agentStepMapper,
+                                   ToolCallLogMapper toolCallLogMapper,
+                                   ChatSessionMapper chatSessionMapper,
+                                   ObjectMapper objectMapper,
+                                   AgentObservabilityProperties observabilityProperties) {
+        this.agentTaskMapper = agentTaskMapper;
+        this.agentStepMapper = agentStepMapper;
+        this.toolCallLogMapper = toolCallLogMapper;
+        this.chatSessionMapper = chatSessionMapper;
+        this.objectMapper = objectMapper;
+        this.observabilityProperties = observabilityProperties;
+    }
+
+    public AgentTaskLogServiceImpl(AgentTaskMapper agentTaskMapper,
+                                   AgentStepMapper agentStepMapper,
+                                   ToolCallLogMapper toolCallLogMapper,
+                                   ObjectMapper objectMapper,
+                                   AgentObservabilityProperties observabilityProperties) {
+        this(agentTaskMapper, agentStepMapper, toolCallLogMapper, null,
+                objectMapper, observabilityProperties);
+    }
+
     @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional
     public AgentTask startTask(String sessionId, String agentId, String userMessageId, String goal) {
         return startTask(sessionId, agentId, userMessageId, goal, null, null, null);
     }
 
     @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional
     public AgentTask startTask(String sessionId, String agentId, String userMessageId, String goal,
                                String modelName, Integer maxSteps, String traceId) {
+        if (chatSessionMapper != null && chatSessionMapper.selectByIdForUpdate(sessionId) == null) {
+            throw new IllegalArgumentException("Chat session does not exist: " + sessionId);
+        }
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime staleBefore = now.minusMinutes(
                 Math.max(1, observabilityProperties.getStaleRunningThresholdMinutes()));
@@ -71,6 +99,19 @@ public class AgentTaskLogServiceImpl implements AgentTaskLogService {
     }
 
     @Override
+    public AgentTask getTask(String taskId) {
+        return agentTaskMapper.selectById(taskId);
+    }
+
+    @Override
+    @Transactional
+    public void bindUserMessage(String taskId, String userMessageId) {
+        if (agentTaskMapper.bindUserMessage(taskId, userMessageId) != 1) {
+            throw new IllegalStateException("Unable to bind user message to running Agent Task");
+        }
+    }
+
+    @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void finishTask(String taskId) {
         finishTask(taskId, null, null, null);
@@ -81,7 +122,7 @@ public class AgentTaskLogServiceImpl implements AgentTaskLogService {
     public void finishTask(String taskId, String finishReason, Integer actualSteps, Integer toolCallCount) {
         LocalDateTime now = LocalDateTime.now();
         AgentTask existing = agentTaskMapper.selectById(taskId);
-        agentTaskMapper.updateById(AgentTask.builder()
+        agentTaskMapper.updateTerminalIfRunning(AgentTask.builder()
                 .id(taskId)
                 .status(STATUS_SUCCESS)
                 .finishReason(finishReason)
@@ -105,6 +146,54 @@ public class AgentTaskLogServiceImpl implements AgentTaskLogService {
     public void failTask(String taskId, String errorMessage, Integer actualSteps, Integer toolCallCount) {
         LocalDateTime now = LocalDateTime.now();
         failTask(taskId, errorMessage, actualSteps, toolCallCount, now);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean cancelTask(String taskId, Integer actualSteps, Integer toolCallCount) {
+        LocalDateTime now = LocalDateTime.now();
+        AgentTask existing = agentTaskMapper.selectById(taskId);
+        return agentTaskMapper.updateTerminalIfRunning(AgentTask.builder()
+                .id(taskId)
+                .status(STATUS_CANCELLED)
+                .finishReason(FINISH_REASON_CANCELLED)
+                .actualSteps(actualSteps)
+                .toolCallCount(toolCallCount)
+                .latencyMs(latencyMs(existing == null ? null : existing.getStartedAt(), now))
+                .heartbeatAt(now)
+                .finishedAt(now)
+                .updatedAt(now)
+                .build()) == 1;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean cancelStepAndTask(String stepId, String taskId,
+                                     Integer actualSteps, Integer toolCallCount) {
+        LocalDateTime now = LocalDateTime.now();
+        if (stepId != null) {
+            AgentStep existing = agentStepMapper.selectById(stepId);
+            agentStepMapper.updateTerminalIfRunning(AgentStep.builder()
+                    .id(stepId)
+                    .status(STATUS_CANCELLED)
+                    .finishReason(FINISH_REASON_CANCELLED)
+                    .latencyMs(latencyMs(existing == null ? null : existing.getStartedAt(), now))
+                    .finishedAt(now)
+                    .updatedAt(now)
+                    .build());
+        }
+        AgentTask existing = agentTaskMapper.selectById(taskId);
+        return agentTaskMapper.updateTerminalIfRunning(AgentTask.builder()
+                .id(taskId)
+                .status(STATUS_CANCELLED)
+                .finishReason(FINISH_REASON_CANCELLED)
+                .actualSteps(actualSteps)
+                .toolCallCount(toolCallCount)
+                .latencyMs(latencyMs(existing == null ? null : existing.getStartedAt(), now))
+                .heartbeatAt(now)
+                .finishedAt(now)
+                .updatedAt(now)
+                .build()) == 1;
     }
 
     @Override
@@ -178,6 +267,79 @@ public class AgentTaskLogServiceImpl implements AgentTaskLogService {
         if (existing != null) {
             heartbeatTask(existing.getTaskId());
         }
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public FinalLifecycleResult completeFinalLifecycle(FinalLifecycleCommand command) {
+        if (command == null) {
+            throw new IllegalArgumentException("Final lifecycle command cannot be null");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        AgentStep finalStep = agentStepMapper.selectById(command.finalStepId());
+        if (finalStep == null || !command.taskId().equals(finalStep.getTaskId())) {
+            throw new IllegalStateException("Final synthesis step is missing or belongs to another task");
+        }
+        int finalUpdated = agentStepMapper.updateById(AgentStep.builder()
+                .id(command.finalStepId())
+                .status(STATUS_SUCCESS)
+                .outputSummary(truncate(command.finalStepSummary()))
+                .latencyMs(latencyMs(finalStep.getStartedAt(), now))
+                .finishReason(command.finishReason())
+                .llmLatencyMs(command.finalLlmLatencyMs())
+                .finishedAt(now)
+                .updatedAt(now)
+                .build());
+        if (finalUpdated != 1) {
+            throw new IllegalStateException("Unable to complete Final synthesis step atomically");
+        }
+
+        AgentStep finishStep = AgentStep.builder()
+                .taskId(command.taskId())
+                .stepNo(command.finishStepNo())
+                .stepType("FINISH")
+                .status(STATUS_RUNNING)
+                .inputSummary("finish agent run")
+                .modelName(command.modelName())
+                .startedAt(now)
+                .updatedAt(now)
+                .build();
+        if (agentStepMapper.insert(finishStep) != 1 || finishStep.getId() == null) {
+            throw new IllegalStateException("Unable to create FINISH step atomically");
+        }
+        int finishUpdated = agentStepMapper.updateById(AgentStep.builder()
+                .id(finishStep.getId())
+                .status(STATUS_SUCCESS)
+                .outputSummary("agent finished")
+                .latencyMs(0L)
+                .finishReason(command.finishReason())
+                .finishedAt(now)
+                .updatedAt(now)
+                .build());
+        if (finishUpdated != 1) {
+            throw new IllegalStateException("Unable to complete FINISH step atomically");
+        }
+
+        AgentTask task = agentTaskMapper.selectById(command.taskId());
+        if (task == null) {
+            throw new IllegalStateException("Agent Task is missing during Final completion");
+        }
+        int taskUpdated = agentTaskMapper.updateTerminalIfRunning(AgentTask.builder()
+                .id(command.taskId())
+                .status(STATUS_SUCCESS)
+                .finishReason(command.finishReason())
+                .actualSteps(command.actualSteps())
+                .toolCallCount(command.toolCallCount())
+                .latencyMs(latencyMs(task.getStartedAt(), now))
+                .heartbeatAt(now)
+                .finishedAt(now)
+                .updatedAt(now)
+                .build());
+        if (taskUpdated != 1) {
+            throw new IllegalStateException("Unable to complete Agent Task atomically");
+        }
+        return new FinalLifecycleResult(command.finalStepId(), command.finalStepNo(),
+                finishStep.getId(), command.finishStepNo());
     }
 
     @Override
@@ -300,10 +462,23 @@ public class AgentTaskLogServiceImpl implements AgentTaskLogService {
                 .build());
     }
 
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void cancelToolCall(String toolCallLogId, long latencyMs) {
+        LocalDateTime now = LocalDateTime.now();
+        toolCallLogMapper.updateById(ToolCallLog.builder()
+                .id(toolCallLogId)
+                .status(STATUS_CANCELLED)
+                .latencyMs(latencyMs)
+                .finishedAt(now)
+                .updatedAt(now)
+                .build());
+    }
+
     private void failTask(String taskId, String errorMessage, Integer actualSteps,
                           Integer toolCallCount, LocalDateTime now) {
         AgentTask existing = agentTaskMapper.selectById(taskId);
-        agentTaskMapper.updateById(AgentTask.builder()
+        agentTaskMapper.updateTerminalIfRunning(AgentTask.builder()
                 .id(taskId)
                 .status(STATUS_FAILED)
                 .finishReason(FINISH_REASON_ERROR)
@@ -376,7 +551,7 @@ public class AgentTaskLogServiceImpl implements AgentTaskLogService {
                     .updatedAt(now)
                     .build());
         }
-        agentTaskMapper.updateById(AgentTask.builder()
+        agentTaskMapper.updateTerminalIfRunning(AgentTask.builder()
                 .id(task.getId())
                 .status(STATUS_CRASHED)
                 .finishReason(FINISH_REASON_CRASHED)

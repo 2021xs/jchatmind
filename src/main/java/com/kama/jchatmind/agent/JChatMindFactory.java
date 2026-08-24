@@ -3,6 +3,7 @@ package com.kama.jchatmind.agent;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.kama.jchatmind.agent.tools.Tool;
 import com.kama.jchatmind.config.ChatClientRegistry;
+import com.kama.jchatmind.config.FinalSynthesisProperties;
 import com.kama.jchatmind.config.ToolCorrectionProperties;
 import com.kama.jchatmind.converter.AgentConverter;
 import com.kama.jchatmind.converter.ChatMessageConverter;
@@ -18,6 +19,7 @@ import com.kama.jchatmind.model.entity.KnowledgeBase;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
 import com.kama.jchatmind.service.ConversationContextCompressor;
+import com.kama.jchatmind.service.FinalCompletionService;
 import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.service.ToolFacadeService;
@@ -66,6 +68,9 @@ public class JChatMindFactory {
     private final ToolCorrectionProperties toolCorrectionProperties;
     private final ToolFailureClassifier toolFailureClassifier;
     private final ObjectProvider<McpToolCallbackAdapter> mcpToolCallbackAdapterProvider;
+    private final AgentTaskRuntimeRegistry taskRuntimeRegistry;
+    private final FinalCompletionService finalCompletionService;
+    private final FinalSynthesisProperties finalSynthesisProperties;
 
     public JChatMindFactory(
             ChatClientRegistry chatClientRegistry,
@@ -88,6 +93,39 @@ public class JChatMindFactory {
             ToolFailureClassifier toolFailureClassifier,
             ObjectProvider<McpToolCallbackAdapter> mcpToolCallbackAdapterProvider
     ) {
+        this(chatClientRegistry, sseService, agentMapper, agentConverter, knowledgeBaseMapper,
+                knowledgeBaseConverter, toolFacadeService, chatMessageFacadeService, chatMessageConverter,
+                agentTaskLogService, agentEventPublisher, agentRunFailureHandler, toolCallBatchExecutor,
+                toolExecutionService, toolRegistry, conversationContextCompressor, toolCorrectionProperties,
+                toolFailureClassifier, mcpToolCallbackAdapterProvider, new AgentTaskRuntimeRegistry(),
+                null, new FinalSynthesisProperties());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public JChatMindFactory(
+            ChatClientRegistry chatClientRegistry,
+            SseService sseService,
+            AgentMapper agentMapper,
+            AgentConverter agentConverter,
+            KnowledgeBaseMapper knowledgeBaseMapper,
+            KnowledgeBaseConverter knowledgeBaseConverter,
+            ToolFacadeService toolFacadeService,
+            ChatMessageFacadeService chatMessageFacadeService,
+            ChatMessageConverter chatMessageConverter,
+            AgentTaskLogService agentTaskLogService,
+            AgentEventPublisher agentEventPublisher,
+            AgentRunFailureHandler agentRunFailureHandler,
+            ToolCallBatchExecutor toolCallBatchExecutor,
+            ToolExecutionService toolExecutionService,
+            ToolRegistry toolRegistry,
+            ConversationContextCompressor conversationContextCompressor,
+            ToolCorrectionProperties toolCorrectionProperties,
+            ToolFailureClassifier toolFailureClassifier,
+            ObjectProvider<McpToolCallbackAdapter> mcpToolCallbackAdapterProvider,
+            AgentTaskRuntimeRegistry taskRuntimeRegistry,
+            FinalCompletionService finalCompletionService,
+            FinalSynthesisProperties finalSynthesisProperties
+    ) {
         this.chatClientRegistry = chatClientRegistry;
         this.sseService = sseService;
         this.agentMapper = agentMapper;
@@ -107,6 +145,12 @@ public class JChatMindFactory {
         this.toolCorrectionProperties = toolCorrectionProperties;
         this.toolFailureClassifier = toolFailureClassifier;
         this.mcpToolCallbackAdapterProvider = mcpToolCallbackAdapterProvider;
+        this.taskRuntimeRegistry = taskRuntimeRegistry;
+        this.finalCompletionService = finalCompletionService;
+        this.finalSynthesisProperties = Objects.requireNonNull(finalSynthesisProperties);
+        new FinalContextCompiler(finalSynthesisProperties);
+        log.info("Final synthesis input budget configured: maxInputTokens={}, charsPerToken={}",
+                finalSynthesisProperties.getMaxInputTokens(), finalSynthesisProperties.getCharsPerToken());
     }
 
     private Agent loadAgent(String agentId) {
@@ -260,14 +304,18 @@ public class JChatMindFactory {
         if (Objects.isNull(chatClient)) {
             throw new IllegalStateException("ChatClient not found for model: " + agent.getModel());
         }
-        return new JChatMind(
+        AgentDTO.ChatOptions generationOptions = agentConfig.getChatOptions();
+        int messageLength = generationOptions == null || generationOptions.getMessageLength() == null
+                ? AgentDTO.ChatOptions.defaultOptions().getMessageLength()
+                : generationOptions.getMessageLength();
+        JChatMind runtime = new JChatMind(
                 agent.getId(),
                 agent.getModel(),
                 agent.getName(),
                 agent.getDescription(),
                 agent.getSystemPrompt(),
                 chatClient,
-                agentConfig.getChatOptions().getMessageLength(),
+                messageLength,
                 memory,
                 toolCallbacks,
                 knowledgeBases,
@@ -286,6 +334,13 @@ public class JChatMindFactory {
                 agentRunFailureHandler,
                 toolCallBatchExecutor
         );
+        runtime.setTaskRuntimeRegistry(taskRuntimeRegistry);
+        runtime.setFinalCompletionService(finalCompletionService);
+        runtime.setFinalContextCompiler(new FinalContextCompiler(finalSynthesisProperties));
+        runtime.setPlanningGenerationOptions(
+                generationOptions == null ? null : generationOptions.getTemperature(),
+                generationOptions == null ? null : generationOptions.getTopP());
+        return runtime;
     }
 
     public JChatMind create(String agentId, String chatSessionId) {

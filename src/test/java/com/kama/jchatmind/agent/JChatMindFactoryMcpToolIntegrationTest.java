@@ -34,6 +34,7 @@ import com.kama.jchatmind.tool.ToolFailureClassifier;
 import com.kama.jchatmind.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -74,7 +75,11 @@ class JChatMindFactoryMcpToolIntegrationTest {
                 .model(AgentDTO.ModelType.DEEPSEEK_CHAT)
                 .allowedTools(List.of())
                 .allowedKbs(List.of())
-                .chatOptions(AgentDTO.ChatOptions.defaultOptions())
+                .chatOptions(AgentDTO.ChatOptions.builder()
+                        .temperature(0.2)
+                        .topP(0.8)
+                        .messageLength(10)
+                        .build())
                 .build();
         AgentMapper agentMapper = mock(AgentMapper.class);
         when(agentMapper.selectById("agent-1")).thenReturn(agentEntity);
@@ -118,6 +123,8 @@ class JChatMindFactoryMcpToolIntegrationTest {
         List<ToolCallback> callbacks = (List<ToolCallback>) ReflectionTestUtils.getField(agent, "availableTools");
         @SuppressWarnings("unchecked")
         List<String> runtimeToolNames = (List<String>) ReflectionTestUtils.getField(agent, "runtimeToolNames");
+        ToolCallingChatOptions planningOptions = (ToolCallingChatOptions) ReflectionTestUtils.getField(
+                agent, "chatOptions");
 
         assertEquals(2, callbacks.size());
         assertTrue(callbacks.stream().map(callback -> callback.getToolDefinition().name())
@@ -125,6 +132,60 @@ class JChatMindFactoryMcpToolIntegrationTest {
         assertTrue(callbacks.stream().map(callback -> callback.getToolDefinition().name())
                 .anyMatch("mcp_docs_search_docs"::equals));
         assertEquals(List.of("terminate", "mcp_docs_search_docs"), runtimeToolNames);
+        assertEquals(0.2, planningOptions.getTemperature());
+        assertEquals(0.8, planningOptions.getTopP());
+    }
+
+    @Test
+    void discoveryFailureDoesNotPreventFactoryFromBuildingLocalRuntime() {
+        TerminateTool terminateTool = new TerminateTool();
+        ToolRegistry localRegistry = localToolRegistry();
+        McpClientProperties properties = new McpClientProperties();
+        properties.setServers(List.of(server()));
+        ExternalMcpToolRegistry externalRegistry = new ExternalMcpToolRegistry(
+                new ExternalMcpServerRegistry(properties),
+                ignored -> { throw new IllegalStateException("credential=secret-token command=/private/path"); },
+                new McpExternalToolPolicy());
+        McpToolCallbackAdapter mcpAdapter = new McpToolCallbackAdapter(
+                externalRegistry, (tool, argumentsJson) -> "should-not-run", noopAudit(), properties);
+
+        Agent agentEntity = Agent.builder().id("agent-1").name("test-agent").description("test")
+                .systemPrompt("system").model("deepseek-chat").allowedTools("[]").allowedKbs("[]")
+                .chatOptions("{}").build();
+        AgentDTO agentDto = AgentDTO.builder().id("agent-1").name("test-agent").description("test")
+                .systemPrompt("system").model(AgentDTO.ModelType.DEEPSEEK_CHAT).allowedTools(List.of())
+                .allowedKbs(List.of()).chatOptions(AgentDTO.ChatOptions.defaultOptions()).build();
+        AgentMapper agentMapper = mock(AgentMapper.class);
+        when(agentMapper.selectById("agent-1")).thenReturn(agentEntity);
+        AgentConverter agentConverter = mock(AgentConverter.class);
+        try {
+            when(agentConverter.toDTO(agentEntity)).thenReturn(agentDto);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+        ChatMessageFacadeService chatMessages = mock(ChatMessageFacadeService.class);
+        when(chatMessages.getChatMessageDTOsBySessionId("session-1")).thenReturn(List.of());
+        ConversationContextCompressor compressor = mock(ConversationContextCompressor.class);
+        when(compressor.compressIfNeeded("session-1", "deepseek-chat", List.of()))
+                .thenReturn(new ConversationContextCompressor.CompressedContext("", List.of(), false));
+
+        JChatMindFactory factory = new JChatMindFactory(
+                new ChatClientRegistry(Map.of("deepseek-chat", mock(ChatClient.class, RETURNS_DEEP_STUBS))),
+                mock(SseService.class), agentMapper, agentConverter, mock(KnowledgeBaseMapper.class),
+                mock(KnowledgeBaseConverter.class), toolFacadeService(terminateTool), chatMessages,
+                mock(ChatMessageConverter.class), mock(AgentTaskLogService.class), mock(AgentEventPublisher.class),
+                mock(AgentRunFailureHandler.class), mock(ToolCallBatchExecutor.class), mock(ToolExecutionService.class),
+                localRegistry, compressor, new ToolCorrectionProperties(), new ToolFailureClassifier(), provider(mcpAdapter));
+
+        JChatMind agent = factory.create("agent-1", "session-1", "message-1");
+
+        @SuppressWarnings("unchecked")
+        List<ToolCallback> callbacks = (List<ToolCallback>) ReflectionTestUtils.getField(agent, "availableTools");
+        @SuppressWarnings("unchecked")
+        List<String> runtimeToolNames = (List<String>) ReflectionTestUtils.getField(agent, "runtimeToolNames");
+        assertEquals(1, callbacks.size());
+        assertEquals("terminate", callbacks.get(0).getToolDefinition().name());
+        assertEquals(List.of("terminate"), runtimeToolNames);
     }
 
     private ToolFacadeService toolFacadeService(Tool fixedTool) {

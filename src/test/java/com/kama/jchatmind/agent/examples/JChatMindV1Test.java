@@ -1,6 +1,7 @@
 package com.kama.jchatmind.agent.examples;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -14,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 测试基础聊天功能
  */
 @SpringBootTest
+@EnabledIfEnvironmentVariable(named = "JCHATMIND_REAL_CHAT_CLIENT_ENABLED", matches = "true")
 public class JChatMindV1Test {
 
     @Autowired
@@ -101,4 +103,3 @@ public class JChatMindV1Test {
         System.out.println("重置后历史长度: " + historySizeAfterReset);
     }
 }
-

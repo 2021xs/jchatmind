@@ -17,6 +17,7 @@ import com.kama.jchatmind.service.ConversationContextCompressor;
 import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.service.impl.AgentTaskLogServiceImpl;
+import com.kama.jchatmind.service.impl.FinalCompletionServiceImpl;
 import com.kama.jchatmind.tool.ToolFailureClassifier;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -25,8 +26,11 @@ import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
+import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -36,7 +40,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -57,6 +60,8 @@ class JChatMindRealRunObservabilityTest {
         );
         assignTaskIds(agentTaskMapper);
         assignStepIds(agentStepMapper);
+        when(agentTaskMapper.updateTerminalIfRunning(any(AgentTask.class))).thenReturn(1);
+        when(agentStepMapper.updateById(any(AgentStep.class))).thenReturn(1);
         when(agentTaskMapper.selectById("task-1")).thenReturn(AgentTask.builder()
                 .id("task-1")
                 .startedAt(java.time.LocalDateTime.now().minusSeconds(1))
@@ -72,19 +77,20 @@ class JChatMindRealRunObservabilityTest {
                 .startedAt(java.time.LocalDateTime.now().minusNanos(100_000_000))
                 .build());
 
-        ChatClient chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
+        ChatClient chatClient = mock(ChatClient.class);
+        ChatClient.ChatClientRequestSpec requestSpec = mock(ChatClient.ChatClientRequestSpec.class);
+        ChatClient.CallResponseSpec callSpec = mock(ChatClient.CallResponseSpec.class);
         ChatResponse chatResponse = new ChatResponse(List.of(new Generation(
                 AssistantMessage.builder()
                         .content("done")
                         .toolCalls(List.of())
                         .build()
         )));
-        when(chatClient.prompt(any(org.springframework.ai.chat.prompt.Prompt.class))
-                .system(anyString())
-                .toolCallbacks(any(org.springframework.ai.tool.ToolCallback[].class))
-                .call()
-                .chatClientResponse())
-                .thenReturn(new ChatClientResponse(chatResponse, java.util.Map.of()));
+        when(chatClient.prompt(any(Prompt.class))).thenReturn(requestSpec);
+        when(requestSpec.system(anyString())).thenReturn(requestSpec);
+        when(requestSpec.toolCallbacks(any(org.springframework.ai.tool.ToolCallback[].class))).thenReturn(requestSpec);
+        when(requestSpec.call()).thenReturn(callSpec);
+        when(callSpec.chatClientResponse()).thenReturn(new ChatClientResponse(chatResponse, java.util.Map.of()));
 
         ChatMessageFacadeService chatMessageFacadeService = mock(ChatMessageFacadeService.class);
         when(chatMessageFacadeService.createChatMessage(any(ChatMessageDTO.class)))
@@ -118,6 +124,12 @@ class JChatMindRealRunObservabilityTest {
                 new ToolFailureClassifier(),
                 mock(ToolCallBatchExecutor.class)
         );
+        JChatMindSafeFinalTestSupport.configureStream(requestSpec, Flux.just(ChatResponse.builder()
+                .generations(List.of(new Generation(
+                        AssistantMessage.builder().content("validated final answer").build(),
+                        ChatGenerationMetadata.builder().finishReason("STOP").build())))
+                .build()));
+        agent.setFinalCompletionService(new FinalCompletionServiceImpl(chatMessageFacadeService, logService));
 
         agent.run();
 
@@ -126,9 +138,9 @@ class JChatMindRealRunObservabilityTest {
         ArgumentCaptor<AgentStep> stepInsert = ArgumentCaptor.forClass(AgentStep.class);
         ArgumentCaptor<AgentStep> stepUpdate = ArgumentCaptor.forClass(AgentStep.class);
         verify(agentTaskMapper).insert(taskInsert.capture());
-        verify(agentTaskMapper, org.mockito.Mockito.atLeastOnce()).updateById(taskUpdate.capture());
-        verify(agentStepMapper, org.mockito.Mockito.times(2)).insert(stepInsert.capture());
-        verify(agentStepMapper, org.mockito.Mockito.atLeast(2)).updateById(stepUpdate.capture());
+        verify(agentTaskMapper, org.mockito.Mockito.atLeastOnce()).updateTerminalIfRunning(taskUpdate.capture());
+        verify(agentStepMapper, org.mockito.Mockito.times(3)).insert(stepInsert.capture());
+        verify(agentStepMapper, org.mockito.Mockito.atLeast(3)).updateById(stepUpdate.capture());
 
         AgentTask insertedTask = taskInsert.getValue();
         assertEquals(AgentTaskLogService.STATUS_RUNNING, insertedTask.getStatus());
@@ -138,25 +150,27 @@ class JChatMindRealRunObservabilityTest {
         assertNotNull(insertedTask.getHeartbeatAt());
 
         List<AgentStep> insertedSteps = stepInsert.getAllValues();
-        assertEquals(List.of("THINK", "FINISH"),
+        assertEquals(List.of("THINK", "FINAL_SYNTHESIS", "FINISH"),
                 insertedSteps.stream().map(AgentStep::getStepType).toList());
         assertEquals("test-model", insertedSteps.get(0).getModelName());
 
         AgentTask finalTask = lastWithStatus(taskUpdate.getAllValues(), AgentTaskLogService.STATUS_SUCCESS);
         assertEquals(AgentTaskLogService.FINISH_REASON_NO_TOOL_CALLS, finalTask.getFinishReason());
-        assertEquals(2, finalTask.getActualSteps());
+        assertEquals(3, finalTask.getActualSteps());
         assertEquals(0, finalTask.getToolCallCount());
         assertNotNull(finalTask.getLatencyMs());
 
         List<AgentStep> successfulSteps = stepUpdate.getAllValues().stream()
                 .filter(step -> AgentTaskLogService.STATUS_SUCCESS.equals(step.getStatus()))
                 .toList();
-        assertEquals(2, successfulSteps.size());
+        assertEquals(3, successfulSteps.size());
         assertEquals(AgentTaskLogService.FINISH_REASON_NO_TOOL_CALLS, successfulSteps.get(0).getFinishReason());
         assertEquals(AgentTaskLogService.FINISH_REASON_NO_TOOL_CALLS, successfulSteps.get(1).getFinishReason());
+        assertEquals(AgentTaskLogService.FINISH_REASON_NO_TOOL_CALLS, successfulSteps.get(2).getFinishReason());
         assertNotNull(successfulSteps.get(0).getLlmLatencyMs());
         assertNotNull(successfulSteps.get(0).getFinishedAt());
         assertNotNull(successfulSteps.get(1).getFinishedAt());
+        assertNotNull(successfulSteps.get(2).getFinishedAt());
     }
 
     private void assignTaskIds(AgentTaskMapper mapper) {

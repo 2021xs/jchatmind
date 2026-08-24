@@ -13,6 +13,7 @@ import com.kama.jchatmind.model.response.CreateChatMessageResponse;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
 import com.kama.jchatmind.service.ConversationContextCompressor;
+import com.kama.jchatmind.service.FinalCompletionService;
 import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.tool.ToolDuplicateCallException;
@@ -71,7 +72,7 @@ class JChatMindDuplicateToolCallTest {
 
             assertEquals(2, toolAInvocations.get());
             assertEquals(1, toolBInvocations.get());
-            verify(harness.logService).finishTask(eq("task-1"), anyString(), anyInt(), eq(4));
+            verify(harness.finalCompletionService).complete(any());
             verify(harness.toolExecutionService).afterToolFailure(
                     any(), any(), any(ToolDuplicateCallException.class), eq(false));
 
@@ -85,7 +86,7 @@ class JChatMindDuplicateToolCallTest {
     }
 
     @Test
-    void repeatedCallAfterFeedbackForcesNextThinkToRunWithoutTools() {
+    void repeatedCallAfterFeedbackForcesValidatedFinalWithoutAnotherPlanningToolExposure() {
         AtomicInteger toolAInvocations = new AtomicInteger();
         ToolCallback toolA = callback("toolA", toolAInvocations, "A-result");
         List<ChatResponse> responses = List.of(
@@ -101,16 +102,22 @@ class JChatMindDuplicateToolCallTest {
             assertEquals(2, toolAInvocations.get());
             verify(harness.toolExecutionService, times(2)).afterToolFailure(
                     any(), any(), any(ToolDuplicateCallException.class), eq(false));
-            verify(harness.logService).finishTask(eq("task-1"), anyString(), anyInt(), eq(4));
+            verify(harness.finalCompletionService).complete(any());
 
             ArgumentCaptor<ToolCallback[]> callbacks = ArgumentCaptor.forClass(ToolCallback[].class);
-            verify(harness.requestSpec, times(5)).toolCallbacks(callbacks.capture());
-            assertEquals(0, callbacks.getAllValues().get(4).length);
+            verify(harness.requestSpec, times(4)).toolCallbacks(callbacks.capture());
+            assertTrue(callbacks.getAllValues().stream().allMatch(value -> value.length == 1));
 
-            ArgumentCaptor<String> systemPrompts = ArgumentCaptor.forClass(String.class);
-            verify(harness.requestSpec, times(5)).system(systemPrompts.capture());
-            assertTrue(systemPrompts.getAllValues().get(4)
-                    .contains("Duplicate tool-call governance instruction"));
+            ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+            verify((ChatClient) org.springframework.test.util.ReflectionTestUtils.getField(
+                    harness.agent, "chatClient"), times(5)).prompt(prompts.capture());
+            org.springframework.ai.model.tool.ToolCallingChatOptions finalOptions =
+                    (org.springframework.ai.model.tool.ToolCallingChatOptions)
+                            prompts.getAllValues().get(4).getOptions();
+            assertTrue(finalOptions.getToolCallbacks().isEmpty());
+            assertTrue(finalOptions.getToolNames().isEmpty());
+
+            verify(harness.requestSpec, times(4)).system(anyString());
         }
     }
 
@@ -157,6 +164,7 @@ class JChatMindDuplicateToolCallTest {
         private final ChatMessageFacadeService messageService = mock(ChatMessageFacadeService.class);
         private final ThreadPoolTaskExecutor toolExecutor = new ThreadPoolTaskExecutor();
         private final JChatMind agent;
+        private final FinalCompletionService finalCompletionService;
 
         private AgentHarness(List<ChatResponse> responses, List<ToolCallback> callbacks) {
             ChatClient chatClient = mock(ChatClient.class);
@@ -223,6 +231,8 @@ class JChatMindDuplicateToolCallTest {
                     mock(ChatMessageConverter.class), logService, compressor, "user-message-1",
                     callbacks.stream().map(callback -> callback.getToolDefinition().name()).toList(),
                     new ToolCorrectionProperties(), new ToolFailureClassifier(), batchExecutor);
+            finalCompletionService = JChatMindSafeFinalTestSupport.configure(
+                    agent, requestSpec, "validated final answer");
         }
 
         @Override

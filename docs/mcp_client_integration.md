@@ -1,5 +1,16 @@
 # MCP Client / Host V1
 
+## Failure Semantics
+
+MCP Completion V1 keeps failure semantics inside the existing unified tool runtime:
+
+- MCP discovery failure is isolated per enabled server. The server is unavailable for the current build and exposes zero tools; local tools and other healthy MCP servers remain available.
+- MCP invocation exceptions are raised as `MCP_TOOL_CALL_FAILED`. MCP audit and unified `ToolCallLog`/SSE failure events use the same failure type. Remote exception details stay in internal server logs; the Agent-facing message is compact and safe.
+- Runtime timeout remains `TOOL_TIMEOUT`; it is not converted to `MCP_TOOL_CALL_FAILED`.
+- Duplicate detection and risk/allow-list preflight keep their existing `DUPLICATE_TOOL_CALL` and policy-rejection semantics. They do not execute `callTool` and do not create MCP invocation audit events.
+
+Verified transport for this project: `STDIO`. Spring AI framework support for other transports is not project-level verification. There is no retry or automatic MCP server recovery.
+
 ## 范围
 
 当前实现把 JChatMind 作为 MCP Host / Client 接入外部 MCP Server 提供的 tools、resources、prompts。
@@ -89,7 +100,7 @@ Agent 构建时，`JChatMindFactory` 会合并两类工具：
 - policy 通过。
 - tool name 必须存在于当前 Agent runtime tool list。
 
-外部 MCP tool 调用会写 audit，并按 `max-result-length` 截断。外部调用异常会返回可读失败结果，例如 `External MCP tool call failed: ...`，不会让本地 Agent 因 callback 异常直接崩溃。
+外部 MCP tool 调用会写 audit，并按 `max-result-length` 截断。外部调用异常会以 `MCP_TOOL_CALL_FAILED` typed failure 进入统一 Tool Runtime；不会伪装成普通成功结果，也不会让 callback 异常直接泄漏给用户。
 
 ## Resources
 

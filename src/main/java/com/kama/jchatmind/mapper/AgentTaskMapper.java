@@ -15,6 +15,11 @@ public interface AgentTaskMapper {
 
     int updateById(AgentTask agentTask);
 
+    int updateTerminalIfRunning(AgentTask agentTask);
+
+    int bindUserMessage(@Param("taskId") String taskId,
+                        @Param("userMessageId") String userMessageId);
+
     AgentTask selectActiveRunningBySessionId(@Param("sessionId") String sessionId,
                                              @Param("staleBefore") LocalDateTime staleBefore);
 

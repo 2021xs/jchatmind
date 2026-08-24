@@ -3,6 +3,9 @@ package com.kama.jchatmind.tool;
 import lombok.Builder;
 import lombok.Data;
 
+import com.kama.jchatmind.agent.AgentTaskControl;
+import com.kama.jchatmind.agent.TaskEvidenceState;
+
 import java.util.List;
 
 @Data
@@ -16,4 +19,6 @@ public class ToolExecutionContext {
     private String modelName;
     private List<String> runtimeToolNames;
     private ToolDuplicateCallState duplicateCallState;
+    private TaskEvidenceState taskEvidenceState;
+    private AgentTaskControl cancellationControl;
 }

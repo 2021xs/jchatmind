@@ -176,6 +176,65 @@ class ExternalMcpRegistryAndPolicyTest {
         assertEquals(1, capabilities.get(0).getPrompts().size());
     }
 
+    @Test
+    void discoveryFailureIsolatedToUnavailableServer() {
+        McpClientProperties properties = new McpClientProperties();
+        properties.setServers(List.of(
+                server("docs-a", ExternalMcpServerType.DOCS, true,
+                        tool("search_a", McpToolRiskLevel.READ_ONLY, true)),
+                server("docs-b", ExternalMcpServerType.DOCS, true,
+                        tool("search_b", McpToolRiskLevel.READ_ONLY, true))));
+
+        ExternalMcpToolRegistry registry = registry(properties, server -> {
+            if ("docs-b".equals(server.getName())) {
+                throw new IllegalStateException("credential=secret-token command=/private/path");
+            }
+            return List.of(toolDefinition("search_a"));
+        });
+
+        assertEquals(List.of("mcp_docs_a_search_a"),
+                registry.exposedTools().stream().map(tool -> tool.getExposedName()).toList());
+        assertEquals(List.of("mcp_docs_a_search_a"),
+                registry.exposedTools().stream().map(tool -> tool.getExposedName()).toList());
+    }
+
+    @Test
+    void capabilityDiscoveryFailureReturnsUnavailableServerWithoutFailingOtherServers() {
+        McpClientProperties properties = new McpClientProperties();
+        properties.setServers(List.of(
+                server("docs-a", ExternalMcpServerType.DOCS, true,
+                        tool("search_a", McpToolRiskLevel.READ_ONLY, true)),
+                server("docs-b", ExternalMcpServerType.DOCS, true,
+                        tool("search_b", McpToolRiskLevel.READ_ONLY, true))));
+        ExternalMcpCapabilityDiscoveryClient discovery = new ExternalMcpCapabilityDiscoveryClient() {
+            @Override
+            public List<ExternalMcpDiscoveredTool> discoverTools(com.kama.jchatmind.mcp.registry.ExternalMcpServerRegistration server) {
+                if ("docs-b".equals(server.getName())) {
+                    throw new IllegalStateException("server unavailable");
+                }
+                return List.of(toolDefinition("search_a"));
+            }
+
+            @Override
+            public List<ExternalMcpDiscoveredResource> discoverResources(com.kama.jchatmind.mcp.registry.ExternalMcpServerRegistration server) {
+                return List.of();
+            }
+
+            @Override
+            public List<ExternalMcpDiscoveredPrompt> discoverPrompts(com.kama.jchatmind.mcp.registry.ExternalMcpServerRegistration server) {
+                return List.of();
+            }
+        };
+
+        var capabilities = new ExternalMcpCapabilityRegistry(
+                new ExternalMcpServerRegistry(properties), discovery, new McpExternalToolPolicy())
+                .discoverCapabilities();
+
+        assertEquals(2, capabilities.size());
+        assertEquals(1, capabilities.get(0).getTools().size());
+        assertTrue(capabilities.get(1).getTools().isEmpty());
+    }
+
     private void assertAutoInvokes(ExternalMcpServerType type, String toolName, McpToolRiskLevel expectedRisk) {
         McpClientProperties properties = new McpClientProperties();
         properties.setServers(List.of(server(type.name().toLowerCase(), type, true,

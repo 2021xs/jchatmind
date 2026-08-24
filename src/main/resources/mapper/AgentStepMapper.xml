@@ -89,6 +89,21 @@
         WHERE id = CAST(#{id} AS uuid)
     </update>
 
+    <update id="updateTerminalIfRunning" parameterType="com.kama.jchatmind.model.entity.AgentStep">
+        UPDATE agent_step
+        <set>
+            <if test="status != null">status = #{status},</if>
+            <if test="outputSummary != null">output_summary = #{outputSummary},</if>
+            <if test="latencyMs != null">latency_ms = #{latencyMs},</if>
+            <if test="finishReason != null">finish_reason = #{finishReason},</if>
+            <if test="finishedAt != null">finished_at = #{finishedAt},</if>
+            <if test="updatedAt != null">updated_at = #{updatedAt},</if>
+            <if test="errorMessage != null">error_message = #{errorMessage},</if>
+        </set>
+        WHERE id = CAST(#{id} AS uuid)
+          AND status = 'RUNNING'
+    </update>
+
     <select id="selectRunningByTaskId" resultMap="BaseResultMap">
         SELECT id,
                task_id,

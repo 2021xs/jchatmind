@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.config.ToolDuplicateDetectionProperties;
 import com.kama.jchatmind.config.ToolTimeoutProperties;
 import com.kama.jchatmind.config.ToolResultProperties;
+import com.kama.jchatmind.mcp.McpToolCallException;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.tool.ToolExecutionContext;
 import com.kama.jchatmind.tool.ToolExecutionRecord;
@@ -114,6 +115,27 @@ class ToolCallBatchExecutorTest {
     }
 
     @Test
+    void mcpInvocationFailureRemainsFailureThroughUnifiedRuntime() {
+        ToolCallback mcpTool = callback("mcp_docs_search_docs", ignored -> {
+            throw new McpToolCallException("mcp_docs_search_docs",
+                    new IllegalStateException("credential=secret-token command=/private/path"));
+        });
+
+        ToolCallBatchResult result = execute(List.of(mcpTool),
+                call("call-1", "mcp_docs_search_docs"));
+
+        assertEquals(ToolCallBatchResult.Status.FAILED, result.getStatus());
+        assertInstanceOf(McpToolCallException.class, result.getError());
+        assertEquals("MCP_TOOL_CALL_FAILED", ((McpToolCallException) result.getError()).getErrorType());
+        verify(toolExecutionService, never()).afterToolSuccess(eq(executionContext), any(), any());
+
+        batchExecutor.recordFailure(executionContext, result.getRecords(), result.getError(), false);
+
+        verify(toolExecutionService).afterToolFailure(eq(executionContext), any(ToolExecutionRecord.class),
+                any(McpToolCallException.class), eq(false));
+    }
+
+    @Test
     void timeoutCancelsFutureAndRecordsToolTimeout() throws InterruptedException {
         timeoutProperties.setDefaultTimeout(Duration.ofMillis(50));
         CountDownLatch interrupted = new CountDownLatch(1);
@@ -137,6 +159,44 @@ class ToolCallBatchExecutorTest {
         verify(toolExecutionService).afterToolFailure(eq(executionContext), any(), error.capture(), eq(false));
         assertInstanceOf(ToolTimeoutException.class, error.getValue());
         assertTrue(error.getValue().getMessage().contains("50 ms"));
+    }
+
+    @Test
+    void userCancellationCancelsToolFutureWithoutRecordingTimeout() throws InterruptedException {
+        AgentTaskControl control = new AgentTaskControl("task-1", "session-1");
+        ToolExecutionContext context = ToolExecutionContext.builder()
+                .taskId("task-1")
+                .stepId("step-1")
+                .sessionId("session-1")
+                .runtimeToolNames(List.of("slowTool"))
+                .duplicateCallState(new ToolDuplicateCallState())
+                .cancellationControl(control)
+                .build();
+        CountDownLatch started = new CountDownLatch(1);
+        ToolCallback slowTool = callback("slowTool", ignored -> {
+            started.countDown();
+            sleep(10_000);
+            return "late";
+        });
+        when(toolExecutionService.beforeToolCall(eq(context), any()))
+                .thenReturn(ToolExecutionRecord.builder()
+                        .toolCallId("call-1")
+                        .actualToolName("slowTool")
+                        .canonicalToolName("slowTool")
+                        .toolCallLogId("log-cancel")
+                        .startedAtMillis(System.currentTimeMillis())
+                        .build());
+
+        java.util.concurrent.FutureTask<ToolCallBatchResult> run = new java.util.concurrent.FutureTask<>(
+                () -> execute(context, List.of(slowTool), call("call-1", "slowTool")));
+        Thread thread = new Thread(run);
+        thread.start();
+        assertTrue(started.await(1, TimeUnit.SECONDS));
+        control.requestCancellation();
+        thread.join(5_000);
+
+        assertTrue(run.isDone());
+        verify(toolExecutionService, never()).afterToolFailure(eq(context), any(), any(ToolTimeoutException.class), eq(false));
     }
 
     @Test
@@ -322,7 +382,91 @@ class ToolCallBatchExecutorTest {
                 eq(executionContext), any(), any(ToolDuplicateCallException.class), eq(false));
     }
 
+    @Test
+    void noNoveltyGuardReturnsProtocolSafeFeedbackWithoutCallingCodeSearch() {
+        TaskEvidenceState evidenceState = blockedEvidenceState();
+        ToolExecutionContext guardedContext = ToolExecutionContext.builder()
+                .taskId("task-guard")
+                .stepId("step-guard")
+                .sessionId("session-1")
+                .runtimeToolNames(List.of("searchProjectCode"))
+                .duplicateCallState(new ToolDuplicateCallState())
+                .taskEvidenceState(evidenceState)
+                .build();
+        when(toolExecutionService.beforeToolCall(eq(guardedContext), any()))
+                .thenReturn(ToolExecutionRecord.builder()
+                        .toolCallId("call-3")
+                        .actualToolName("searchProjectCode")
+                        .canonicalToolName("searchProjectCode")
+                        .toolCallLogId("log-guard")
+                        .startedAtMillis(System.currentTimeMillis())
+                        .build());
+        AtomicInteger retrievalInvocations = new AtomicInteger();
+        ToolCallback codeSearch = callback("searchProjectCode", ignored -> {
+            retrievalInvocations.incrementAndGet();
+            return "should-not-run";
+        });
+
+        ToolCallBatchResult result = execute(guardedContext, List.of(codeSearch),
+                call("call-3", "searchProjectCode", "{\"repoId\":\"repo-1\",\"query\":\"rewrite\"}"));
+
+        assertTrue(result.succeeded());
+        assertEquals(0, retrievalInvocations.get());
+        assertEquals(1, result.getToolResponseMessage().getResponses().size());
+        assertTrue(result.getToolResponseMessage().getResponses().get(0).responseData()
+                .contains("CODE_SEARCH_NO_NOVELTY_GUARD"));
+        assertEquals(1, evidenceState.snapshot().guardedSearchRequestCount());
+        verify(toolExecutionService).afterToolSuccess(eq(guardedContext), any(),
+                org.mockito.ArgumentMatchers.contains("CODE_SEARCH_NO_NOVELTY_GUARD"));
+        verify(toolExecutionService, never()).afterToolFailure(eq(guardedContext), any(), any(), any(Boolean.class));
+    }
+
+    @Test
+    void codeSearchGuardDoesNotBlockOtherTools() {
+        TaskEvidenceState evidenceState = blockedEvidenceState();
+        ToolExecutionContext guardedContext = ToolExecutionContext.builder()
+                .taskId("task-other-tool")
+                .stepId("step-other-tool")
+                .sessionId("session-1")
+                .runtimeToolNames(List.of("databaseQuery"))
+                .duplicateCallState(new ToolDuplicateCallState())
+                .taskEvidenceState(evidenceState)
+                .build();
+        when(toolExecutionService.beforeToolCall(eq(guardedContext), any()))
+                .thenReturn(ToolExecutionRecord.builder()
+                        .toolCallId("call-db")
+                        .actualToolName("databaseQuery")
+                        .canonicalToolName("databaseQuery")
+                        .toolCallLogId("log-db")
+                        .startedAtMillis(System.currentTimeMillis())
+                        .build());
+        AtomicInteger invocations = new AtomicInteger();
+
+        ToolCallBatchResult result = execute(guardedContext,
+                List.of(callback("databaseQuery", ignored -> {
+                    invocations.incrementAndGet();
+                    return "db-result";
+                })), call("call-db", "databaseQuery", "{\"sql\":\"SELECT 1\"}"));
+
+        assertTrue(result.succeeded());
+        assertEquals(1, invocations.get());
+        assertEquals("db-result", result.getToolResponseMessage().getResponses().get(0).responseData());
+    }
+
+    private TaskEvidenceState blockedEvidenceState() {
+        TaskEvidenceState state = new TaskEvidenceState();
+        state.observeSearch("repo-1", "empty-1", List.of());
+        state.observeSearch("repo-1", "empty-2", List.of());
+        return state;
+    }
+
     private ToolCallBatchResult execute(List<ToolCallback> callbacks, AssistantMessage.ToolCall... calls) {
+        return execute(executionContext, callbacks, calls);
+    }
+
+    private ToolCallBatchResult execute(ToolExecutionContext context,
+                                        List<ToolCallback> callbacks,
+                                        AssistantMessage.ToolCall... calls) {
         Prompt prompt = Prompt.builder()
                 .messages(List.of(new UserMessage("test")))
                 .chatOptions(DefaultToolCallingChatOptions.builder()
@@ -332,7 +476,7 @@ class ToolCallBatchExecutorTest {
                 .build();
         ChatResponse response = new ChatResponse(List.of(new Generation(
                 AssistantMessage.builder().content("").toolCalls(List.of(calls)).build())));
-        return batchExecutor.execute(prompt, response, ToolCallingManager.builder().build(), executionContext);
+        return batchExecutor.execute(prompt, response, ToolCallingManager.builder().build(), context);
     }
 
     private AssistantMessage.ToolCall call(String id, String name) {

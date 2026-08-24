@@ -93,7 +93,9 @@ class CodeSearchToolsAgentIntegrationTest {
                 .toolCallbacks(any(ToolCallback[].class)).call().chatClientResponse())
                 .thenReturn(new ChatClientResponse(toolCallResponse, Map.of()))
                 .thenReturn(new ChatClientResponse(finalResponse, Map.of()));
-        clearInvocations(chatClient);
+        ChatClient.ChatClientRequestSpec requestSpec = chatClient.prompt(
+                Prompt.builder().messages(List.of(new UserMessage("fixture"))).build());
+        clearInvocations(chatClient, requestSpec);
 
         AgentTaskLogService logService = mockLogService();
         ToolExecutionService toolExecutionService = mock(ToolExecutionService.class);
@@ -119,11 +121,12 @@ class CodeSearchToolsAgentIntegrationTest {
                     mock(com.kama.jchatmind.converter.ChatMessageConverter.class), logService, compressor,
                     "user-message-1", List.of("searchProjectCode"), new ToolCorrectionProperties(),
                     new ToolFailureClassifier(), fixture.batchExecutor());
+            JChatMindSafeFinalTestSupport.configure(agent, requestSpec, "validated final answer");
             agent.run();
         }
 
         ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
-        verify(chatClient, times(2)).prompt(prompts.capture());
+        verify(chatClient, times(3)).prompt(prompts.capture());
         String nextThinkEvidence = toolResult(prompts.getAllValues().get(1).getInstructions());
         assertCompactPresentation(nextThinkEvidence);
 
@@ -161,6 +164,9 @@ class CodeSearchToolsAgentIntegrationTest {
         assertTrue(result.contains("symbol: OrderService#create"));
         assertTrue(result.contains("snippet:"));
         assertTrue(result.contains("void create() {}"));
+        assertTrue(result.contains("Code evidence novelty:"));
+        assertTrue(result.contains("returnedEvidenceCount=1"));
+        assertTrue(result.contains("newEvidenceCount=1"));
         assertFalse(result.contains("selectorLatencyMs"));
         assertFalse(result.contains("metadata:"));
         assertFalse(result.contains("score:"));

@@ -78,7 +78,9 @@ class JChatMindToolResultGuardTest {
                 .chatClientResponse())
                 .thenReturn(new ChatClientResponse(toolCallResponse, Map.of()))
                 .thenReturn(new ChatClientResponse(finalResponse, Map.of()));
-        clearInvocations(chatClient);
+        ChatClient.ChatClientRequestSpec requestSpec = chatClient.prompt(
+                Prompt.builder().messages(List.of(new UserMessage("fixture"))).build());
+        clearInvocations(chatClient, requestSpec);
 
         AgentTaskLogService logService = mock(AgentTaskLogService.class);
         when(logService.startTask(anyString(), anyString(), anyString(), anyString(), anyString(), anyInt(), anyString()))
@@ -134,6 +136,7 @@ class JChatMindToolResultGuardTest {
                     mock(SseService.class), toolExecutionService, messageService,
                     mock(ChatMessageConverter.class), logService, compressor, "user-message-1",
                     List.of("largeTool"), new ToolCorrectionProperties(), new ToolFailureClassifier(), batchExecutor);
+            JChatMindSafeFinalTestSupport.configure(agent, requestSpec, "validated final answer");
 
             agent.run();
         } finally {
@@ -141,7 +144,7 @@ class JChatMindToolResultGuardTest {
         }
 
         ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
-        verify(chatClient, times(2)).prompt(prompts.capture());
+        verify(chatClient, times(3)).prompt(prompts.capture());
         List<Message> secondThinkMessages = prompts.getAllValues().get(1).getInstructions();
         ToolResponseMessage nextThinkToolResponse = secondThinkMessages.stream()
                 .filter(ToolResponseMessage.class::isInstance)

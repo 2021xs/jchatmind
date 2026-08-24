@@ -1,5 +1,6 @@
 package com.kama.jchatmind.mcp;
 
+import com.kama.jchatmind.mcp.McpToolCallException;
 import com.kama.jchatmind.mcp.adapter.McpToolCallbackAdapter;
 import com.kama.jchatmind.mcp.audit.McpToolAuditLogger;
 import com.kama.jchatmind.mcp.config.ExternalMcpServerProperties;
@@ -19,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class McpToolCallbackAdapterTest {
@@ -56,7 +58,7 @@ class McpToolCallbackAdapterTest {
     }
 
     @Test
-    void callbackMapsExternalMcpFailureToReadableToolResult() {
+    void callbackPropagatesTypedFailureAndKeepsAuditFailureSemantics() {
         McpClientProperties properties = new McpClientProperties();
         properties.setMaxResultLength(64);
         ExternalMcpServerProperties server = server();
@@ -79,10 +81,12 @@ class McpToolCallbackAdapterTest {
                 auditLogger,
                 properties);
 
-        String result = adapter.toolCallbacks().get(0).call("{\"query\":\"java\"}");
+        McpToolCallException failure = assertThrows(McpToolCallException.class,
+                () -> adapter.toolCallbacks().get(0).call("{\"query\":\"java\"}"));
 
-        assertTrue(result.contains("External MCP tool call failed"));
-        assertTrue(result.contains("server unavailable"));
+        assertEquals("MCP_TOOL_CALL_FAILED", failure.getErrorType());
+        assertTrue(failure.getSafeMessage().contains("MCP_TOOL_CALL_FAILED"));
+        assertTrue(!failure.getSafeMessage().contains("server unavailable"));
         assertEquals(List.of("start", "failure"), auditLogger.events);
     }
 

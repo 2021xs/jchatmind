@@ -13,6 +13,8 @@ public interface AgentStepMapper {
 
     int updateById(AgentStep agentStep);
 
+    int updateTerminalIfRunning(AgentStep agentStep);
+
     List<AgentStep> selectRunningByTaskId(String taskId);
 
     List<AgentStep> selectByTaskId(String taskId);

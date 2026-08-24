@@ -293,6 +293,22 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
         return resultSummary != null && resultSummary.startsWith(REJECTED_BY_POLICY_PREFIX);
     }
 
+    @Override
+    public void afterToolCancellation(ToolExecutionContext context, ToolExecutionRecord record) {
+        long latencyMs = System.currentTimeMillis() - record.getStartedAtMillis();
+        agentTaskLogService.cancelToolCall(record.getToolCallLogId(), latencyMs);
+        sendEvent(context, AgentSseEvent.Type.TOOL_CALL_RESULT, payload(
+                "taskId", context.getTaskId(),
+                "stepId", context.getStepId(),
+                "toolCallLogId", record.getToolCallLogId(),
+                "toolCallId", record.getToolCallId(),
+                "toolName", record.getCanonicalToolName(),
+                "actualToolName", record.getActualToolName(),
+                "status", AgentTaskLogService.STATUS_CANCELLED,
+                "latencyMs", latencyMs
+        ));
+    }
+
     private ExternalMcpToolRegistration resolveAllowedExternalMcpTool(String toolName, ToolExecutionContext context) {
         ExternalMcpToolRegistry registry = externalMcpToolRegistryProvider.getIfAvailable();
         if (registry == null || !isRuntimeToolName(toolName, context)) {

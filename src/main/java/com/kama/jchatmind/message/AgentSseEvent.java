@@ -35,11 +35,15 @@ public class AgentSseEvent {
 
     public enum Type {
         MESSAGE_START("message_start"),
+        FINAL_MESSAGE_START("final_message_start"),
         TOKEN("token"),
+        FINAL_MESSAGE_DONE("final_message_done"),
+        FINAL_MESSAGE_ABORT("final_message_abort"),
         RETRIEVAL_RESULT("retrieval_result"),
         TOOL_CALL_START("tool_call_start"),
         TOOL_CALL_RESULT("tool_call_result"),
         STEP_DONE("step_done"),
+        CANCELLED("cancelled"),
         ERROR("error"),
         DONE("done");
 

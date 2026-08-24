@@ -1,6 +1,7 @@
 package com.kama.jchatmind.agent;
 
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
+import com.kama.jchatmind.service.ConversationContextCompressor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -25,8 +26,7 @@ final class AgentMemoryHistorySanitizer {
     static List<Message> toSafeReplayMessages(String summary, List<ChatMessageDTO> chatMessages) {
         List<Message> memory = new ArrayList<>();
         if (StringUtils.hasLength(summary)) {
-            memory.add(new SystemMessage("[Conversation summary]\n" + summary
-                    + "\n\nNote: The summary is only auxiliary context. If it conflicts with recent user input or retrieval results, prefer the recent input and retrieval results."));
+            memory.add(new SystemMessage(ConversationContextCompressor.summaryMessageContent(summary)));
         }
         for (ChatMessageDTO chatMessageDTO : chatMessages) {
             switch (chatMessageDTO.getRole()) {

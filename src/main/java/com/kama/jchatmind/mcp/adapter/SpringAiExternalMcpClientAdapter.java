@@ -12,6 +12,7 @@ import com.kama.jchatmind.mcp.registry.ExternalMcpResourceReader;
 import com.kama.jchatmind.mcp.registry.ExternalMcpResourceRegistration;
 import com.kama.jchatmind.mcp.registry.ExternalMcpServerRegistration;
 import com.kama.jchatmind.mcp.registry.ExternalMcpToolRegistration;
+import com.kama.jchatmind.tool.ToolArgumentException;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
 import org.springframework.beans.factory.ObjectProvider;
@@ -164,7 +165,7 @@ public class SpringAiExternalMcpClientAdapter implements ExternalMcpCapabilityDi
         try {
             return objectMapper.readValue(argumentsJson, MAP_TYPE);
         } catch (Exception e) {
-            throw new IllegalArgumentException("Invalid MCP tool arguments JSON: " + e.getMessage(), e);
+            throw new ToolArgumentException("Invalid MCP tool arguments JSON", e);
         }
     }
 
