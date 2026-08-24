@@ -59,3 +59,6 @@ data/documents/
 .playwright-mcp/
 *_secret*
 *_local*
+
+# Internal Codex working objective; never publish as project documentation.
+/docs/codex_goal

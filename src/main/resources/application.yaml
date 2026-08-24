@@ -13,11 +13,11 @@ spring:
     driver-class-name: org.postgresql.Driver
   ai:
     zhipuai:
-      api-key: your-api-key
-      base-url: https://open.bigmodel.cn/api/paas
+      api-key: ${ZHIPUAI_API_KEY:your-api-key}
+      base-url: ${ZHIPUAI_BASE_URL:https://open.bigmodel.cn/api/paas}
       chat:
         options:
-          model: glm-4.6
+          model: ${ZHIPUAI_MODEL:glm-4.6}
 mybatis:
   type-aliases-package: com.kama.jchatmind.model.entity
   mapper-locations: classpath:mapper/*.xml
@@ -36,6 +36,10 @@ logging:
     org.springframework.web.servlet.mvc.method.annotation: INFO
 
 jchatmind:
+  web-console:
+    # Delivery preference only. Validated compilation and durable Final completion
+    # remain mandatory even when post-commit TOKEN replay is disabled.
+    final-streaming-enabled: ${JCHATMIND_WEB_CONSOLE_FINAL_STREAMING_ENABLED:true}
   async:
     task:
       core-pool-size: ${JCHATMIND_ASYNC_TASK_CORE_POOL_SIZE:4}
@@ -85,9 +89,8 @@ jchatmind:
   code-rag:
     # Final answer-time Code RAG path:
     # RAW_VECTOR candidates + LLM evidence selector.
-    allowed-roots:
-      - D:/Project
-      - D:/workspace
+    # Comma-separated canonical roots that local repository scans may access.
+    allowed-roots: ${CODE_RAG_ALLOWED_ROOTS:./workspace}
     max-file-size-bytes: 1048576
     max-files-per-import: 2000
     embedding-base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
@@ -106,6 +109,7 @@ jchatmind:
     llm-selector:
       # Tests may disable this to verify fallback; normal Agent flow keeps selector on.
       enabled: true
+      client-type: DEEPSEEK_HTTP
       model: gpt-5.5
       max-candidate-chars: 600
       max-selected: 5
@@ -115,7 +119,15 @@ jchatmind:
       raw-top-k: 20
       final-top-k: 5
       include-selector-debug: true
+  github-import:
+    workspace-root: ${JCHATMIND_GITHUB_WORKSPACE_ROOT:}
+    clone-timeout: ${JCHATMIND_GITHUB_CLONE_TIMEOUT:10m}
+    max-total-source-bytes: ${JCHATMIND_GITHUB_MAX_TOTAL_SOURCE_BYTES:209715200}
+    min-free-space-bytes: ${JCHATMIND_GITHUB_MIN_FREE_SPACE_BYTES:0}
   agent:
+    final-synthesis:
+      max-input-tokens: ${JCHATMIND_FINAL_MAX_INPUT_TOKENS:64000}
+      chars-per-token: ${JCHATMIND_FINAL_CHARS_PER_TOKEN:3}
     tool-timeout:
       default-timeout: ${JCHATMIND_AGENT_TOOL_TIMEOUT:60s}
       overrides: {}

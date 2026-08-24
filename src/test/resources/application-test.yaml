@@ -1,0 +1,74 @@
+spring:
+  application:
+    name: jchatmind-test
+  config:
+    import: ""
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration
+  datasource:
+    url: jdbc:postgresql://127.0.0.1:1/jchatmind_test
+    username: test-user
+    password: test-password
+    driver-class-name: org.postgresql.Driver
+  ai:
+    zhipuai:
+      api-key: test-placeholder
+      base-url: http://127.0.0.1:1
+      chat:
+        options:
+          model: glm-4.6
+
+mybatis:
+  type-aliases-package: com.kama.jchatmind.model.entity
+  mapper-locations: classpath:mapper/*.xml
+  type-handlers-package: com.kama.jchatmind.typehandler
+
+document:
+  storage:
+    base-path: target/test-documents
+
+jchatmind:
+  web-console:
+    final-streaming-enabled: true
+  feishu:
+    enabled: false
+  database-tool:
+    datasource:
+      url: jdbc:postgresql://127.0.0.1:1/jchatmind_test
+      username: test-readonly
+      password: test-readonly-password
+      driver-class-name: org.postgresql.Driver
+  ai:
+    deepseek:
+      official:
+        api-key: test-placeholder
+        base-url: http://127.0.0.1:1
+        model: deepseek-chat
+    gpt:
+      compatible:
+        api-key: test-placeholder
+        base-url: http://127.0.0.1:1
+        model: gpt-5.5
+  code-rag:
+    allowed-roots:
+      - target/test-code-rag
+    embedding-base-url: http://127.0.0.1:1
+    embedding-model: test-embedding
+    embedding-warmup:
+      enabled: false
+    llm-selector:
+      enabled: false
+  github-import:
+    workspace-root: target/test-github-workspace
+  agent:
+    final-synthesis:
+      max-input-tokens: 64000
+      chars-per-token: 3
+    observability:
+      recovery-enabled: false
+  token-counter:
+    enabled: false
+  mcp:
+    client:
+      enabled: false
