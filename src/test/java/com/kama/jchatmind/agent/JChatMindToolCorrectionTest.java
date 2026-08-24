@@ -10,6 +10,7 @@ import com.kama.jchatmind.model.response.CreateChatMessageResponse;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
 import com.kama.jchatmind.service.ConversationContextCompressor;
+import com.kama.jchatmind.service.FinalCompletionService;
 import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.tool.ToolExecutionRecord;
@@ -70,6 +71,8 @@ class JChatMindToolCorrectionTest {
                 .chatClientResponse())
                 .thenReturn(new ChatClientResponse(toolCallResponse, Map.of()))
                 .thenReturn(new ChatClientResponse(finalResponse, Map.of()));
+        ChatClient.ChatClientRequestSpec requestSpec = chatClient.prompt(
+                Prompt.builder().messages(List.of(new UserMessage("fixture"))).build());
 
         AgentTaskLogService logService = mock(AgentTaskLogService.class);
         when(logService.startTask(anyString(), anyString(), anyString(), anyString(), anyString(), anyInt(), anyString()))
@@ -98,17 +101,22 @@ class JChatMindToolCorrectionTest {
                 .build();
         when(toolExecutionService.beforeToolCall(any(), any())).thenReturn(record);
 
-        ToolCallingManager toolCallingManager = mock(ToolCallingManager.class);
-        when(toolCallingManager.executeToolCalls(any(Prompt.class), any(ChatResponse.class)))
-                .thenThrow(new IllegalArgumentException("Failed to parse JSON argument: missing required field query"));
+        ToolCallBatchExecutor batchExecutor = mock(ToolCallBatchExecutor.class);
+        when(batchExecutor.execute(any(Prompt.class), any(ChatResponse.class), any(), any()))
+                .thenReturn(ToolCallBatchResult.builder()
+                        .status(ToolCallBatchResult.Status.FAILED)
+                        .records(List.of(record))
+                        .error(new ToolArgumentException(
+                                "Failed to parse JSON argument: missing required field query", null))
+                        .build());
 
         ChatMessageFacadeService chatMessageFacadeService = mock(ChatMessageFacadeService.class);
         when(chatMessageFacadeService.createChatMessage(any(ChatMessageDTO.class)))
                 .thenReturn(CreateChatMessageResponse.builder().chatMessageId("message-1").build());
         when(chatMessageFacadeService.getChatMessageDTOsBySessionId(anyString())).thenReturn(List.of());
         ConversationContextCompressor compressor = mock(ConversationContextCompressor.class);
-        when(compressor.check(anyString(), any()))
-                .thenReturn(new ConversationContextCompressor.CompressionCheck(false, "not_needed", 0, 0, 0, 0));
+        when(compressor.check(anyString(), anyString(), any()))
+                .thenReturn(new ConversationContextCompressor.CompressionCheck(false, "not_needed", 0, 0, 0, 0, "TEST", 0, 0));
         SseService sseService = mock(SseService.class);
 
         JChatMind agent = new JChatMind(
@@ -132,15 +140,18 @@ class JChatMindToolCorrectionTest {
                 "user-message-1",
                 List.of("searchProjectCode"),
                 new ToolCorrectionProperties(),
-                new ToolFailureClassifier()
+                new ToolFailureClassifier(),
+                batchExecutor
         );
-        ReflectionTestUtils.setField(agent, "toolCallingManager", toolCallingManager);
+        FinalCompletionService finalCompletionService = JChatMindSafeFinalTestSupport.configure(
+                agent, requestSpec, "validated final answer");
 
         agent.run();
 
-        verify(toolExecutionService).afterToolFailure(any(), eq(record), any(ToolArgumentException.class), eq(true));
+        verify(batchExecutor).recordFailure(any(), eq(List.of(record)), any(ToolArgumentException.class), eq(true));
         verify(logService, never()).failTask(anyString(), anyString(), anyInt(), anyInt());
-        verify(logService).finishTask(eq("task-1"), anyString(), anyInt(), anyInt());
+        verify(finalCompletionService).complete(any());
+        verify(logService, never()).finishTask(anyString(), anyString(), anyInt(), anyInt());
         verify(sseService, never()).sendEvent(eq("session-1"),
                 org.mockito.ArgumentMatchers.argThat(event -> event.getType() == AgentSseEvent.Type.ERROR));
 
@@ -195,17 +206,22 @@ class JChatMindToolCorrectionTest {
                 .build();
         when(toolExecutionService.beforeToolCall(any(), any())).thenReturn(record);
 
-        ToolCallingManager toolCallingManager = mock(ToolCallingManager.class);
-        when(toolCallingManager.executeToolCalls(any(Prompt.class), any(ChatResponse.class)))
-                .thenThrow(new IllegalArgumentException("Failed to parse JSON argument: missing required field query"));
+        ToolCallBatchExecutor batchExecutor = mock(ToolCallBatchExecutor.class);
+        when(batchExecutor.execute(any(Prompt.class), any(ChatResponse.class), any(), any()))
+                .thenReturn(ToolCallBatchResult.builder()
+                        .status(ToolCallBatchResult.Status.FAILED)
+                        .records(List.of(record))
+                        .error(new ToolArgumentException(
+                                "Failed to parse JSON argument: missing required field query", null))
+                        .build());
 
         ChatMessageFacadeService chatMessageFacadeService = mock(ChatMessageFacadeService.class);
         when(chatMessageFacadeService.createChatMessage(any(ChatMessageDTO.class)))
                 .thenReturn(CreateChatMessageResponse.builder().chatMessageId("message-1").build());
         when(chatMessageFacadeService.getChatMessageDTOsBySessionId(anyString())).thenReturn(List.of());
         ConversationContextCompressor compressor = mock(ConversationContextCompressor.class);
-        when(compressor.check(anyString(), any()))
-                .thenReturn(new ConversationContextCompressor.CompressionCheck(false, "not_needed", 0, 0, 0, 0));
+        when(compressor.check(anyString(), anyString(), any()))
+                .thenReturn(new ConversationContextCompressor.CompressionCheck(false, "not_needed", 0, 0, 0, 0, "TEST", 0, 0));
 
         ToolCorrectionProperties properties = new ToolCorrectionProperties();
         properties.setMaxAttempts(1);
@@ -230,14 +246,14 @@ class JChatMindToolCorrectionTest {
                 "user-message-1",
                 List.of("searchProjectCode"),
                 properties,
-                new ToolFailureClassifier()
+                new ToolFailureClassifier(),
+                batchExecutor
         );
-        ReflectionTestUtils.setField(agent, "toolCallingManager", toolCallingManager);
 
         assertThrows(RuntimeException.class, agent::run);
 
-        verify(toolExecutionService).afterToolFailure(any(), eq(record), any(ToolArgumentException.class), eq(true));
-        verify(toolExecutionService).afterToolFailure(any(), eq(record), any(ToolArgumentException.class), eq(false));
+        verify(batchExecutor).recordFailure(any(), eq(List.of(record)), any(ToolArgumentException.class), eq(true));
+        verify(batchExecutor).recordFailure(any(), eq(List.of(record)), any(ToolArgumentException.class), eq(false));
         verify(logService).failStepAndTask(anyString(), eq("task-1"), anyString(), anyInt(), anyInt());
     }
 }

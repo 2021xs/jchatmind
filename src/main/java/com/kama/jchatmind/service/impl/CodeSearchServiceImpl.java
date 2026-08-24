@@ -5,6 +5,7 @@ import com.kama.jchatmind.exception.BizException;
 import com.kama.jchatmind.mapper.CodeChunkMapper;
 import com.kama.jchatmind.mapper.CodeRepositoryMapper;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
+import com.kama.jchatmind.model.dto.CodeSearchExecutionResult;
 import com.kama.jchatmind.model.entity.CodeRepository;
 import com.kama.jchatmind.service.CodeSearchService;
 import com.kama.jchatmind.service.EmbeddingService;
@@ -30,22 +31,42 @@ public class CodeSearchServiceImpl implements CodeSearchService {
 
     @Override
     public List<CodeSearchResult> search(String repoId, String query, int topK) {
+        return searchWithTrace(repoId, query, topK).getCandidates();
+    }
+
+    @Override
+    public CodeSearchExecutionResult searchWithTrace(String repoId, String query, int topK) {
         ensureReadyRepository(repoId);
         int maxTopK = Math.max(20, properties.getAnswerEvidence().getRawTopK());
         int limit = Math.max(1, Math.min(topK <= 0 ? 5 : topK, maxTopK));
         float[] embedding = embeddingCache.get(query);
+        boolean cacheHit = embedding != null;
+        long embeddingLatencyMs = 0;
         if (embedding == null) {
             log.debug("code query embedding cache miss");
+            long embeddingStarted = System.nanoTime();
             embedding = embeddingService.embed(query);
+            embeddingLatencyMs = elapsedMs(embeddingStarted);
             embeddingCache.put(query, embedding);
         } else {
             log.debug("code query embedding cache hit");
         }
+        long retrievalStarted = System.nanoTime();
         List<CodeSearchResult> results = codeChunkMapper.similaritySearch(repoId, PgVectorUtils.toLiteral(embedding), limit);
+        long retrievalLatencyMs = elapsedMs(retrievalStarted);
         results.forEach(this::markRawVector);
-        log.info("code search completed: searchMode=RAW_VECTOR, repoId={}, topK={}, resultCount={}",
-                repoId, limit, results.size());
-        return results;
+        log.info("code search completed: searchMode=RAW_VECTOR, repoId={}, topK={}, resultCount={}, embeddingLatencyMs={}, retrievalLatencyMs={}, cacheHit={}",
+                repoId, limit, results.size(), embeddingLatencyMs, retrievalLatencyMs, cacheHit);
+        return CodeSearchExecutionResult.builder()
+                .candidates(results)
+                .embeddingLatencyMs(embeddingLatencyMs)
+                .retrievalLatencyMs(retrievalLatencyMs)
+                .cacheHit(cacheHit)
+                .build();
+    }
+
+    private long elapsedMs(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1_000_000L;
     }
 
     private void ensureReadyRepository(String repoId) {

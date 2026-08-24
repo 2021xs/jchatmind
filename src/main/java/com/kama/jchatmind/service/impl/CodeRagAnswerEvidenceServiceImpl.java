@@ -4,6 +4,8 @@ import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.model.dto.CodeAnswerEvidenceResult;
 import com.kama.jchatmind.model.dto.CodeEvidenceCandidateCard;
 import com.kama.jchatmind.model.dto.CodeEvidenceSelectionResult;
+import com.kama.jchatmind.model.dto.CodeRagExecutionResult;
+import com.kama.jchatmind.model.dto.CodeSearchExecutionResult;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
 import com.kama.jchatmind.service.CodeSearchService;
@@ -24,14 +26,24 @@ public class CodeRagAnswerEvidenceServiceImpl implements CodeRagAnswerEvidenceSe
 
     @Override
     public CodeAnswerEvidenceResult retrieve(String repoId, String query) {
+        return execute(repoId, query).getAnswerEvidence();
+    }
+
+    @Override
+    public CodeRagExecutionResult execute(String repoId, String query) {
+        long totalStarted = System.nanoTime();
         int rawTopK = positive(properties.getAnswerEvidence().getRawTopK(), 50);
         int finalTopK = positive(properties.getAnswerEvidence().getFinalTopK(), 5);
 
-        List<CodeSearchResult> rawCandidates = codeSearchService.search(repoId, query, rawTopK);
+        CodeSearchExecutionResult searchExecution = codeSearchService.searchWithTrace(repoId, query, rawTopK);
+        List<CodeSearchResult> rawCandidates = searchExecution.getCandidates();
         markRawVectorSource(rawCandidates);
         List<CodeEvidenceCandidateCard> cards = toCandidateCards(rawCandidates);
 
+        long selectorStarted = System.nanoTime();
         CodeEvidenceSelectionResult selection = selectEvidence(query, cards);
+        long selectorLatencyMs = elapsedMs(selectorStarted);
+        selection.setLatencyMs(selectorLatencyMs);
         List<CodeSearchResult> selected = selectedResults(rawCandidates, selection.getSelectedChunkIds(), finalTopK);
         boolean fallback = selection.isFallback();
         if (fallback || selected.isEmpty()) {
@@ -39,17 +51,54 @@ public class CodeRagAnswerEvidenceServiceImpl implements CodeRagAnswerEvidenceSe
             fallback = true;
         }
 
-        logSummary(repoId, query, rawCandidates, selected, selection, fallback);
-        return CodeAnswerEvidenceResult.builder()
+        logSummary(repoId, query, rawTopK, finalTopK, rawCandidates, selected, selection, fallback);
+        CodeAnswerEvidenceResult answerEvidence = CodeAnswerEvidenceResult.builder()
                 .selectedEvidence(selected)
                 .selectorReason(selection.getReason())
                 .answerType(selection.getAnswerType())
                 .fallback(fallback)
                 .jsonParseOk(selection.isJsonParseOk())
-                .selectorLatencyMs(selection.getLatencyMs())
+                .selectorLatencyMs(selectorLatencyMs)
                 .candidateCount(rawCandidates.size())
                 .rawCount(rawCandidates.size())
                 .build();
+        return CodeRagExecutionResult.builder()
+                .answerEvidence(answerEvidence)
+                .rawCandidates(List.copyOf(rawCandidates))
+                .embeddingLatencyMs(searchExecution.getEmbeddingLatencyMs())
+                .retrievalLatencyMs(searchExecution.getRetrievalLatencyMs())
+                .selectorLatencyMs(selectorLatencyMs)
+                .totalLatencyMs(elapsedMs(totalStarted))
+                .cacheHit(searchExecution.isCacheHit())
+                .selectorProposedChunkIds(safeIds(selection.getProposedChunkIds()))
+                .selectorValidChunkIds(safeIds(selection.getValidChunkIds()))
+                .selectorInvalidChunkIds(safeIds(selection.getInvalidChunkIds()))
+                .selectorProposedCandidateIds(safeIds(selection.getProposedCandidateIds()))
+                .selectorValidCandidateIds(safeIds(selection.getValidCandidateIds()))
+                .selectorInvalidCandidateIds(safeIds(selection.getInvalidCandidateIds()))
+                .selectorFallbackReason(fallback ? selection.getReason() : "")
+                .emptySelectorResult(selection.isEmptySelectorResult())
+                .selectorExecutionError(selection.isExecutionError())
+                .selectorPromptTokens(selection.getPromptTokens())
+                .selectorCompletionTokens(selection.getCompletionTokens())
+                .selectorTotalTokens(selection.getTotalTokens())
+                .selectorUsageAvailable(selection.isUsageAvailable())
+                .selectorPromptChars(selection.getPromptChars())
+                .selectorCandidateSectionChars(selection.getCandidateSectionChars())
+                .selectorResponseChars(selection.getResponseChars())
+                .selectorVisibleContent(selection.getRawResponse())
+                .selectorReasoningContentChars(selection.getReasoningContentChars())
+                .selectorReasoningContentPresent(selection.getReasoningContentPresent())
+                .selectorFinishReason(selection.getFinishReason())
+                .build();
+    }
+
+    private List<String> safeIds(List<String> ids) {
+        return ids == null ? List.of() : List.copyOf(ids);
+    }
+
+    private long elapsedMs(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1_000_000L;
     }
 
     private void markRawVectorSource(List<CodeSearchResult> candidates) {
@@ -64,8 +113,10 @@ public class CodeRagAnswerEvidenceServiceImpl implements CodeRagAnswerEvidenceSe
         } catch (RuntimeException e) {
             log.warn("code rag evidence selector failed, fallback to candidate order: query={}, error={}",
                     summarize(query), e.getMessage());
-            CodeEvidenceSelectionResult fallback = fallbackSelection(cards, "selector exception: " + e.getMessage());
+            CodeEvidenceSelectionResult fallback = fallbackSelection(cards,
+                    "MODEL_ERROR: selector exception: " + e.getMessage());
             fallback.setJsonParseOk(false);
+            fallback.setExecutionError(true);
             return fallback;
         }
     }
@@ -74,10 +125,17 @@ public class CodeRagAnswerEvidenceServiceImpl implements CodeRagAnswerEvidenceSe
         int limit = Math.min(positive(properties.getAnswerEvidence().getFinalTopK(), 5), cards.size());
         return CodeEvidenceSelectionResult.builder()
                 .selectedChunkIds(cards.stream().limit(limit).map(CodeEvidenceCandidateCard::getChunkId).toList())
+                .proposedChunkIds(List.of())
+                .validChunkIds(List.of())
+                .invalidChunkIds(List.of())
+                .proposedCandidateIds(List.of())
+                .validCandidateIds(List.of())
+                .invalidCandidateIds(List.of())
                 .reason(reason)
                 .answerType("UNKNOWN")
                 .jsonParseOk(true)
                 .fallback(true)
+                .executionError(true)
                 .latencyMs(0)
                 .build();
     }
@@ -93,7 +151,9 @@ public class CodeRagAnswerEvidenceServiceImpl implements CodeRagAnswerEvidenceSe
                     .symbolName(result.getSymbolName())
                     .apiPath(result.getApiPath())
                     .httpMethod(result.getHttpMethod())
-                    .metadataSummary(truncate(result.getMetadata(), 220))
+                    .startLine(result.getStartLine())
+                    .endLine(result.getEndLine())
+                    .metadataSummary(result.getMetadata())
                     .snippet(truncate(result.getContentPreview(), properties.getLlmSelector().getMaxCandidateChars()))
                     .evidenceRole(evidenceRole(result))
                     .evidenceHint(evidenceHint(result))
@@ -160,13 +220,19 @@ public class CodeRagAnswerEvidenceServiceImpl implements CodeRagAnswerEvidenceSe
 
     private void logSummary(String repoId,
                             String query,
+                            int rawTopK,
+                            int finalTopK,
                             List<CodeSearchResult> rawCandidates,
                             List<CodeSearchResult> selected,
                             CodeEvidenceSelectionResult selection,
                             boolean fallback) {
-        log.info("code rag answer evidence completed: repoId={}, query={}, rawCount={}, selectedCount={}, selectorLatencyMs={}, fallback={}, jsonParseOk={}",
-                repoId, summarize(query), rawCandidates.size(),
-                selected.size(), selection.getLatencyMs(), fallback, selection.isJsonParseOk());
+        log.info("code rag answer evidence completed: repoId={}, query={}, rawTopK={}, finalTopK={}, candidateCount={}, rawCount={}, selectedCount={}, promptChars={}, candidateSectionChars={}, responseChars={}, promptTokens={}, completionTokens={}, totalTokens={}, selectorLatencyMs={}, jsonParseOk={}, fallback={}, fallbackReason={}, executionError={}, emptySelectorResult={}, retryCount=UNAVAILABLE",
+                repoId, summarize(query), rawTopK, finalTopK, rawCandidates.size(), rawCandidates.size(),
+                selected.size(), selection.getPromptChars(), selection.getCandidateSectionChars(),
+                selection.getResponseChars(), selection.getPromptTokens(), selection.getCompletionTokens(),
+                selection.getTotalTokens(), selection.getLatencyMs(), selection.isJsonParseOk(), fallback,
+                fallback ? selection.getReason() : "", selection.isExecutionError(),
+                selection.isEmptySelectorResult());
         for (CodeSearchResult result : selected) {
             log.info("code rag selected evidence: chunkId={}, filePath={}, chunkType={}, source={}",
                     result.getChunkId(), result.getFilePath(), result.getChunkType(), result.getRerankSource());

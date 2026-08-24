@@ -5,6 +5,7 @@ import com.kama.jchatmind.config.AgentObservabilityProperties;
 import com.kama.jchatmind.exception.AgentAlreadyRunningException;
 import com.kama.jchatmind.mapper.AgentStepMapper;
 import com.kama.jchatmind.mapper.AgentTaskMapper;
+import com.kama.jchatmind.mapper.ChatSessionMapper;
 import com.kama.jchatmind.mapper.ToolCallLogMapper;
 import com.kama.jchatmind.model.entity.AgentStep;
 import com.kama.jchatmind.model.entity.AgentTask;
@@ -36,6 +37,23 @@ class AgentTaskLogServiceImplTest {
     private AgentStepMapper agentStepMapper;
     @Mock
     private ToolCallLogMapper toolCallLogMapper;
+    @Mock
+    private ChatSessionMapper chatSessionMapper;
+
+    @Test
+    void startTaskLocksSessionRowBeforeRunningCheck() {
+        when(chatSessionMapper.selectByIdForUpdate("session-1"))
+                .thenReturn(AgentTaskLogServiceImplTestSession.session());
+        AgentTaskLogServiceImpl service = new AgentTaskLogServiceImpl(
+                agentTaskMapper, agentStepMapper, toolCallLogMapper, chatSessionMapper,
+                new ObjectMapper(), new AgentObservabilityProperties());
+
+        service.startTask("session-1", "agent-1", "message-1", "goal");
+
+        verify(chatSessionMapper).selectByIdForUpdate("session-1");
+        verify(agentTaskMapper).selectActiveRunningBySessionId(any(), any());
+        verify(agentTaskMapper).insert(any(AgentTask.class));
+    }
 
     @Test
     void startTaskAndFinishTaskWriteEnhancedFields() {
@@ -60,7 +78,7 @@ class AgentTaskLogServiceImplTest {
         service.finishTask("task-1", AgentTaskLogService.FINISH_REASON_NO_TOOL_CALLS, 2, 0);
 
         ArgumentCaptor<AgentTask> updateCaptor = ArgumentCaptor.forClass(AgentTask.class);
-        verify(agentTaskMapper).updateById(updateCaptor.capture());
+        verify(agentTaskMapper).updateTerminalIfRunning(updateCaptor.capture());
         AgentTask update = updateCaptor.getValue();
         assertEquals(AgentTaskLogService.STATUS_SUCCESS, update.getStatus());
         assertEquals(AgentTaskLogService.FINISH_REASON_NO_TOOL_CALLS, update.getFinishReason());
@@ -201,7 +219,7 @@ class AgentTaskLogServiceImplTest {
         ArgumentCaptor<AgentStep> stepUpdate = ArgumentCaptor.forClass(AgentStep.class);
         ArgumentCaptor<AgentTask> taskUpdate = ArgumentCaptor.forClass(AgentTask.class);
         verify(agentStepMapper).updateById(stepUpdate.capture());
-        verify(agentTaskMapper).updateById(taskUpdate.capture());
+        verify(agentTaskMapper).updateTerminalIfRunning(taskUpdate.capture());
         assertEquals(AgentTaskLogService.STATUS_FAILED, stepUpdate.getValue().getStatus());
         assertEquals(AgentTaskLogService.STATUS_FAILED, taskUpdate.getValue().getStatus());
         assertEquals(AgentTaskLogService.FINISH_REASON_ERROR, stepUpdate.getValue().getFinishReason());
@@ -263,7 +281,7 @@ class AgentTaskLogServiceImplTest {
         ArgumentCaptor<AgentTask> taskUpdate = ArgumentCaptor.forClass(AgentTask.class);
         ArgumentCaptor<AgentStep> stepUpdate = ArgumentCaptor.forClass(AgentStep.class);
         ArgumentCaptor<ToolCallLog> toolUpdate = ArgumentCaptor.forClass(ToolCallLog.class);
-        verify(agentTaskMapper).updateById(taskUpdate.capture());
+        verify(agentTaskMapper).updateTerminalIfRunning(taskUpdate.capture());
         verify(agentStepMapper).updateById(stepUpdate.capture());
         verify(toolCallLogMapper).updateById(toolUpdate.capture());
         assertEquals(AgentTaskLogService.STATUS_CRASHED, taskUpdate.getValue().getStatus());
@@ -275,5 +293,11 @@ class AgentTaskLogServiceImplTest {
     private AgentTaskLogServiceImpl service() {
         return new AgentTaskLogServiceImpl(agentTaskMapper, agentStepMapper, toolCallLogMapper,
                 new ObjectMapper(), new AgentObservabilityProperties());
+    }
+
+    private static final class AgentTaskLogServiceImplTestSession {
+        private static com.kama.jchatmind.model.entity.ChatSession session() {
+            return com.kama.jchatmind.model.entity.ChatSession.builder().id("session-1").build();
+        }
     }
 }

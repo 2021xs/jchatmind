@@ -19,8 +19,9 @@ public class ChatSessionController {
 
     // 查询所有聊天会话
     @GetMapping("/chat-sessions")
-    public ApiResponse<GetChatSessionsResponse> getChatSessions() {
-        return ApiResponse.success(chatSessionFacadeService.getChatSessions());
+    public ApiResponse<GetChatSessionsResponse> getChatSessions(
+            @RequestParam(value = "channel", required = false) String channel) {
+        return ApiResponse.success(chatSessionFacadeService.getChatSessions(channel));
     }
 
     // 查询单个聊天会话

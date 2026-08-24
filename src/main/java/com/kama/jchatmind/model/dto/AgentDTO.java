@@ -36,6 +36,7 @@ public class AgentDTO {
     @AllArgsConstructor
     public enum ModelType {
         DEEPSEEK_CHAT("deepseek-chat"),
+        GPT_5_5("gpt-5.5"),
         GLM_4_6("glm-4.6");
 
         @JsonValue

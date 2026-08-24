@@ -1,6 +1,12 @@
 HELP.md
 target/
 logs/
+node_modules/
+web-console/node_modules/
+web-console/dist/
+web-console/.env
+web-console/.env.*
+!web-console/.env.example
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
@@ -35,6 +41,8 @@ build/
 .vscode/
 
 src/main/resources/application-dev.yaml
+# Local Spring Boot overrides with API keys, database passwords, and personal runtime settings.
+# Keep this file out of commits; application.yaml imports it with optional:file:./application-local.yaml.
 application-local.yml
 application-local.yaml
 .kiro/
@@ -48,5 +56,9 @@ application-local.yaml
 output.txt
 data/documents/
 .run/
+.playwright-mcp/
 *_secret*
 *_local*
+
+# Internal Codex working objective; never publish as project documentation.
+/docs/codex_goal

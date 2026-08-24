@@ -15,8 +15,20 @@ public interface AgentTaskMapper {
 
     int updateById(AgentTask agentTask);
 
+    int updateTerminalIfRunning(AgentTask agentTask);
+
+    int bindUserMessage(@Param("taskId") String taskId,
+                        @Param("userMessageId") String userMessageId);
+
     AgentTask selectActiveRunningBySessionId(@Param("sessionId") String sessionId,
                                              @Param("staleBefore") LocalDateTime staleBefore);
 
     List<AgentTask> selectStaleRunningBefore(LocalDateTime staleBefore);
+
+    List<AgentTask> selectRecent(@Param("limit") int limit);
+
+    List<AgentTask> selectRecentBySessionId(@Param("sessionId") String sessionId,
+                                            @Param("limit") int limit);
+
+    int deleteBySessionId(@Param("sessionId") String sessionId);
 }

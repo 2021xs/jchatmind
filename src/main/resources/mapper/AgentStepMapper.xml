@@ -89,6 +89,21 @@
         WHERE id = CAST(#{id} AS uuid)
     </update>
 
+    <update id="updateTerminalIfRunning" parameterType="com.kama.jchatmind.model.entity.AgentStep">
+        UPDATE agent_step
+        <set>
+            <if test="status != null">status = #{status},</if>
+            <if test="outputSummary != null">output_summary = #{outputSummary},</if>
+            <if test="latencyMs != null">latency_ms = #{latencyMs},</if>
+            <if test="finishReason != null">finish_reason = #{finishReason},</if>
+            <if test="finishedAt != null">finished_at = #{finishedAt},</if>
+            <if test="updatedAt != null">updated_at = #{updatedAt},</if>
+            <if test="errorMessage != null">error_message = #{errorMessage},</if>
+        </set>
+        WHERE id = CAST(#{id} AS uuid)
+          AND status = 'RUNNING'
+    </update>
+
     <select id="selectRunningByTaskId" resultMap="BaseResultMap">
         SELECT id,
                task_id,
@@ -111,4 +126,34 @@
         WHERE task_id = CAST(#{taskId} AS uuid)
           AND status = 'RUNNING'
     </select>
+
+    <select id="selectByTaskId" resultMap="BaseResultMap">
+        SELECT id,
+               task_id,
+               step_no,
+               step_type,
+               status,
+               input_summary,
+               output_summary,
+               latency_ms,
+               model_name,
+               llm_latency_ms,
+               input_tokens,
+               output_tokens,
+               finish_reason,
+               started_at,
+               finished_at,
+               updated_at,
+               error_message
+        FROM agent_step
+        WHERE task_id = CAST(#{taskId} AS uuid)
+        ORDER BY step_no ASC, started_at ASC
+    </select>
+
+    <delete id="deleteBySessionId">
+        DELETE FROM agent_step
+        WHERE task_id IN (
+            SELECT id FROM agent_task WHERE session_id = CAST(#{sessionId} AS uuid)
+        )
+    </delete>
 </mapper>

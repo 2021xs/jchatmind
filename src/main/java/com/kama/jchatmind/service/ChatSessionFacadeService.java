@@ -9,6 +9,8 @@ import com.kama.jchatmind.model.response.GetChatSessionsResponse;
 public interface ChatSessionFacadeService {
     GetChatSessionsResponse getChatSessions();
 
+    GetChatSessionsResponse getChatSessions(String channel);
+
     GetChatSessionResponse getChatSession(String chatSessionId);
 
     GetChatSessionsResponse getChatSessionsByAgentId(String agentId);

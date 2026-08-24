@@ -13,6 +13,8 @@ public class CodeEvidenceCandidateCard {
     private String symbolName;
     private String apiPath;
     private String httpMethod;
+    private Integer startLine;
+    private Integer endLine;
     private String metadataSummary;
     private String snippet;
     private String evidenceRole;

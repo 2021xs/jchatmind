@@ -2,6 +2,7 @@ package com.kama.jchatmind.converter;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kama.jchatmind.model.common.ChatSessionChannel;
 import com.kama.jchatmind.model.dto.ChatSessionDTO;
 import com.kama.jchatmind.model.entity.ChatSession;
 import com.kama.jchatmind.model.request.CreateChatSessionRequest;
@@ -10,6 +11,11 @@ import com.kama.jchatmind.model.vo.ChatSessionVO;
 import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.util.Assert;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @Component
 @AllArgsConstructor
@@ -39,8 +45,8 @@ public class ChatSessionConverter {
                 .id(chatSession.getId())
                 .agentId(chatSession.getAgentId())
                 .title(chatSession.getTitle())
-                .metadata(chatSession.getMetadata() != null 
-                        ? objectMapper.readValue(chatSession.getMetadata(), ChatSessionDTO.MetaData.class) 
+                .metadata(StringUtils.hasText(chatSession.getMetadata())
+                        ? objectMapper.readValue(chatSession.getMetadata(), ChatSessionDTO.MetaData.class)
                         : null)
                 .createdAt(chatSession.getCreatedAt())
                 .updatedAt(chatSession.getUpdatedAt())
@@ -52,6 +58,11 @@ public class ChatSessionConverter {
                 .id(dto.getId())
                 .agentId(dto.getAgentId())
                 .title(dto.getTitle())
+                .channel(resolveChannel(dto.getMetadata()))
+                .repoId(dto.getMetadata() == null ? null : dto.getMetadata().getRepoId())
+                .model(dto.getMetadata() == null ? null : dto.getMetadata().getModel())
+                .createdAt(dto.getCreatedAt())
+                .updatedAt(dto.getUpdatedAt())
                 .build();
     }
 
@@ -66,6 +77,7 @@ public class ChatSessionConverter {
         return ChatSessionDTO.builder()
                 .agentId(request.getAgentId())
                 .title(request.getTitle())
+                .metadata(toMetadata(request))
                 .build();
     }
 
@@ -76,5 +88,40 @@ public class ChatSessionConverter {
         if (request.getTitle() != null) {
             dto.setTitle(request.getTitle());
         }
+    }
+
+    private ChatSessionDTO.MetaData toMetadata(CreateChatSessionRequest request) {
+        if (!StringUtils.hasText(request.getChannel())
+                && !StringUtils.hasText(request.getRepoId())
+                && CollectionUtils.isEmpty(request.getMetadata())) {
+            return null;
+        }
+        Map<String, Object> merged = new LinkedHashMap<>();
+        if (!CollectionUtils.isEmpty(request.getMetadata())) {
+            merged.putAll(request.getMetadata());
+        }
+        if (StringUtils.hasText(request.getChannel())) {
+            merged.put("channel", ChatSessionChannel.normalize(request.getChannel()));
+        } else if (merged.get("channel") instanceof String metadataChannel
+                && StringUtils.hasText(metadataChannel)) {
+            merged.put("channel", ChatSessionChannel.normalize(metadataChannel));
+        }
+        if (StringUtils.hasText(request.getRepoId())) {
+            merged.put("repoId", request.getRepoId().trim());
+        }
+        if (StringUtils.hasText(request.getModel())) {
+            merged.put("model", request.getModel().trim());
+        }
+        if (ChatSessionChannel.WEB_CONSOLE.name().equals(merged.get("channel"))) {
+            merged.putIfAbsent("source", "web-console");
+        }
+        return objectMapper.convertValue(merged, ChatSessionDTO.MetaData.class);
+    }
+
+    private String resolveChannel(ChatSessionDTO.MetaData metadata) {
+        if (metadata == null || !StringUtils.hasText(metadata.getChannel())) {
+            return ChatSessionChannel.LEGACY.name();
+        }
+        return ChatSessionChannel.normalize(metadata.getChannel());
     }
 }

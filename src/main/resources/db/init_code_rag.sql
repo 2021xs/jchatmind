@@ -12,9 +12,18 @@ CREATE TABLE IF NOT EXISTS code_repository (
     root_path text NOT NULL,
     language varchar(64) NOT NULL DEFAULT 'java',
     status varchar(32) NOT NULL,
+    source_type varchar(32) NOT NULL DEFAULT 'LOCAL',
+    remote_url text,
+    branch varchar(255),
+    commit_sha varchar(128),
     created_at timestamp NOT NULL,
     updated_at timestamp NOT NULL
 );
+
+ALTER TABLE code_repository ADD COLUMN IF NOT EXISTS source_type varchar(32) NOT NULL DEFAULT 'LOCAL';
+ALTER TABLE code_repository ADD COLUMN IF NOT EXISTS remote_url text;
+ALTER TABLE code_repository ADD COLUMN IF NOT EXISTS branch varchar(255);
+ALTER TABLE code_repository ADD COLUMN IF NOT EXISTS commit_sha varchar(128);
 
 CREATE TABLE IF NOT EXISTS code_file (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

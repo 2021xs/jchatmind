@@ -1,20 +1,24 @@
 package com.kama.jchatmind.agent.tools;
 
+import com.kama.jchatmind.agent.TaskEvidenceState;
 import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.model.dto.CodeAnswerEvidenceResult;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
 import com.kama.jchatmind.tool.ToolRegistry;
 import org.springframework.stereotype.Component;
+import org.springframework.ai.chat.model.ToolContext;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 @Component
+@Slf4j
 public class CodeSearchTools implements Tool {
     private final CodeRagAnswerEvidenceService answerEvidenceService;
     private final ToolRegistry toolRegistry;
     private final CodeRagProperties codeRagProperties;
+    private final CodeSearchEvidenceFormatter evidenceFormatter = new CodeSearchEvidenceFormatter();
 
     public CodeSearchTools(CodeRagAnswerEvidenceService answerEvidenceService,
                            ToolRegistry toolRegistry,
@@ -33,47 +37,54 @@ public class CodeSearchTools implements Tool {
             name = "searchProjectCode",
             description = "Search imported Java/Spring Boot backend code by repoId and natural language query. Returns selected code evidence, file paths, line ranges, symbols, API paths and scores."
     )
+    public String searchProjectCode(String repoId, String query, ToolContext toolContext) {
+        CodeAnswerEvidenceResult evidenceResult = answerEvidenceService.retrieve(repoId, query);
+        List<CodeSearchResult> results = evidenceResult.getSelectedEvidence();
+        TaskEvidenceState.SearchObservation observation = observeEvidence(toolContext, repoId, query, results);
+        String result;
+        if (results == null || results.isEmpty()) {
+            result = "No related code evidence found. This tool provides semantic retrieval over imported code, not an exact static call graph.";
+        } else {
+            result = evidenceFormatter.format(results);
+        }
+        if (observation != null) {
+            Object taskId = toolContext.getContext().get(TaskEvidenceState.TASK_ID_TOOL_CONTEXT_KEY);
+            log.info("Code evidence novelty: taskId={}, searchCallNumber={}, query={}, "
+                            + "returnedEvidenceCount={}, newEvidenceCount={}, duplicateEvidenceCount={}, "
+                            + "consecutiveNoNoveltySearches={}, guardActive={}",
+                    taskId,
+                    observation.searchCallNumber(),
+                    query,
+                    observation.returnedEvidenceCount(),
+                    observation.newEvidenceCount(),
+                    observation.duplicateEvidenceCount(),
+                    observation.consecutiveNoNoveltySearches(),
+                    observation.guardActive());
+            result = observation.toToolFeedback() + "\n\n" + result;
+        }
+        return toolRegistry.truncateResult(getName(), result);
+    }
+
     public String searchProjectCode(String repoId, String query) {
         CodeAnswerEvidenceResult evidenceResult = answerEvidenceService.retrieve(repoId, query);
         List<CodeSearchResult> results = evidenceResult.getSelectedEvidence();
         if (results == null || results.isEmpty()) {
             return "No related code evidence found. This tool provides semantic retrieval over imported code, not an exact static call graph.";
         }
-        StringBuilder sb = new StringBuilder();
-        sb.append("Selected code evidence for answering:\n");
-        sb.append("rawCandidateCount: ").append(evidenceResult.getRawCount())
-                .append(", selectedCount: ").append(results.size()).append('\n');
-        if (codeRagProperties.getAnswerEvidence().isIncludeSelectorDebug()) {
-            sb.append("selectorFallback: ").append(evidenceResult.isFallback())
-                    .append(", selectorJsonParseOk: ").append(evidenceResult.isJsonParseOk())
-                    .append(", selectorLatencyMs: ").append(evidenceResult.getSelectorLatencyMs())
-                    .append(", answerType: ").append(nullToEmpty(evidenceResult.getAnswerType())).append('\n');
-            sb.append("selectorReason: ").append(nullToEmpty(evidenceResult.getSelectorReason())).append("\n\n");
-        } else {
-            sb.append('\n');
+        return toolRegistry.truncateResult(getName(), evidenceFormatter.format(results));
+    }
+
+    private TaskEvidenceState.SearchObservation observeEvidence(ToolContext toolContext,
+                                                                String repoId,
+                                                                String query,
+                                                                List<CodeSearchResult> results) {
+        if (toolContext == null) {
+            return null;
         }
-        sb.append(results.stream()
-                .map(this::formatResult)
-                .collect(Collectors.joining("\n\n")));
-        return toolRegistry.truncateResult(getName(), sb.toString());
-    }
-
-    private String formatResult(CodeSearchResult result) {
-        String lineRange = result.getStartLine() == null ? "" : result.getStartLine() + "-" + result.getEndLine();
-        return "[code snippet]\n"
-                + "filePath: " + nullToEmpty(result.getFilePath()) + "\n"
-                + "lineRange: " + lineRange + "\n"
-                + "fileType: " + nullToEmpty(result.getFileType()) + "\n"
-                + "chunkType: " + nullToEmpty(result.getChunkType()) + "\n"
-                + "symbolName: " + nullToEmpty(result.getSymbolName()) + "\n"
-                + "apiPath: " + nullToEmpty(result.getApiPath()) + "\n"
-                + "httpMethod: " + nullToEmpty(result.getHttpMethod()) + "\n"
-                + "score: " + (result.getScore() == null ? "" : result.getScore()) + "\n"
-                + "metadata: " + nullToEmpty(result.getMetadata()) + "\n"
-                + "contentPreview:\n" + nullToEmpty(result.getContentPreview());
-    }
-
-    private String nullToEmpty(String value) {
-        return value == null ? "" : value;
+        Object state = toolContext.getContext().get(TaskEvidenceState.TOOL_CONTEXT_KEY);
+        if (!(state instanceof TaskEvidenceState taskEvidenceState)) {
+            return null;
+        }
+        return taskEvidenceState.observeSearch(repoId, query, results);
     }
 }

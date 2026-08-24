@@ -1,245 +1,281 @@
 # JChatMind
 
-JChatMind is a Java backend Agent and Code RAG project built with Spring Boot and Spring AI. It focuses on multi-turn Agent execution, tool calling, SSE observability, document retrieval, code repository import, pgvector-based semantic search, and explainable Code RAG evidence selection.
+JChatMind is a Java backend Agent and Code RAG project built with Spring Boot and
+Spring AI. It demonstrates multi-turn Agent execution, tool calling, durable Final
+delivery, SSE observability, document retrieval, bounded GitHub repository import,
+pgvector code search, and answer-time evidence selection.
 
-The current baseline is designed for engineering demonstration and interview discussion: the important paths are runnable, testable, and documented in code through focused tests.
+The repository is maintained as an engineering and interview artifact: public
+claims below distinguish deterministic tests, provider benchmarks, and individual
+case observations.
 
 ## Highlights
 
-- Spring Boot backend for Agent chat workflows.
-- Spring AI integration with configurable chat models.
-- SSE execution events for Agent progress and tool results.
-- Tool registry and runtime permission checks.
-- Tool execution logs with task, step, and tool-call records.
-- Document RAG and code repository import.
-- Code chunk parsing for Java, Controller APIs, Mapper methods, SQL files, and MyBatis XML statements.
-- Code RAG retrieval through embeddings and PostgreSQL pgvector.
-- Answer-time evidence selection for the Agent `searchProjectCode` tool.
-- SQL safety validation for the Agent database query tool using JSqlParser AST checks.
+- Protocol-aware Agent memory, context compression, and tool-call lifecycle.
+- Tool registry plus runtime preflight and permission checks.
+- Validation-gated Final synthesis with PostgreSQL transactional completion.
+- JavaParser and MyBatis XML code indexing with pgvector semantic retrieval.
+- LLM evidence selector behind the Agent `searchProjectCode` tool.
+- JSqlParser SQL validation plus a mandatory independent read-only datasource.
+- Web Console session/repository/model selection, cancellation, traces, and SSE
+  reconciliation.
 
-## Tech Stack
+## Technology
 
-- Java 17+
-- Spring Boot
-- Spring AI
-- MyBatis
-- PostgreSQL
-- pgvector
-- Redis
-- SSE
+- Java 17+ (release verification uses JDK 21)
+- Spring Boot 3.5.x and Spring AI 1.1.x (exact versions: `pom.xml`)
+- Maven Wrapper
+- PostgreSQL, pgvector, MyBatis, and Redis
 - Ollama-compatible embedding endpoint
-- JSqlParser
-- JavaParser
+- SSE, JSqlParser, and JavaParser
+- React 19, TypeScript, Vite, and npm
 
-## Architecture Overview
+The frontend follows Vite's declared Node engine (`^20.19.0 || >=22.12.0`) and
+uses the committed `package-lock.json`; this release was verified with Node
+24.14.0 and npm 11.9.0. pnpm is not used by this repository.
 
-### Agent Tool Execution
+## Runtime Architecture
+
+### Agent and tools
 
 ```text
-Client
--> Agent run
--> Spring AI chat model
--> tool call
+Client / Chat / Feishu
+-> JChatMindFactory
+-> JChatMind planning request
 -> ToolExecutionService
--> ToolRegistry permission check
+-> ToolRegistry + runtime preflight
 -> tool implementation
 -> task / step / tool-call logs
--> SSE events
+-> stage-level SSE events
 ```
 
-### Code RAG Main Path
+An Agent's `temperature` and `topP` settings apply to its Planning requests. An
+unset value remains absent so the selected Provider can use its own default. Model
+routing continues through `ChatClientRegistry`. Final synthesis has a separate,
+fixed safety contract and does not inherit these Planning sampling settings.
+
+### Code RAG production path
 
 ```text
-Agent searchProjectCode
--> CodeRagAnswerEvidenceService.retrieve
--> CodeSearchService.search(repoId, query, rawTopK)
--> pgvector RAW_VECTOR candidates
--> symbol metadata supplement
+JavaParser / MyBatis XML indexing
+-> Embedding
+-> PostgreSQL pgvector RAW_VECTOR candidates
 -> CodeEvidenceCandidateCard
--> CodeLlmEvidenceSelector.select
--> selected CodeSearchResult evidence
+-> LLM evidence selector
+-> selected evidence
 -> Agent tool result
 ```
 
-The REST code search endpoint is kept as a raw retrieval/debug path. The Agent tool uses the answer-time evidence path.
+`CodeChunkParserImpl` extracts Java constants, Controller API paths, Mapper SQL ids,
+and MyBatis XML metadata into `code_chunk.metadata` during import. That metadata is
+available for explanation and future retrieval work; the current production
+`CodeSearchService` does **not** add a metadata-symbol supplement. The REST search
+endpoint remains a raw retrieval/debug path, while the Agent uses
+`CodeRagAnswerEvidenceService.retrieve(repoId, query)`.
 
-## Code RAG Scope
+### Final synthesis and SSE
 
-JChatMind intentionally implements lightweight Code RAG rather than a full IDE-level symbol solver.
+The Final delivery design evolved through three stages:
 
-During repository import, `CodeChunkParserImpl` extracts structured chunk metadata into `code_chunk.metadata`, including Java constants, Controller API paths, Mapper method SQL ids, and MyBatis XML statement metadata. Retrieval uses pgvector candidates plus metadata supplement, then asks the LLM selector to choose final evidence.
+1. Stage-level SSE execution events.
+2. Direct display of Final Provider token chunks.
+3. The current validation-gated buffered replay.
+
+In the current path, the Provider still uses streaming, but its chunks are buffered
+on the backend for the entire attempt. `FinalContextCompiler` builds the isolated
+request with no tools; `FinalOutputValidator` validates the complete answer; and a
+single attempt budget also covers corrective retry. Only a valid answer enters
+`FinalCompletionService`, which commits the Final AssistantMessage,
+`FINAL_SYNTHESIS`/`FINISH` steps, and Task `SUCCESS` in one PostgreSQL transaction.
+TOKEN replay begins only after commit.
+
+`JCHATMIND_WEB_CONSOLE_FINAL_STREAMING_ENABLED=false` disables post-commit TOKEN
+replay/lifecycle events; it does not disable compilation, validation, retry, or the
+durable transaction. This is not immediate Provider-token display and the project
+does not implement an Outbox. PostgreSQL is the source of truth, so an SSE client
+that disconnects after commit recovers the Final by reloading the session.
 
 ## Database Tool Safety
 
-The Agent database query tool is constrained for read-only diagnostics:
+The Agent SQL tool uses two enforced layers:
 
-- SQL is parsed with JSqlParser.
-- Only one `SELECT` statement is allowed.
-- Multi-statement SQL is rejected.
-- Write and DDL statements are rejected by AST type.
-- `SELECT INTO OUTFILE` / `DUMPFILE` and `SELECT ... FOR UPDATE` are rejected.
-- Missing `LIMIT` is capped.
-- Oversized `LIMIT` is rewritten to the configured maximum.
-- JDBC `queryTimeout`, `maxRows`, and `fetchSize` are configured.
-- Large cell values and tool results are truncated.
+1. JSqlParser validates exactly one read-only `SELECT`, rejects write/DDL,
+   multi-statement, `SELECT INTO`/file output, and locking queries, and bounds
+   `LIMIT`.
+2. `databaseToolJdbcTemplate` uses the independent
+   `jchatmind.database-tool.datasource` account. It never falls back to the main
+   application datasource.
 
-Production deployments should still use a read-only database account for defense in depth.
-
-## Requirements
-
-- JDK 17 or newer. Local validation was run with JDK 21.
-- Maven wrapper from this repository.
-- PostgreSQL with pgvector for Code RAG storage and search.
-- A chat model provider configured through Spring AI.
-- An embedding endpoint compatible with the configured Ollama embedding API.
+Runtime preflight is applied before execution. JDBC also enforces query timeout,
+`maxRows`, and `fetchSize`; cell values and the complete tool result are truncated
+to configured bounds. Create the PostgreSQL read-only account separately as
+described in `docs/database_tool_readonly_user.md`.
 
 ## Configuration
 
-The default configuration lives in:
+The tracked defaults live in `src/main/resources/application.yaml`. Copy values
+from `.env.example` into the process environment or use the ignored root
+`application-local.yaml` for local secrets. Never commit real credentials.
+
+Important configuration groups are:
+
+- `POSTGRES_*`: main business datasource.
+- `JCHATMIND_DB_READONLY_*`: mandatory SQL-tool datasource/account.
+- `ZHIPUAI_*`, `DEEPSEEK_OFFICIAL_*`, `GPT_COMPATIBLE_*`: chat Providers.
+- `OLLAMA_BASE_URL` and `OLLAMA_EMBEDDING_MODEL`: embedding endpoint/model.
+- `CODE_RAG_ALLOWED_ROOTS`: comma-separated canonical roots allowed for local
+  repository scans.
+- `JCHATMIND_GITHUB_WORKSPACE_ROOT`: parent directory for GitHub clones.
+
+Both repository settings use portable defaults under `./workspace`; production
+deployments should set explicit canonical paths. GitHub imports use the lower-case
+canonical identity `{owner}--{repository}`. For example, RuoYi-Cloud is stored as
+`<workspace>/yangzongzhuan--ruoyi-cloud`, alongside a local directory such as
+`<workspace>/FlashDeal`. An existing target is never overwritten or reused.
+
+## Database Initialization
+
+Provide PostgreSQL with pgvector, then execute the tracked scripts in this order:
 
 ```text
-src/main/resources/application.yaml
+1. src/main/resources/db/init_code_rag.sql
+2. src/main/resources/db/init_agent_observability.sql
 ```
 
-Use environment variables for secrets and local paths. Do not commit real credentials.
-
-Common environment variables:
-
-```env
-POSTGRES_URL=jdbc:postgresql://localhost:5432/jchatmind
-POSTGRES_USER=your_db_user
-POSTGRES_PASSWORD=your_db_password
-
-DEEPSEEK_OFFICIAL_API_KEY=your-api-key
-DEEPSEEK_OFFICIAL_BASE_URL=https://api.deepseek.com
-DEEPSEEK_OFFICIAL_MODEL=deepseek-chat
-
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_EMBEDDING_MODEL=bge-m3
-```
-
-For local examples, start from:
-
-```text
-.env.example
-```
-
-## Database Setup
-
-Initialize Code RAG and Agent observability tables with:
-
-```text
-src/main/resources/db/init_code_rag.sql
-src/main/resources/db/init_agent_observability.sql
-```
-
-The project expects PostgreSQL and pgvector for vector search. Make sure the `vector` extension is available before importing repositories for Code RAG.
+The first script enables `vector` and creates repository/file/chunk storage. The
+second creates Agent task, step, tool-call, and message observability storage. The
+SQL-tool account/grants are intentionally not created during application startup.
 
 ## Run Locally
 
-Set Java first on Windows PowerShell:
+On Windows PowerShell, select JDK 21 (Java 17+ is supported):
 
 ```powershell
 $env:JAVA_HOME='C:\Program Files\Java\jdk-21'
 $env:PATH="$env:JAVA_HOME\bin;$env:PATH"
 ```
 
-Compile:
+Build and start the backend with the Maven Wrapper:
 
 ```powershell
-.\mvnw.cmd -DskipTests compile
-```
-
-Run the application:
-
-```powershell
+.\mvnw.cmd package
 .\mvnw.cmd spring-boot:run
 ```
 
-Health check:
+Spring Boot uses port `8080` unless `server.port` is overridden. Useful endpoints
+include `GET /health`, `GET /api/tools`, `GET /api/agents`,
+`GET /api/code-repositories`, and `GET /sse/connect/{chatSessionId}`.
 
-```text
-GET /health
+Start the frontend in another terminal:
+
+```powershell
+cd web-console
+npm ci
+npm run dev
 ```
 
-## Useful API Entrypoints
-
-- `GET /health`
-- `GET /api/tools`
-- `GET /sse/connect/{chatSessionId}`
-- `GET /api/agents`
-- `POST /api/agents`
-- `GET /api/chat-sessions`
-- `POST /api/chat-sessions`
-- `GET /api/knowledge-bases`
-- `POST /api/knowledge-bases`
-- `POST /api/documents/upload`
-- `POST /api/code-repositories/import`
-- `GET /api/code-repositories`
-- `GET /api/code-repositories/{repoId}/search`
+Vite proxies `/api` and `/sse` to `http://127.0.0.1:8080` by default. Override
+`VITE_JCHATMIND_DEV_PROXY_TARGET` in an ignored frontend `.env` when necessary.
 
 ## Tests
 
-Run focused baseline tests before changing core behavior:
-
-```powershell
-.\mvnw.cmd "-Dtest=CodeChunkParserImplTest,CodeChunkEmbeddingMetadataSanitizerTest,CodeChunkEmbeddingTextFormatterTest,CodeChunkEmbeddingTextBuilderImplTest" test
-.\mvnw.cmd "-Dtest=SqlSafetyValidatorTest,ToolSafetyPolicyTest" test
-.\mvnw.cmd "-Dtest=CodeRagAnswerEvidenceServiceImplTest,CodeRepositoryServiceImplTest,CodeSearchServiceImplTest" test
-.\mvnw.cmd "-Dtest=InMemoryToolRegistryTest,AgentTaskLogServiceImplTest,JChatMindRealRunObservabilityTest,ConversationContextCompressorTest" test
-```
-
-Run all tests:
+The default backend command uses deterministic/mock contracts and does not call a
+real LLM, embedding endpoint, GitHub, or MCP server:
 
 ```powershell
 .\mvnw.cmd test
 ```
 
-Some integration tests require external services such as PostgreSQL, pgvector, an embedding endpoint, and a configured chat model.
+PostgreSQL transaction tests use Testcontainers and require Docker; they are
+skipped with an explicit condition when Docker is unavailable. Historical-database
+diagnostics and real Provider diagnostics are separately property-gated. The
+context-sanitization default fixture is self-contained and does not load personal
+session/task data or `application-local.yaml`.
 
-## Code RAG Evaluation
+Representative focused commands:
 
-The final Code RAG evaluation uses real retrieval and evidence selection:
+```powershell
+.\mvnw.cmd "-Dtest=FinalCompletionTransactionIntegrationTest" test
+.\mvnw.cmd "-Dtest=JChatMindFinalStreamingTest,JChatMindFinalToolIsolationTest,JChatMindFinalContextSanitizationTest" test
+.\mvnw.cmd "-Dtest=SqlSafetyValidatorTest,ToolSafetyPolicyTest,DatabaseToolDataSourceConfigTest" test
+```
+
+Frontend deterministic assertions compile their source dependencies themselves:
+
+```powershell
+cd web-console
+npm run build
+npm test
+```
+
+Provider benchmarks and the real Code RAG evaluation are opt-in diagnostics. For
+example, a configured evaluation repository can be supplied explicitly:
 
 ```powershell
 .\mvnw.cmd "-Dtest=CodeRagFinalEvaluationTest" "-Deval.repoId=<repoId>" test
 ```
 
-Or use the latest imported repository:
+## Verified Evaluation Vocabulary
 
-```powershell
-.\mvnw.cmd "-Dtest=CodeRagFinalEvaluationTest" "-Deval.autoRepo=true" "-Deval.retryCount=3" test
-```
+These three result sets have different inputs and must not be merged.
 
-The eval dataset contains 80 cases:
+### Selector transport latency benchmark
 
-- 40 BASIC
-- 20 MEDIUM
-- 20 HARD
+The 40-call benchmark uses 4 fixed queries × 2 clients × 5 runs per client:
 
-Metrics such as `selected@1`, `selected@3`, and `selected@5` measure selected evidence hit rate, not final natural-language answer quality.
+| Metric | Baseline | Current |
+| --- | ---: | ---: |
+| Mean | 13.81 s | 0.81 s |
+| P50 | 6.45 s | 0.78 s |
+| P95 | 30.01 s | 1.07 s |
 
-## Development Notes
+### Selector evidence quality benchmark
 
-- Keep changes small and reversible.
-- Do not bypass embedding, pgvector, or selector paths to fake evaluation metrics.
-- Do not commit real keys, passwords, private directories, or local-only config.
-- Prefer focused tests for parser, retrieval, tool safety, and observability changes.
-- Use a read-only database account for Agent database query tools.
+The quality comparison uses FlashDeal, frozen candidates, 80 cases, and 160 total
+selector calls (baseline plus current):
+
+| Metric | Baseline | Current |
+| --- | ---: | ---: |
+| selected@1 | 59/80 | 59/80 |
+| selected@3 | 67/80 | 74/80 |
+| selected@5 | 70/80 | 75/80 |
+| timeout | 23/80 | 0/80 |
+
+`selected@K` measures evidence selection, not final natural-language answer
+accuracy. The timeout change reflects the combined transport, retry, and thinking
+strategy; it is not attributed to a single switch. Latencies from this 80-case run
+are not substituted for the separate 40-call benchmark.
+
+### Planning case observation
+
+For the fixed query “秒杀脚本是怎么样的”, one baseline run and one current run
+observed `searchProjectCode` calls fall from 9 to 3, `seckill.lua` occurrences from
+8 to 1, and total latency from 313824 ms to 39714 ms. This is a case study, not a
+statistically stable benchmark. The live run did not trigger Hard Guard because
+each search introduced new evidence; deterministic tests verify the Guard itself.
+
+Final transaction atomicity and rollback are verified by PostgreSQL Testcontainers.
+A separate single E2E artifact observed 798 TOKEN events / 1610 characters and an
+identical SHA for aggregated TOKEN text and the durable DB Final; that observation
+is not presented as an aggregate benchmark.
+
+## Web Console Contract
+
+The console persists session `repoId` and model selection through the backend,
+supports task cancellation and trace inspection, and scopes SSE reducer state to
+the active task/run. Provisional stream state is reconciled with durable messages.
+Because Final text is published after commit, session reload—not an in-memory token
+buffer—is the recovery path after disconnect.
 
 ## Repository Hygiene
 
-Ignored local artifacts include:
-
-- `target/`
-- `logs/`
-- `.env`
-- `.env.*`
-- `application-local.yml`
-- `application-local.yaml`
-- `.idea/`
-- `.kiro/`
+Ignored local artifacts include `target/`, `web-console/dist/`, `node_modules/`,
+logs, runtime files, `.env*` except `.env.example`, `application-local.yaml`, IDE
+settings, and the internal `docs/codex_goal`. Generated benchmark/E2E responses are
+not release inputs unless separately reviewed and deliberately published as a
+sanitized report.
 
 ## License
 
-No open-source license file has been added yet. Add a `LICENSE` file before treating this repository as formally licensed open-source software.
+No open-source license file has been added. Do not treat the repository as formally
+licensed open source until a license is chosen and committed.

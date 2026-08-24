@@ -2,6 +2,9 @@ package com.kama.jchatmind.service.impl;
 
 import com.kama.jchatmind.agent.AgentEventPublisher;
 import com.kama.jchatmind.message.AgentSseEvent;
+import com.kama.jchatmind.mcp.audit.McpToolAuditLogger;
+import com.kama.jchatmind.mcp.registry.ExternalMcpToolRegistration;
+import com.kama.jchatmind.mcp.registry.ExternalMcpToolRegistry;
 import com.kama.jchatmind.model.entity.ToolCallLog;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ToolExecutionService;
@@ -16,6 +19,7 @@ import com.kama.jchatmind.tool.ToolUnknownException;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
@@ -32,12 +36,77 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
     private final AgentTaskLogService agentTaskLogService;
     private final AgentEventPublisher agentEventPublisher;
     private final ToolFailureClassifier toolFailureClassifier;
+    private final ObjectProvider<ExternalMcpToolRegistry> externalMcpToolRegistryProvider;
+    private final ObjectProvider<McpToolAuditLogger> mcpToolAuditLoggerProvider;
 
     @Override
     public ToolExecutionRecord beforeToolCall(ToolExecutionContext context, AssistantMessage.ToolCall toolCall) {
         String toolCallId = resolveToolCallId(toolCall);
         boolean argumentTruncated = toolCall.arguments() != null && toolCall.arguments().length() > MAX_ARGUMENT_PREVIEW;
         ToolDefinition definition = toolRegistry.find(toolCall.name()).orElse(null);
+        ExternalMcpToolRegistration externalMcpTool = resolveAllowedExternalMcpTool(toolCall.name(), context);
+        if (definition == null && externalMcpTool != null) {
+            ToolCallLog toolCallLog = agentTaskLogService.startToolCall(
+                    context.getTaskId(),
+                    context.getStepId(),
+                    toolCall.name(),
+                    toolCall.name(),
+                    toolCallId,
+                    toolCall.arguments(),
+                    argumentTruncated
+            );
+            ToolExecutionRecord record = ToolExecutionRecord.builder()
+                    .toolCallId(toolCallId)
+                    .actualToolName(toolCall.name())
+                    .canonicalToolName(toolCall.name())
+                    .toolCallLogId(toolCallLog.getId())
+                    .startedAtMillis(System.currentTimeMillis())
+                    .argumentTruncated(argumentTruncated)
+                    .build();
+            sendEvent(context, AgentSseEvent.Type.TOOL_CALL_START, payload(
+                    "taskId", context.getTaskId(),
+                    "stepId", context.getStepId(),
+                    "toolCallLogId", toolCallLog.getId(),
+                    "toolCallId", record.getToolCallId(),
+                    "toolName", toolCall.name(),
+                    "actualToolName", toolCall.name(),
+                    "status", AgentTaskLogService.STATUS_RUNNING,
+                    "argumentTruncated", argumentTruncated,
+                    "argumentsPreview", truncate(toolCall.arguments(), MAX_ARGUMENT_PREVIEW)
+            ));
+            return record;
+        }
+        if (definition == null && isKnownButDeniedExternalMcpTool(toolCall.name(), context)) {
+            auditExternalMcpDenied(toolCall.name(), toolCall.arguments(), "MCP_TOOL_POLICY_REJECTED");
+            ToolCallLog blockedLog = agentTaskLogService.startAndFailToolCall(
+                    context.getTaskId(),
+                    context.getStepId(),
+                    toolCall.name(),
+                    toolCall.name(),
+                    toolCallId,
+                    toolCall.arguments(),
+                    argumentTruncated,
+                    "External MCP tool is not allowed in current agent runtime: " + toolCall.name(),
+                    0,
+                    AgentTaskLogService.ERROR_TYPE_POLICY_REJECTED,
+                    true
+            );
+            sendEvent(context, AgentSseEvent.Type.TOOL_CALL_RESULT, payload(
+                    "taskId", context.getTaskId(),
+                    "stepId", context.getStepId(),
+                    "toolCallLogId", blockedLog.getId(),
+                    "toolCallId", toolCallId,
+                    "toolName", toolCall.name(),
+                    "actualToolName", toolCall.name(),
+                    "status", AgentTaskLogService.STATUS_FAILED,
+                    "errorType", AgentTaskLogService.ERROR_TYPE_POLICY_REJECTED,
+                    "blockedByPolicy", true,
+                    "errorMessage", "External MCP tool is not allowed in current agent runtime: " + toolCall.name(),
+                    "latencyMs", 0
+            ));
+            throw new ToolPolicyRejectedException(
+                    "External MCP tool is not allowed in current agent runtime: " + toolCall.name());
+        }
         if (definition == null) {
             ToolCallLog failedLog = agentTaskLogService.startAndFailToolCall(
                     context.getTaskId(),
@@ -131,7 +200,8 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
     public void afterToolSuccess(ToolExecutionContext context, ToolExecutionRecord record, String result) {
         long latencyMs = System.currentTimeMillis() - record.getStartedAtMillis();
         String resultSummary = toolRegistry.truncateResult(record.getCanonicalToolName(), result);
-        boolean resultTruncated = result != null && resultSummary != null && resultSummary.length() < result.length();
+        boolean traceSummaryTruncated = result != null && resultSummary != null && resultSummary.length() < result.length();
+        boolean resultTruncated = record.isRuntimeResultTruncated() || traceSummaryTruncated;
         if (isRejectedByPolicy(resultSummary)) {
             agentTaskLogService.failToolCall(
                     record.getToolCallLogId(),
@@ -166,6 +236,10 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
                 "actualToolName", record.getActualToolName(),
                 "status", AgentTaskLogService.STATUS_SUCCESS,
                 "resultTruncated", resultTruncated,
+                "runtimeResultTruncated", record.isRuntimeResultTruncated(),
+                "originalChars", record.getOriginalResultChars(),
+                "storedChars", record.getStoredResultChars(),
+                "maxResultChars", record.getMaxResultChars(),
                 "resultSummary", resultSummary,
                 "latencyMs", latencyMs
         ));
@@ -217,6 +291,56 @@ public class ToolExecutionServiceImpl implements ToolExecutionService {
 
     private boolean isRejectedByPolicy(String resultSummary) {
         return resultSummary != null && resultSummary.startsWith(REJECTED_BY_POLICY_PREFIX);
+    }
+
+    @Override
+    public void afterToolCancellation(ToolExecutionContext context, ToolExecutionRecord record) {
+        long latencyMs = System.currentTimeMillis() - record.getStartedAtMillis();
+        agentTaskLogService.cancelToolCall(record.getToolCallLogId(), latencyMs);
+        sendEvent(context, AgentSseEvent.Type.TOOL_CALL_RESULT, payload(
+                "taskId", context.getTaskId(),
+                "stepId", context.getStepId(),
+                "toolCallLogId", record.getToolCallLogId(),
+                "toolCallId", record.getToolCallId(),
+                "toolName", record.getCanonicalToolName(),
+                "actualToolName", record.getActualToolName(),
+                "status", AgentTaskLogService.STATUS_CANCELLED,
+                "latencyMs", latencyMs
+        ));
+    }
+
+    private ExternalMcpToolRegistration resolveAllowedExternalMcpTool(String toolName, ToolExecutionContext context) {
+        ExternalMcpToolRegistry registry = externalMcpToolRegistryProvider.getIfAvailable();
+        if (registry == null || !isRuntimeToolName(toolName, context)) {
+            return null;
+        }
+        return registry.findByExposedName(toolName)
+                .filter(registry::canExposeToModel)
+                .orElse(null);
+    }
+
+    private boolean isKnownButDeniedExternalMcpTool(String toolName, ToolExecutionContext context) {
+        ExternalMcpToolRegistry registry = externalMcpToolRegistryProvider.getIfAvailable();
+        return registry != null
+                && isRuntimeToolName(toolName, context)
+                && registry.findByExposedName(toolName).isPresent();
+    }
+
+    private boolean isRuntimeToolName(String toolName, ToolExecutionContext context) {
+        return toolName != null
+                && context.getRuntimeToolNames() != null
+                && context.getRuntimeToolNames().stream().anyMatch(toolName::equals);
+    }
+
+    private void auditExternalMcpDenied(String toolName, String argumentsJson, String errorCode) {
+        McpToolAuditLogger auditLogger = mcpToolAuditLoggerProvider.getIfAvailable();
+        ExternalMcpToolRegistry registry = externalMcpToolRegistryProvider.getIfAvailable();
+        if (auditLogger == null || registry == null) {
+            return;
+        }
+        registry.findByExposedName(toolName)
+                .ifPresent(tool -> auditLogger.denied("preflight-" + System.currentTimeMillis(), tool,
+                        argumentsJson, 0, errorCode));
     }
 
     private Map<String, Object> payload(Object... keyValues) {

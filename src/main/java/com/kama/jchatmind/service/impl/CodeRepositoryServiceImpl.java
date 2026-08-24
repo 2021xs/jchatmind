@@ -8,7 +8,11 @@ import com.kama.jchatmind.mapper.CodeChunkMapper;
 import com.kama.jchatmind.mapper.CodeFileMapper;
 import com.kama.jchatmind.mapper.CodeRepositoryMapper;
 import com.kama.jchatmind.config.CodeRagProperties;
+import com.kama.jchatmind.config.GithubImportProperties;
+import com.kama.jchatmind.github.GithubWorkspaceManager;
+import com.kama.jchatmind.github.GithubWorkspaceManager.PreparedWorkspace;
 import com.kama.jchatmind.model.dto.ImportQualitySummary;
+import com.kama.jchatmind.model.common.RepositorySourceType;
 import com.kama.jchatmind.model.dto.ParsedCodeFile;
 import com.kama.jchatmind.model.entity.CodeChunk;
 import com.kama.jchatmind.model.entity.CodeFile;
@@ -21,7 +25,6 @@ import com.kama.jchatmind.service.CodeChunkParser;
 import com.kama.jchatmind.service.CodeFileScanner;
 import com.kama.jchatmind.service.CodeRepositoryService;
 import com.kama.jchatmind.service.EmbeddingService;
-import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -39,7 +42,6 @@ import java.util.List;
 import java.util.Map;
 
 @Service
-@AllArgsConstructor
 @Slf4j
 public class CodeRepositoryServiceImpl implements CodeRepositoryService {
     private static final String STATUS_IMPORTING = "IMPORTING";
@@ -56,6 +58,66 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
     private final PlatformTransactionManager transactionManager;
     private final ObjectMapper objectMapper;
     private final CodeRagProperties codeRagProperties;
+    private final GithubImportProperties githubImportProperties;
+    private final GithubWorkspaceManager githubWorkspaceManager;
+
+    public CodeRepositoryServiceImpl(CodeRepositoryMapper codeRepositoryMapper,
+                                     CodeFileMapper codeFileMapper,
+                                     CodeChunkMapper codeChunkMapper,
+                                     CodeFileScanner codeFileScanner,
+                                     CodeChunkParser codeChunkParser,
+                                     CodeChunkEmbeddingTextBuilder codeChunkEmbeddingTextBuilder,
+                                     EmbeddingService embeddingService,
+                                     PlatformTransactionManager transactionManager,
+                                     ObjectMapper objectMapper,
+                                     CodeRagProperties codeRagProperties) {
+        this(codeRepositoryMapper, codeFileMapper, codeChunkMapper, codeFileScanner, codeChunkParser,
+                codeChunkEmbeddingTextBuilder, embeddingService, transactionManager, objectMapper,
+                codeRagProperties, new GithubImportProperties(), null);
+    }
+
+    public CodeRepositoryServiceImpl(CodeRepositoryMapper codeRepositoryMapper,
+                                     CodeFileMapper codeFileMapper,
+                                     CodeChunkMapper codeChunkMapper,
+                                     CodeFileScanner codeFileScanner,
+                                     CodeChunkParser codeChunkParser,
+                                     CodeChunkEmbeddingTextBuilder codeChunkEmbeddingTextBuilder,
+                                     EmbeddingService embeddingService,
+                                     PlatformTransactionManager transactionManager,
+                                     ObjectMapper objectMapper,
+                                     CodeRagProperties codeRagProperties,
+                                     GithubImportProperties githubImportProperties) {
+        this(codeRepositoryMapper, codeFileMapper, codeChunkMapper, codeFileScanner, codeChunkParser,
+                codeChunkEmbeddingTextBuilder, embeddingService, transactionManager, objectMapper,
+                codeRagProperties, githubImportProperties, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public CodeRepositoryServiceImpl(CodeRepositoryMapper codeRepositoryMapper,
+                                     CodeFileMapper codeFileMapper,
+                                     CodeChunkMapper codeChunkMapper,
+                                     CodeFileScanner codeFileScanner,
+                                     CodeChunkParser codeChunkParser,
+                                     CodeChunkEmbeddingTextBuilder codeChunkEmbeddingTextBuilder,
+                                     EmbeddingService embeddingService,
+                                     PlatformTransactionManager transactionManager,
+                                     ObjectMapper objectMapper,
+                                     CodeRagProperties codeRagProperties,
+                                     GithubImportProperties githubImportProperties,
+                                     GithubWorkspaceManager githubWorkspaceManager) {
+        this.codeRepositoryMapper = codeRepositoryMapper;
+        this.codeFileMapper = codeFileMapper;
+        this.codeChunkMapper = codeChunkMapper;
+        this.codeFileScanner = codeFileScanner;
+        this.codeChunkParser = codeChunkParser;
+        this.codeChunkEmbeddingTextBuilder = codeChunkEmbeddingTextBuilder;
+        this.embeddingService = embeddingService;
+        this.transactionManager = transactionManager;
+        this.objectMapper = objectMapper;
+        this.codeRagProperties = codeRagProperties;
+        this.githubImportProperties = githubImportProperties;
+        this.githubWorkspaceManager = githubWorkspaceManager;
+    }
 
     @Override
     public ImportCodeRepositoryResponse importRepository(ImportCodeRepositoryRequest request) {
@@ -65,7 +127,31 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
 
         CodeFileScanner.ScanResult scanResult = codeFileScanner.scan(Path.of(request.getRootPath()));
         String normalizedRoot = scanResult.getNormalizedRoot().toString().replace("\\", "/");
-        CodeRepository repository = markImporting(request.getName(), normalizedRoot);
+        CodeRepository repository = markImporting(request.getName(), normalizedRoot, RepositorySourceType.LOCAL);
+        return indexRepository(repository, scanResult);
+    }
+
+    @Override
+    public ImportCodeRepositoryResponse indexRepository(CodeRepository repository, Path rootPath) {
+        if (repository == null || !StringUtils.hasLength(repository.getId()) || rootPath == null) {
+            throw new BizException("Repository and rootPath are required");
+        }
+        try {
+            return indexRepository(repository, codeFileScanner.scan(rootPath));
+        } catch (RuntimeException e) {
+            markFailed(repository.getId());
+            cleanupImportedIndex(repository.getId());
+            throw new CodeRepositoryImportException(importFailureMessage(e), e,
+                    ImportCodeRepositoryResponse.builder()
+                            .repoId(repository.getId())
+                            .message(importFailureMessage(e))
+                            .importQualitySummary(ImportQualitySummary.builder().status(STATUS_FAILED).build())
+                            .build());
+        }
+    }
+
+    private ImportCodeRepositoryResponse indexRepository(CodeRepository repository,
+                                                         CodeFileScanner.ScanResult scanResult) {
         ImportQualitySummaryBuilder summaryBuilder = new ImportQualitySummaryBuilder(
                 scanResult.getFiles().size(), scanResult.getSkippedSqlFileCount());
         ImportRuntimeStats runtimeStats = new ImportRuntimeStats(Math.max(1, codeRagProperties.getEmbeddingBatchSize()));
@@ -73,6 +159,7 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
         List<EmbeddingTarget> embeddingBuffer = new ArrayList<>();
         boolean parsingFile = false;
         try {
+            enforceGithubResourceGuards(repository, scanResult);
             for (Path filePath : scanResult.getFiles()) {
                 parsingFile = true;
                 ParsedCodeFile parsed = codeChunkParser.parse(scanResult.getNormalizedRoot(), filePath);
@@ -136,15 +223,32 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
         if (!StringUtils.hasLength(repoId)) {
             throw new BizException("repoId 不能为空");
         }
+        CodeRepository repository = codeRepositoryMapper.selectById(repoId);
+        PreparedWorkspace managedWorkspace = null;
+        if (repository != null && repository.getSourceType() == RepositorySourceType.GITHUB
+                && githubWorkspaceManager != null) {
+            Path rootPath = Path.of(repository.getRootPath()).toAbsolutePath().normalize();
+            managedWorkspace = githubWorkspaceManager.restore(
+                    repository.getId(), repository.getRemoteUrl(), rootPath);
+        }
+        PreparedWorkspace workspaceToDelete = managedWorkspace;
         transactionTemplate().executeWithoutResult(status -> {
             codeChunkMapper.deleteByRepoId(repoId);
             codeFileMapper.deleteByRepoId(repoId);
             codeRepositoryMapper.deleteById(repoId);
         });
+        if (workspaceToDelete != null) {
+            try {
+                githubWorkspaceManager.cleanup(workspaceToDelete);
+            } catch (RuntimeException e) {
+                log.warn("GitHub repository deleted but workspace cleanup failed: repoId={}", repoId, e);
+                throw e;
+            }
+        }
     }
 
-    private CodeRepository markImporting(String name, String rootPath) {
-        return transactionTemplate().execute(status -> prepareRepository(name, rootPath));
+    private CodeRepository markImporting(String name, String rootPath, RepositorySourceType sourceType) {
+        return transactionTemplate().execute(status -> prepareRepository(name, rootPath, sourceType));
     }
 
     private void markFailed(String repoId) {
@@ -158,7 +262,7 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
         return new TransactionTemplate(transactionManager);
     }
 
-    private CodeRepository prepareRepository(String name, String rootPath) {
+    private CodeRepository prepareRepository(String name, String rootPath, RepositorySourceType sourceType) {
         CodeRepository existing = codeRepositoryMapper.selectExisting(name, rootPath);
         LocalDateTime now = LocalDateTime.now();
         if (existing != null) {
@@ -166,7 +270,11 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
             existing.setRootPath(rootPath);
             existing.setLanguage("java");
             existing.setStatus(STATUS_IMPORTING);
+            existing.setSourceType(sourceType);
             codeRepositoryMapper.updateById(existing);
+            if (sourceType == RepositorySourceType.LOCAL) {
+                codeRepositoryMapper.clearProvenanceById(existing.getId());
+            }
             codeChunkMapper.deleteByRepoId(existing.getId());
             codeFileMapper.deleteByRepoId(existing.getId());
             return existing;
@@ -176,6 +284,7 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
                 .rootPath(rootPath)
                 .language("java")
                 .status(STATUS_IMPORTING)
+                .sourceType(sourceType)
                 .createdAt(now)
                 .updatedAt(now)
                 .build();
@@ -443,6 +552,18 @@ public class CodeRepositoryServiceImpl implements CodeRepositoryService {
             return e.getMessage();
         }
         return "代码库导入失败: " + (StringUtils.hasLength(e.getMessage()) ? e.getMessage() : e.getClass().getSimpleName());
+    }
+
+    private void enforceGithubResourceGuards(CodeRepository repository, CodeFileScanner.ScanResult scanResult) {
+        if (repository.getSourceType() != RepositorySourceType.GITHUB) {
+            return;
+        }
+        long maxTotalBytes = githubImportProperties.getMaxTotalSourceBytes();
+        if (scanResult.isTruncated()
+                || scanResult.getOversizedFileCount() > 0
+                || (maxTotalBytes > 0 && scanResult.getEligibleSourceBytes() > maxTotalBytes)) {
+            throw new BizException("REPOSITORY_TOO_LARGE");
+        }
     }
 
     private record EmbeddingTarget(ParsedCodeFile parsed, CodeChunk chunk) {

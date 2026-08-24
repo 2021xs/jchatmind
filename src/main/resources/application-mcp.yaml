@@ -1,0 +1,82 @@
+spring:
+  ai:
+    mcp:
+      client:
+        enabled: ${JCHATMIND_MCP_SPRING_CLIENT_ENABLED:false}
+        initialized: ${JCHATMIND_MCP_SPRING_CLIENT_INITIALIZED:false}
+        toolcallback:
+          enabled: false
+        # Disabled examples for real read-only MCP servers. Enable only in a
+        # local mcp profile or manual test with explicit environment variables.
+        # stdio:
+        #   connections:
+        #     context7-docs:
+        #       command: ${JCHATMIND_MCP_DOCS_COMMAND:}
+        #       args:
+        #         - -y
+        #         - "@upstash/context7-mcp@3.2.1"
+        #     playwright-browser:
+        #       command: ${JCHATMIND_MCP_BROWSER_COMMAND:}
+        #       args:
+        #         - -y
+        #         - "@playwright/mcp@0.0.76"
+        #         - --headless
+        #         - --isolated
+        #         - --browser
+        #         - chromium
+        #         - --output-dir
+        #         - ${JCHATMIND_MCP_BROWSER_OUTPUT_DIR:}
+        #     github-readonly:
+        #       command: ${JCHATMIND_MCP_GITHUB_COMMAND:}
+        #       args:
+        #         - -y
+        #         - "@modelcontextprotocol/server-github@2025.4.8"
+
+jchatmind:
+  mcp:
+    client:
+      enabled: ${JCHATMIND_MCP_CLIENT_ENABLED:false}
+      max-result-length: ${JCHATMIND_MCP_CLIENT_MAX_RESULT_LENGTH:6000}
+      audit-enabled: ${JCHATMIND_MCP_CLIENT_AUDIT_ENABLED:true}
+      servers: []
+      # Disabled allow-list examples matching the Spring AI connections above.
+      # servers:
+      #   - name: context7-docs
+      #     type: DOCS
+      #     transport: stdio
+      #     command: ${JCHATMIND_MCP_DOCS_COMMAND:}
+      #     enabled: ${JCHATMIND_MCP_DOCS_ENABLED:false}
+      #     allowed-tools:
+      #       - name: ${JCHATMIND_MCP_DOCS_TOOL_SEARCH:resolve-library-id}
+      #         risk-level: NETWORK_READ
+      #         auto-invoke-allowed: true
+      #     allowed-resources:
+      #       - uri: ${JCHATMIND_MCP_DOCS_RESOURCE_URI:context7://library/readme}
+      #         risk-level: READ_ONLY
+      #         auto-attach-allowed: false
+      #     allowed-prompts:
+      #       - name: ${JCHATMIND_MCP_DOCS_PROMPT_NAME:explain-library}
+      #         risk-level: READ_ONLY
+      #         auto-attach-allowed: false
+      #   - name: playwright-browser
+      #     type: BROWSER
+      #     transport: stdio
+      #     command: ${JCHATMIND_MCP_BROWSER_COMMAND:}
+      #     enabled: ${JCHATMIND_MCP_BROWSER_ENABLED:false}
+      #     allowed-tools:
+      #       - name: ${JCHATMIND_MCP_BROWSER_TOOL_NAVIGATE:browser_navigate}
+      #         risk-level: NETWORK_READ
+      #         auto-invoke-allowed: true
+      #     allowed-resources: []
+      #     allowed-prompts: []
+      #   - name: github-readonly
+      #     type: GITHUB
+      #     transport: stdio
+      #     command: ${JCHATMIND_MCP_GITHUB_COMMAND:}
+      #     enabled: ${JCHATMIND_MCP_GITHUB_ENABLED:false}
+      #     allowed-tools:
+      #       - name: ${JCHATMIND_MCP_GITHUB_TOOL_SEARCH:search_repositories}
+      #         risk-level: NETWORK_READ
+      #         auto-invoke-allowed: true
+      #     allowed-resources: []
+      #     allowed-prompts: []

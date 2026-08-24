@@ -11,6 +11,9 @@ public interface ToolExecutionService {
 
     void afterToolFailure(ToolExecutionContext context, ToolExecutionRecord record, Throwable error);
 
+    default void afterToolCancellation(ToolExecutionContext context, ToolExecutionRecord record) {
+    }
+
     default void afterToolFailure(ToolExecutionContext context, ToolExecutionRecord record, Throwable error,
                                   boolean correctionRequested) {
         afterToolFailure(context, record, error);

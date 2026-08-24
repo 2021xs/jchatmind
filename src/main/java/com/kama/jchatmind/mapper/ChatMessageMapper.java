@@ -23,5 +23,7 @@ public interface ChatMessageMapper {
 
     int deleteById(String id);
 
+    int deleteBySessionId(String sessionId);
+
     int updateById(ChatMessage chatMessage);
 }

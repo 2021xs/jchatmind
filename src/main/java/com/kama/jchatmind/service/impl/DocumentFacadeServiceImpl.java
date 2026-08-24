@@ -241,8 +241,6 @@ public class DocumentFacadeServiceImpl implements DocumentFacadeService {
                 // 解析 Markdown 文件
                 List<MarkdownParserService.MarkdownSection> sections = markdownParserService.parseMarkdown(inputStream);
 
-                System.out.println(sections);
-
                 if (sections.isEmpty()) {
                     log.warn("Markdown 文档解析后没有找到任何章节: documentId={}", documentId);
                     return;

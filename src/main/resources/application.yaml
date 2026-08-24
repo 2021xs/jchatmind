@@ -2,7 +2,7 @@ spring:
   application:
     name: jchatmind
   config:
-    import: optional:classpath:application-local.yaml
+    import: optional:file:./application-local.yaml
   autoconfigure:
     exclude:
       - org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration
@@ -13,11 +13,11 @@ spring:
     driver-class-name: org.postgresql.Driver
   ai:
     zhipuai:
-      api-key: your-api-key
-      base-url: https://open.bigmodel.cn/api/paas
+      api-key: ${ZHIPUAI_API_KEY:your-api-key}
+      base-url: ${ZHIPUAI_BASE_URL:https://open.bigmodel.cn/api/paas}
       chat:
         options:
-          model: glm-4.6
+          model: ${ZHIPUAI_MODEL:glm-4.6}
 mybatis:
   type-aliases-package: com.kama.jchatmind.model.entity
   mapper-locations: classpath:mapper/*.xml
@@ -36,6 +36,29 @@ logging:
     org.springframework.web.servlet.mvc.method.annotation: INFO
 
 jchatmind:
+  web-console:
+    # Delivery preference only. Validated compilation and durable Final completion
+    # remain mandatory even when post-commit TOKEN replay is disabled.
+    final-streaming-enabled: ${JCHATMIND_WEB_CONSOLE_FINAL_STREAMING_ENABLED:true}
+  async:
+    task:
+      core-pool-size: ${JCHATMIND_ASYNC_TASK_CORE_POOL_SIZE:4}
+      max-pool-size: ${JCHATMIND_ASYNC_TASK_MAX_POOL_SIZE:8}
+      queue-capacity: ${JCHATMIND_ASYNC_TASK_QUEUE_CAPACITY:16}
+      keep-alive-seconds: ${JCHATMIND_ASYNC_TASK_KEEP_ALIVE_SECONDS:60}
+      await-termination-seconds: ${JCHATMIND_ASYNC_TASK_AWAIT_TERMINATION_SECONDS:60}
+    code-evidence-selector:
+      core-pool-size: ${JCHATMIND_SELECTOR_CORE_POOL_SIZE:4}
+      max-pool-size: ${JCHATMIND_SELECTOR_MAX_POOL_SIZE:4}
+      queue-capacity: ${JCHATMIND_SELECTOR_QUEUE_CAPACITY:6}
+      keep-alive-seconds: ${JCHATMIND_SELECTOR_KEEP_ALIVE_SECONDS:60}
+      await-termination-seconds: ${JCHATMIND_SELECTOR_AWAIT_TERMINATION_SECONDS:60}
+    tool:
+      core-pool-size: ${JCHATMIND_TOOL_CORE_POOL_SIZE:4}
+      max-pool-size: ${JCHATMIND_TOOL_MAX_POOL_SIZE:8}
+      queue-capacity: ${JCHATMIND_TOOL_QUEUE_CAPACITY:16}
+      keep-alive-seconds: ${JCHATMIND_TOOL_KEEP_ALIVE_SECONDS:60}
+      await-termination-seconds: ${JCHATMIND_TOOL_AWAIT_TERMINATION_SECONDS:30}
   feishu:
     enabled: ${JCHATMIND_FEISHU_ENABLED:false}
     app-id: ${JCHATMIND_FEISHU_APP_ID:}
@@ -58,12 +81,16 @@ jchatmind:
         api-key: ${DEEPSEEK_OFFICIAL_API_KEY:your-api-key}
         base-url: ${DEEPSEEK_OFFICIAL_BASE_URL:https://api.deepseek.com}
         model: ${DEEPSEEK_OFFICIAL_MODEL:deepseek-chat}
+    gpt:
+      compatible:
+        api-key: ${GPT_COMPATIBLE_API_KEY:your-api-key}
+        base-url: ${GPT_COMPATIBLE_BASE_URL:https://api.openai.com/v1}
+        model: ${GPT_COMPATIBLE_MODEL:gpt-5.5}
   code-rag:
     # Final answer-time Code RAG path:
     # RAW_VECTOR candidates + LLM evidence selector.
-    allowed-roots:
-      - D:/Project
-      - D:/workspace
+    # Comma-separated canonical roots that local repository scans may access.
+    allowed-roots: ${CODE_RAG_ALLOWED_ROOTS:./workspace}
     max-file-size-bytes: 1048576
     max-files-per-import: 2000
     embedding-base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
@@ -82,7 +109,8 @@ jchatmind:
     llm-selector:
       # Tests may disable this to verify fallback; normal Agent flow keeps selector on.
       enabled: true
-      model: deepseek-official-chat
+      client-type: DEEPSEEK_HTTP
+      model: gpt-5.5
       max-candidate-chars: 600
       max-selected: 5
       timeout-ms: 30000
@@ -91,7 +119,24 @@ jchatmind:
       raw-top-k: 20
       final-top-k: 5
       include-selector-debug: true
+  github-import:
+    workspace-root: ${JCHATMIND_GITHUB_WORKSPACE_ROOT:}
+    clone-timeout: ${JCHATMIND_GITHUB_CLONE_TIMEOUT:10m}
+    max-total-source-bytes: ${JCHATMIND_GITHUB_MAX_TOTAL_SOURCE_BYTES:209715200}
+    min-free-space-bytes: ${JCHATMIND_GITHUB_MIN_FREE_SPACE_BYTES:0}
   agent:
+    final-synthesis:
+      max-input-tokens: ${JCHATMIND_FINAL_MAX_INPUT_TOKENS:64000}
+      chars-per-token: ${JCHATMIND_FINAL_CHARS_PER_TOKEN:3}
+    tool-timeout:
+      default-timeout: ${JCHATMIND_AGENT_TOOL_TIMEOUT:60s}
+      overrides: {}
+    tool-result:
+      default-max-result-chars: ${JCHATMIND_AGENT_TOOL_MAX_RESULT_CHARS:8000}
+      overrides: {}
+    duplicate-detection:
+      enabled: ${JCHATMIND_AGENT_DUPLICATE_DETECTION_ENABLED:true}
+      max-consecutive-same-calls: ${JCHATMIND_AGENT_MAX_CONSECUTIVE_SAME_CALLS:2}
     database-tool:
       max-rows: ${AGENT_DB_TOOL_MAX_ROWS:50}
       query-timeout-seconds: ${AGENT_DB_TOOL_QUERY_TIMEOUT_SECONDS:5}
@@ -104,12 +149,26 @@ jchatmind:
     tool-correction:
       enabled: true
       max-attempts: 3
+  token-counter:
+    enabled: ${JCHATMIND_TOKEN_COUNTER_ENABLED:false}
+    base-url: ${JCHATMIND_TOKEN_COUNTER_BASE_URL:}
+    timeout: ${JCHATMIND_TOKEN_COUNTER_TIMEOUT:2s}
+    fallback-to-estimated: true
   context-compression:
     enabled: true
     keep-recent-rounds: 8
     max-history-messages: 20
     max-summary-chars: 1200
-    trigger-message-count: 21
-    max-context-tokens: 12000
-    max-single-tool-result-tokens: 2000
+    max-context-tokens: 30000
+    max-single-tool-result-tokens: 5000
     chars-per-token: 3
+    model-thresholds:
+      default:
+        max-context-tokens: 30000
+        max-single-tool-result-tokens: 5000
+      gpt-5.5:
+        max-context-tokens: 80000
+        max-single-tool-result-tokens: 8000
+      dsv4:
+        max-context-tokens: 30000
+        max-single-tool-result-tokens: 5000

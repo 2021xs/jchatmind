@@ -14,4 +14,8 @@ public interface ToolCallLogMapper {
     int updateById(ToolCallLog toolCallLog);
 
     List<ToolCallLog> selectRunningByTaskId(String taskId);
+
+    List<ToolCallLog> selectByTaskId(String taskId);
+
+    int deleteBySessionId(String sessionId);
 }

@@ -29,6 +29,8 @@ class ToolFailureClassifierTest {
                 new ToolUnknownException("Unknown tool: imaginaryTool"));
         ToolFailureDecision policy = classifier.classify(
                 new ToolPolicyRejectedException("SQL rejected by safety policy"));
+        ToolFailureDecision duplicate = classifier.classify(
+                new ToolDuplicateCallException("searchProjectCode", 3, 2, false));
 
         assertTrue(argument.correctable());
         assertEquals(AgentTaskLogService.ERROR_TYPE_ARGUMENT_PARSE_ERROR, argument.errorType());
@@ -36,6 +38,8 @@ class ToolFailureClassifierTest {
         assertEquals(AgentTaskLogService.ERROR_TYPE_UNKNOWN_TOOL, unknown.errorType());
         assertFalse(policy.correctable());
         assertEquals(AgentTaskLogService.ERROR_TYPE_POLICY_REJECTED, policy.errorType());
+        assertFalse(duplicate.correctable());
+        assertEquals(AgentTaskLogService.ERROR_TYPE_DUPLICATE_TOOL_CALL, duplicate.errorType());
     }
 
     @Test

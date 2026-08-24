@@ -3,12 +3,14 @@ package com.kama.jchatmind.agent;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.kama.jchatmind.agent.tools.Tool;
 import com.kama.jchatmind.config.ChatClientRegistry;
+import com.kama.jchatmind.config.FinalSynthesisProperties;
 import com.kama.jchatmind.config.ToolCorrectionProperties;
 import com.kama.jchatmind.converter.AgentConverter;
 import com.kama.jchatmind.converter.ChatMessageConverter;
 import com.kama.jchatmind.converter.KnowledgeBaseConverter;
 import com.kama.jchatmind.mapper.AgentMapper;
 import com.kama.jchatmind.mapper.KnowledgeBaseMapper;
+import com.kama.jchatmind.mcp.adapter.McpToolCallbackAdapter;
 import com.kama.jchatmind.model.dto.AgentDTO;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.dto.KnowledgeBaseDTO;
@@ -17,6 +19,7 @@ import com.kama.jchatmind.model.entity.KnowledgeBase;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
 import com.kama.jchatmind.service.ConversationContextCompressor;
+import com.kama.jchatmind.service.FinalCompletionService;
 import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.service.ToolFacadeService;
@@ -26,9 +29,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.aop.support.AopUtils;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -62,6 +67,10 @@ public class JChatMindFactory {
     private final ConversationContextCompressor conversationContextCompressor;
     private final ToolCorrectionProperties toolCorrectionProperties;
     private final ToolFailureClassifier toolFailureClassifier;
+    private final ObjectProvider<McpToolCallbackAdapter> mcpToolCallbackAdapterProvider;
+    private final AgentTaskRuntimeRegistry taskRuntimeRegistry;
+    private final FinalCompletionService finalCompletionService;
+    private final FinalSynthesisProperties finalSynthesisProperties;
 
     public JChatMindFactory(
             ChatClientRegistry chatClientRegistry,
@@ -81,7 +90,41 @@ public class JChatMindFactory {
             ToolRegistry toolRegistry,
             ConversationContextCompressor conversationContextCompressor,
             ToolCorrectionProperties toolCorrectionProperties,
-            ToolFailureClassifier toolFailureClassifier
+            ToolFailureClassifier toolFailureClassifier,
+            ObjectProvider<McpToolCallbackAdapter> mcpToolCallbackAdapterProvider
+    ) {
+        this(chatClientRegistry, sseService, agentMapper, agentConverter, knowledgeBaseMapper,
+                knowledgeBaseConverter, toolFacadeService, chatMessageFacadeService, chatMessageConverter,
+                agentTaskLogService, agentEventPublisher, agentRunFailureHandler, toolCallBatchExecutor,
+                toolExecutionService, toolRegistry, conversationContextCompressor, toolCorrectionProperties,
+                toolFailureClassifier, mcpToolCallbackAdapterProvider, new AgentTaskRuntimeRegistry(),
+                null, new FinalSynthesisProperties());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public JChatMindFactory(
+            ChatClientRegistry chatClientRegistry,
+            SseService sseService,
+            AgentMapper agentMapper,
+            AgentConverter agentConverter,
+            KnowledgeBaseMapper knowledgeBaseMapper,
+            KnowledgeBaseConverter knowledgeBaseConverter,
+            ToolFacadeService toolFacadeService,
+            ChatMessageFacadeService chatMessageFacadeService,
+            ChatMessageConverter chatMessageConverter,
+            AgentTaskLogService agentTaskLogService,
+            AgentEventPublisher agentEventPublisher,
+            AgentRunFailureHandler agentRunFailureHandler,
+            ToolCallBatchExecutor toolCallBatchExecutor,
+            ToolExecutionService toolExecutionService,
+            ToolRegistry toolRegistry,
+            ConversationContextCompressor conversationContextCompressor,
+            ToolCorrectionProperties toolCorrectionProperties,
+            ToolFailureClassifier toolFailureClassifier,
+            ObjectProvider<McpToolCallbackAdapter> mcpToolCallbackAdapterProvider,
+            AgentTaskRuntimeRegistry taskRuntimeRegistry,
+            FinalCompletionService finalCompletionService,
+            FinalSynthesisProperties finalSynthesisProperties
     ) {
         this.chatClientRegistry = chatClientRegistry;
         this.sseService = sseService;
@@ -101,10 +144,35 @@ public class JChatMindFactory {
         this.conversationContextCompressor = conversationContextCompressor;
         this.toolCorrectionProperties = toolCorrectionProperties;
         this.toolFailureClassifier = toolFailureClassifier;
+        this.mcpToolCallbackAdapterProvider = mcpToolCallbackAdapterProvider;
+        this.taskRuntimeRegistry = taskRuntimeRegistry;
+        this.finalCompletionService = finalCompletionService;
+        this.finalSynthesisProperties = Objects.requireNonNull(finalSynthesisProperties);
+        new FinalContextCompiler(finalSynthesisProperties);
+        log.info("Final synthesis input budget configured: maxInputTokens={}, charsPerToken={}",
+                finalSynthesisProperties.getMaxInputTokens(), finalSynthesisProperties.getCharsPerToken());
     }
 
     private Agent loadAgent(String agentId) {
         return agentMapper.selectById(agentId);
+    }
+
+    private Agent withRuntimeModel(Agent agent, String runtimeModel) {
+        if (!StringUtils.hasText(runtimeModel) || runtimeModel.equals(agent.getModel())) {
+            return agent;
+        }
+        return Agent.builder()
+                .id(agent.getId())
+                .name(agent.getName())
+                .description(agent.getDescription())
+                .systemPrompt(agent.getSystemPrompt())
+                .model(runtimeModel.trim())
+                .allowedTools(agent.getAllowedTools())
+                .allowedKbs(agent.getAllowedKbs())
+                .chatOptions(agent.getChatOptions())
+                .createdAt(agent.getCreatedAt())
+                .updatedAt(agent.getUpdatedAt())
+                .build();
     }
 
     private List<Message> loadMemory(String chatSessionId, String model) {
@@ -121,6 +189,24 @@ public class JChatMindFactory {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Failed to parse agent config", e);
         }
+    }
+
+    private AgentDTO withRuntimeAllowedTools(AgentDTO agentConfig, List<String> runtimeAllowedToolNames) {
+        if (runtimeAllowedToolNames == null || runtimeAllowedToolNames.isEmpty()) {
+            return agentConfig;
+        }
+        return AgentDTO.builder()
+                .id(agentConfig.getId())
+                .name(agentConfig.getName())
+                .description(agentConfig.getDescription())
+                .systemPrompt(agentConfig.getSystemPrompt())
+                .model(agentConfig.getModel())
+                .allowedTools(runtimeAllowedToolNames)
+                .allowedKbs(agentConfig.getAllowedKbs())
+                .chatOptions(agentConfig.getChatOptions())
+                .createdAt(agentConfig.getCreatedAt())
+                .updatedAt(agentConfig.getUpdatedAt())
+                .build();
     }
 
     private List<KnowledgeBaseDTO> resolveRuntimeKnowledgeBases(AgentDTO agentConfig) {
@@ -177,7 +263,23 @@ public class JChatMindFactory {
                     .getToolCallbacks();
             callbacks.addAll(Arrays.asList(toolCallbacks));
         }
+        McpToolCallbackAdapter mcpToolCallbackAdapter = mcpToolCallbackAdapterProvider.getIfAvailable();
+        if (mcpToolCallbackAdapter != null) {
+            callbacks.addAll(mcpToolCallbackAdapter.toolCallbacks());
+        }
         return callbacks;
+    }
+
+    private List<String> resolveRuntimeToolNames(List<Tool> runtimeTools) {
+        List<String> runtimeToolNames = runtimeTools.stream()
+                .map(Tool::getName)
+                .map(toolRegistry::canonicalName)
+                .collect(Collectors.toCollection(ArrayList::new));
+        McpToolCallbackAdapter mcpToolCallbackAdapter = mcpToolCallbackAdapterProvider.getIfAvailable();
+        if (mcpToolCallbackAdapter != null) {
+            runtimeToolNames.addAll(mcpToolCallbackAdapter.exposedToolNames());
+        }
+        return runtimeToolNames.stream().distinct().toList();
     }
 
     private Object resolveToolTarget(Tool tool) {
@@ -202,14 +304,18 @@ public class JChatMindFactory {
         if (Objects.isNull(chatClient)) {
             throw new IllegalStateException("ChatClient not found for model: " + agent.getModel());
         }
-        return new JChatMind(
+        AgentDTO.ChatOptions generationOptions = agentConfig.getChatOptions();
+        int messageLength = generationOptions == null || generationOptions.getMessageLength() == null
+                ? AgentDTO.ChatOptions.defaultOptions().getMessageLength()
+                : generationOptions.getMessageLength();
+        JChatMind runtime = new JChatMind(
                 agent.getId(),
                 agent.getModel(),
                 agent.getName(),
                 agent.getDescription(),
                 agent.getSystemPrompt(),
                 chatClient,
-                agentConfig.getChatOptions().getMessageLength(),
+                messageLength,
                 memory,
                 toolCallbacks,
                 knowledgeBases,
@@ -228,6 +334,13 @@ public class JChatMindFactory {
                 agentRunFailureHandler,
                 toolCallBatchExecutor
         );
+        runtime.setTaskRuntimeRegistry(taskRuntimeRegistry);
+        runtime.setFinalCompletionService(finalCompletionService);
+        runtime.setFinalContextCompiler(new FinalContextCompiler(finalSynthesisProperties));
+        runtime.setPlanningGenerationOptions(
+                generationOptions == null ? null : generationOptions.getTemperature(),
+                generationOptions == null ? null : generationOptions.getTopP());
+        return runtime;
     }
 
     public JChatMind create(String agentId, String chatSessionId) {
@@ -235,20 +348,37 @@ public class JChatMindFactory {
     }
 
     public JChatMind create(String agentId, String chatSessionId, String userMessageId) {
+        return create(agentId, chatSessionId, userMessageId, null, null);
+    }
+
+    public JChatMind create(String agentId, String chatSessionId, String userMessageId,
+                           String runtimeSystemContext, String traceId) {
+        return create(agentId, chatSessionId, userMessageId, runtimeSystemContext, traceId, null);
+    }
+
+    public JChatMind create(String agentId, String chatSessionId, String userMessageId,
+                           String runtimeSystemContext, String traceId, String runtimeModel) {
+        return create(agentId, chatSessionId, userMessageId, runtimeSystemContext, traceId, runtimeModel, null);
+    }
+
+    public JChatMind create(String agentId, String chatSessionId, String userMessageId,
+                           String runtimeSystemContext, String traceId, String runtimeModel,
+                           List<String> runtimeAllowedToolNames) {
         Agent agent = loadAgent(agentId);
-        AgentDTO agentConfig = toAgentConfig(agent);
+        agent = withRuntimeModel(agent, runtimeModel);
+        AgentDTO agentConfig = withRuntimeAllowedTools(toAgentConfig(agent), runtimeAllowedToolNames);
         List<Message> memory = loadMemory(chatSessionId, agent.getModel());
+        if (StringUtils.hasText(runtimeSystemContext)) {
+            memory = new ArrayList<>(memory);
+            memory.add(0, new SystemMessage(runtimeSystemContext));
+        }
 
         List<KnowledgeBaseDTO> knowledgeBases = resolveRuntimeKnowledgeBases(agentConfig);
         List<Tool> runtimeTools = resolveRuntimeTools(agentConfig);
         List<ToolCallback> toolCallbacks = buildToolCallbacks(runtimeTools);
-        List<String> runtimeToolNames = runtimeTools.stream()
-                .map(Tool::getName)
-                .map(toolRegistry::canonicalName)
-                .distinct()
-                .toList();
+        List<String> runtimeToolNames = resolveRuntimeToolNames(runtimeTools);
 
-        return buildAgentRuntime(
+        JChatMind runtime = buildAgentRuntime(
                 agent,
                 agentConfig,
                 memory,
@@ -258,5 +388,9 @@ public class JChatMindFactory {
                 chatSessionId,
                 userMessageId
         );
+        if (StringUtils.hasText(traceId)) {
+            runtime.setTraceId(traceId);
+        }
+        return runtime;
     }
 }

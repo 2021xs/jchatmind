@@ -29,6 +29,8 @@ public class CodeFileScannerImpl implements CodeFileScanner {
 
         List<Path> result = new ArrayList<>();
         int skippedSqlFileCount = 0;
+        int oversizedFileCount = 0;
+        long eligibleSourceBytes = 0;
         List<String> skippedSqlFilePaths = new ArrayList<>();
         boolean truncated = false;
         try (Stream<Path> paths = Files.walk(normalizedRoot)) {
@@ -60,8 +62,10 @@ public class CodeFileScannerImpl implements CodeFileScanner {
                     continue;
                 }
                 if (Files.size(normalized) > properties.getMaxFileSizeBytes()) {
+                    oversizedFileCount++;
                     continue;
                 }
+                eligibleSourceBytes += Files.size(normalized);
                 result.add(normalized);
             }
         } catch (IOException e) {
@@ -71,7 +75,8 @@ public class CodeFileScannerImpl implements CodeFileScanner {
         String message = truncated
                 ? "达到 max-files-per-import 限制，已停止扫描，结果可能不完整"
                 : "代码库扫描完成";
-        return new ScanResult(normalizedRoot, result, truncated, message, skippedSqlFileCount, skippedSqlFilePaths);
+        return new ScanResult(normalizedRoot, result, truncated, message, skippedSqlFileCount,
+                skippedSqlFilePaths, eligibleSourceBytes, oversizedFileCount);
     }
 
     private void validateRoot(Path normalizedRoot) {
