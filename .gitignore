@@ -4,6 +4,7 @@ logs/
 node_modules/
 web-console/node_modules/
 web-console/dist/
+/web-console/.vite/
 web-console/.env
 web-console/.env.*
 !web-console/.env.example
