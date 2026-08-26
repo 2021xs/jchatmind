@@ -101,6 +101,20 @@
         DELETE FROM chat_message WHERE session_id = CAST(#{sessionId} AS uuid)
     </delete>
 
+    <delete id="deleteTaskToolMessages">
+        DELETE FROM chat_message
+        WHERE session_id = CAST(#{sessionId} AS uuid)
+          AND metadata ->> 'taskId' = #{taskId}
+          AND (
+              role = 'tool'
+              OR (
+                  role = 'assistant'
+                  AND jsonb_typeof(metadata -> 'toolCalls') = 'array'
+                  AND jsonb_array_length(metadata -> 'toolCalls') > 0
+              )
+          )
+    </delete>
+
     <update id="updateById" parameterType="com.kama.jchatmind.model.entity.ChatMessage">
         UPDATE chat_message
         <set>

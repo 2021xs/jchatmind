@@ -250,6 +250,7 @@ public class JChatMind {
                     .content(assistantMessage.getText())
                     .sessionId(this.chatSessionId)
                     .metadata(ChatMessageDTO.MetaData.builder()
+                            .taskId(currentTaskId)
                             .toolCalls(assistantMessage.getToolCalls())
                             .build())
                     .build();
@@ -264,6 +265,7 @@ public class JChatMind {
                         .content(toolResponse.responseData())
                         .sessionId(this.chatSessionId)
                         .metadata(ChatMessageDTO.MetaData.builder()
+                                .taskId(currentTaskId)
                                 .toolResponse(toolResponse)
                                 .build())
                         .build();
@@ -1315,11 +1317,14 @@ public class JChatMind {
     private void handleCancellation() {
         agentState = AgentState.FINISHED;
         Runnable cancellation = () -> {
+            int discardedToolMessages = chatMessageFacadeService.discardTaskToolMessages(
+                    chatSessionId, currentTaskId);
             agentTaskLogService.cancelStepAndTask(currentStep == null ? null : currentStep.getId(),
                     currentTaskId, nextStepNo - 1, toolCallCount);
             sendAgentEvent(AgentSseEvent.Type.CANCELLED, payload(
                     "status", AgentTaskLogService.STATUS_CANCELLED,
-                    "finishReason", AgentTaskLogService.FINISH_REASON_CANCELLED
+                    "finishReason", AgentTaskLogService.FINISH_REASON_CANCELLED,
+                    "discardedToolMessages", discardedToolMessages
             ));
             agentEventPublisher.complete(chatSessionId, currentTaskId);
         };

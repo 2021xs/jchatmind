@@ -32,6 +32,7 @@ public class ChatMessageDTO {
     @Builder
     public static class MetaData {
         private String model;
+        private String taskId;
         private ToolResponseMessage.ToolResponse toolResponse;
         private List<AssistantMessage.ToolCall> toolCalls;
     }

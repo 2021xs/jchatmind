@@ -1,34 +1,62 @@
 package com.kama.jchatmind.service.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.kama.jchatmind.converter.ChatMessageConverter;
 import com.kama.jchatmind.event.ChatEvent;
 import com.kama.jchatmind.exception.BizException;
 import com.kama.jchatmind.mapper.ChatMessageMapper;
+import com.kama.jchatmind.mapper.ChatSessionMapper;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.entity.ChatMessage;
+import com.kama.jchatmind.model.entity.ChatSession;
 import com.kama.jchatmind.model.request.CreateChatMessageRequest;
 import com.kama.jchatmind.model.request.UpdateChatMessageRequest;
 import com.kama.jchatmind.model.response.CreateChatMessageResponse;
 import com.kama.jchatmind.model.response.GetChatMessagesResponse;
 import com.kama.jchatmind.model.vo.ChatMessageVO;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
-import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
 @Service
-@AllArgsConstructor
+@Slf4j
 public class ChatMessageFacadeServiceImpl implements ChatMessageFacadeService {
 
     private final ChatMessageMapper chatMessageMapper;
     private final ChatMessageConverter chatMessageConverter;
     private final ApplicationEventPublisher publisher;
+    private final ChatSessionMapper chatSessionMapper;
+    private final ObjectMapper objectMapper;
+
+    @Autowired
+    public ChatMessageFacadeServiceImpl(ChatMessageMapper chatMessageMapper,
+                                        ChatMessageConverter chatMessageConverter,
+                                        ApplicationEventPublisher publisher,
+                                        ChatSessionMapper chatSessionMapper,
+                                        ObjectMapper objectMapper) {
+        this.chatMessageMapper = chatMessageMapper;
+        this.chatMessageConverter = chatMessageConverter;
+        this.publisher = publisher;
+        this.chatSessionMapper = chatSessionMapper;
+        this.objectMapper = objectMapper;
+    }
+
+    /** Compatibility constructor retained for focused persistence tests. */
+    public ChatMessageFacadeServiceImpl(ChatMessageMapper chatMessageMapper,
+                                        ChatMessageConverter chatMessageConverter,
+                                        ApplicationEventPublisher publisher) {
+        this(chatMessageMapper, chatMessageConverter, publisher, null, null);
+    }
 
     @Override
     public GetChatMessagesResponse getChatMessagesBySessionId(String sessionId) {
@@ -187,6 +215,51 @@ public class ChatMessageFacadeServiceImpl implements ChatMessageFacadeService {
         int result = chatMessageMapper.deleteById(chatMessageId);
         if (result <= 0) {
             throw new BizException("删除聊天消息失败");
+        }
+    }
+
+    @Override
+    @Transactional
+    public int discardTaskToolMessages(String sessionId, String taskId) {
+        if (!StringUtils.hasText(sessionId) || !StringUtils.hasText(taskId)) {
+            throw new IllegalArgumentException("sessionId and taskId are required for cancelled Task cleanup");
+        }
+        if (chatSessionMapper == null || objectMapper == null) {
+            throw new IllegalStateException("Cancelled Task memory cleanup dependencies are not configured");
+        }
+
+        ChatSession session = chatSessionMapper.selectByIdForUpdate(sessionId);
+        if (session == null) {
+            throw new BizException("Chat session does not exist: " + sessionId);
+        }
+
+        int deleted = chatMessageMapper.deleteTaskToolMessages(sessionId, taskId);
+        if (deleted > 0) {
+            invalidateContextSummary(session);
+            log.info("Discarded cancelled Task tool messages and invalidated context summary: "
+                    + "sessionId={}, taskId={}, deletedMessages={}", sessionId, taskId, deleted);
+        }
+        return deleted;
+    }
+
+    private void invalidateContextSummary(ChatSession session) {
+        try {
+            ObjectNode metadata = StringUtils.hasText(session.getMetadata())
+                    ? (ObjectNode) objectMapper.readTree(session.getMetadata())
+                    : objectMapper.createObjectNode();
+            metadata.remove("contextSummary");
+            metadata.remove("contextSummaryLastMessageId");
+            metadata.remove("contextSummaryUpdatedAt");
+            int updated = chatSessionMapper.updateById(ChatSession.builder()
+                    .id(session.getId())
+                    .metadata(objectMapper.writeValueAsString(metadata))
+                    .build());
+            if (updated != 1) {
+                throw new IllegalStateException("Failed to invalidate context summary for session: "
+                        + session.getId());
+            }
+        } catch (JsonProcessingException | ClassCastException e) {
+            throw new IllegalStateException("Failed to invalidate context summary after Task cancellation", e);
         }
     }
 

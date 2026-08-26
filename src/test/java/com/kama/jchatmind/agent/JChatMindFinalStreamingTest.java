@@ -439,8 +439,108 @@ class JChatMindFinalStreamingTest {
                     AgentSseEvent.Type.CANCELLED);
             assertThat(harness.eventTypes()).doesNotContain(AgentSseEvent.Type.FINAL_MESSAGE_DONE,
                     AgentSseEvent.Type.DONE, AgentSseEvent.Type.ERROR);
+            verify(harness.messageService).discardTaskToolMessages("session-1", "task-1");
             verify(harness.logService).cancelStepAndTask(anyString(), eq("task-1"), anyInt(), anyInt());
         } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void cancellationAfterCompletedToolBatchDiscardsTaskToolMemory() throws Exception {
+        CountDownLatch finalSubscribed = new CountDownLatch(1);
+        ToolCallback search = callback("searchEvidence");
+        Harness harness = new Harness(
+                List.of(toolCallResponse("call-1", "searchEvidence", "{}"), answerResponse("ready")),
+                List.of(Flux.<ChatResponse>never().doOnSubscribe(ignored -> finalSubscribed.countDown())),
+                List.of(search));
+        when(harness.batchExecutor.execute(any(), any(), any(), any()))
+                .thenReturn(toolResult("searchEvidence", "retrieved evidence"));
+        when(harness.messageService.discardTaskToolMessages("session-1", "task-1")).thenReturn(2);
+        harness.agent.setFinalStreamingEnabled(true);
+        AgentTaskRuntimeRegistry registry = new AgentTaskRuntimeRegistry();
+        AgentTaskControl control = registry.register("task-1", "session-1");
+        harness.agent.setTaskRuntimeRegistry(registry);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<?> run = executor.submit((Runnable) harness.agent::run);
+            assertTrue(finalSubscribed.await(2, TimeUnit.SECONDS));
+
+            assertThat(control.requestCancellation()).isEqualTo(AgentTaskControl.CancelResult.REQUESTED);
+            run.get(2, TimeUnit.SECONDS);
+
+            assertThat(harness.persistedMessages)
+                    .filteredOn(message -> message.getRole() == ChatMessageDTO.RoleType.ASSISTANT
+                            && message.getMetadata() != null
+                            && message.getMetadata().getToolCalls() != null
+                            && !message.getMetadata().getToolCalls().isEmpty())
+                    .hasSize(1)
+                    .allMatch(message -> "task-1".equals(message.getMetadata().getTaskId()));
+            assertThat(harness.persistedMessages)
+                    .filteredOn(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL)
+                    .hasSize(1)
+                    .allMatch(message -> "task-1".equals(message.getMetadata().getTaskId()));
+            verify(harness.messageService).discardTaskToolMessages("session-1", "task-1");
+            assertThat(harness.events.stream()
+                    .filter(event -> event.type() == AgentSseEvent.Type.CANCELLED)
+                    .map(event -> event.payload().get("discardedToolMessages")))
+                    .containsExactly(2);
+            assertThat(harness.eventTypes()).doesNotContain(
+                    AgentSseEvent.Type.FINAL_MESSAGE_DONE, AgentSseEvent.Type.DONE, AgentSseEvent.Type.ERROR);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void cancellationDuringToolExecutionDiscardsPersistedAssistantToolCall() throws Exception {
+        CountDownLatch toolStarted = new CountDownLatch(1);
+        CountDownLatch releaseToolExecutor = new CountDownLatch(1);
+        ToolCallback search = callback("searchEvidence");
+        Harness harness = new Harness(
+                List.of(toolCallResponse("call-1", "searchEvidence", "{}")),
+                List.of(),
+                List.of(search));
+        when(harness.batchExecutor.execute(any(), any(), any(), any())).thenAnswer(invocation -> {
+            com.kama.jchatmind.tool.ToolExecutionContext context = invocation.getArgument(3);
+            toolStarted.countDown();
+            try {
+                releaseToolExecutor.await(2, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            context.getCancellationControl().throwIfCancellationRequested();
+            return toolResult("searchEvidence", "must not be persisted");
+        });
+        when(harness.messageService.discardTaskToolMessages("session-1", "task-1")).thenReturn(1);
+        AgentTaskRuntimeRegistry registry = new AgentTaskRuntimeRegistry();
+        AgentTaskControl control = registry.register("task-1", "session-1");
+        harness.agent.setTaskRuntimeRegistry(registry);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<?> run = executor.submit((Runnable) harness.agent::run);
+            assertTrue(toolStarted.await(2, TimeUnit.SECONDS));
+
+            assertThat(control.requestCancellation()).isEqualTo(AgentTaskControl.CancelResult.REQUESTED);
+            releaseToolExecutor.countDown();
+            run.get(2, TimeUnit.SECONDS);
+
+            assertThat(harness.persistedMessages)
+                    .filteredOn(message -> message.getRole() == ChatMessageDTO.RoleType.ASSISTANT)
+                    .singleElement()
+                    .satisfies(message -> {
+                        assertThat(message.getMetadata().getTaskId()).isEqualTo("task-1");
+                        assertThat(message.getMetadata().getToolCalls()).hasSize(1);
+                    });
+            assertThat(harness.persistedMessages)
+                    .noneMatch(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL);
+            verify(harness.messageService).discardTaskToolMessages("session-1", "task-1");
+            assertThat(harness.events.stream()
+                    .filter(event -> event.type() == AgentSseEvent.Type.CANCELLED)
+                    .map(event -> event.payload().get("discardedToolMessages")))
+                    .containsExactly(1);
+        } finally {
+            releaseToolExecutor.countDown();
             executor.shutdownNow();
         }
     }
