@@ -111,7 +111,7 @@ final class ContextLifecycleResultAssembler {
             Integer actual, Integer estimated, String actualSource, String estimatedSource) {
         return new ContextLifecycleBenchmarkResult.TokenMeasurement(
                 actual, estimated,
-                actual == null ? "UNAVAILABLE" : actualSource,
+                actualSource == null || actualSource.isBlank() ? "UNAVAILABLE" : actualSource,
                 estimated == null ? "UNAVAILABLE" : estimatedSource);
     }
 
@@ -130,7 +130,7 @@ final class ContextLifecycleResultAssembler {
                 aggregate(calls, value -> "SELECTOR".equals(value.phase()), false));
     }
 
-    private ContextLifecycleBenchmarkResult.TokenMeasurement aggregate(
+    ContextLifecycleBenchmarkResult.TokenMeasurement aggregate(
             List<ContextLifecycleBenchmarkResult.ModelCallMetric> calls,
             Predicate<ContextLifecycleBenchmarkResult.ModelCallMetric> filter,
             boolean input) {
@@ -141,10 +141,11 @@ final class ContextLifecycleResultAssembler {
         List<Integer> actualValues = values.stream()
                 .map(ContextLifecycleBenchmarkResult.TokenMeasurement::actualTokens)
                 .filter(Objects::nonNull).toList();
-        Integer actual = actualValues.isEmpty() ? null : actualValues.stream().mapToInt(Integer::intValue).sum();
-        String actualSource = actual == null ? "UNAVAILABLE"
-                : actualValues.size() == values.size() ? "PROVIDER_USAGE"
-                : "PROVIDER_USAGE_PARTIAL_" + actualValues.size() + "_OF_" + values.size();
+        boolean complete = !values.isEmpty() && actualValues.size() == values.size();
+        Integer actual = complete ? actualValues.stream().mapToInt(Integer::intValue).sum() : null;
+        String actualSource = values.isEmpty() || actualValues.isEmpty() ? "UNAVAILABLE"
+                : complete ? "PROVIDER_USAGE"
+                : "UNAVAILABLE_INCOMPLETE_PROVIDER_USAGE_" + actualValues.size() + "_OF_" + values.size();
         return measurement(actual, estimated, actualSource, EstimatedMessageTokenMeasurer.SOURCE);
     }
 
