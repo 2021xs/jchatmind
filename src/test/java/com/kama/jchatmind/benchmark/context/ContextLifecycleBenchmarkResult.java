@@ -199,6 +199,7 @@ record ContextLifecycleBenchmarkResult(
 
     record ModelCallMetric(
             int callIndex,
+            long startedAtEpochMs,
             String phase,
             String model,
             Long latencyMs,

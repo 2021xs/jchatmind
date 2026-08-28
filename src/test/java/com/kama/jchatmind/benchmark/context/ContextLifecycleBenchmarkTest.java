@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.config.ChatClientRegistry;
 import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.config.ContextCompressionProperties;
+import com.kama.jchatmind.config.FinalSynthesisProperties;
 import com.kama.jchatmind.converter.AgentConverter;
 import com.kama.jchatmind.mapper.AgentMapper;
 import com.kama.jchatmind.mapper.AgentStepMapper;
@@ -35,6 +36,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.util.StringUtils;
 
 import javax.sql.DataSource;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -70,11 +72,13 @@ class ContextLifecycleBenchmarkTest {
     @Autowired private RagService ragService;
     @Autowired private CodeRagProperties codeRagProperties;
     @Autowired private ContextCompressionProperties compressionProperties;
+    @Autowired private FinalSynthesisProperties finalSynthesisProperties;
     @Autowired @Qualifier("dataSource") private DataSource applicationDataSource;
     @Autowired @Qualifier("databaseToolJdbcTemplate") private JdbcTemplate databaseToolJdbcTemplate;
 
     @Test
     void runContextLifecycleBenchmark() throws Exception {
+        OffsetDateTime startedAt = OffsetDateTime.now();
         ContextLifecycleBenchmarkSuite suite = loadSuite();
         suite.validate();
         List<ContextLifecycleBenchmarkCase> cases = selectedCases(suite.cases);
@@ -89,7 +93,7 @@ class ContextLifecycleBenchmarkTest {
         }
 
         ContextLifecycleBenchmarkPreflight.Snapshot snapshot = preflight(suite, repository, model);
-        String runId = "context-lifecycle-" + OffsetDateTime.now().toString().replace(':', '-')
+        String runId = "context-lifecycle-" + startedAt.toString().replace(':', '-')
                 + "-" + UUID.randomUUID().toString().substring(0, 8);
         printPreflight(runId, suite, cases, repeats, repository, model, agentConfig, snapshot);
 
@@ -109,9 +113,66 @@ class ContextLifecycleBenchmarkTest {
         System.out.printf("Context Lifecycle capture completed: runId=%s cases=%d modelCalls=%d failures=%d%n",
                 runId, executions.size(), modelCalls,
                 executions.stream().filter(value -> value.executionFailure() != null).count());
+        ContextLifecycleResultAssembler assembler = new ContextLifecycleResultAssembler(
+                compressionProperties.getCharsPerToken(), finalSynthesisProperties);
+        List<ContextLifecycleBenchmarkResult.CaseResult> caseResults = executions.stream()
+                .map(assembler::assemble).toList();
+        ContextLifecycleBenchmarkResult result = new ContextLifecycleBenchmarkResult(
+                metadata(runId, suite, repository, model, agentConfig, snapshot,
+                        startedAt, OffsetDateTime.now(), repeats), caseResults);
+        Path outputDirectory = Path.of("target", "benchmark", "context-lifecycle", runId);
+        ContextLifecycleBenchmarkOutput.Artifacts artifacts =
+                new ContextLifecycleBenchmarkOutput(objectMapper).write(outputDirectory, result);
+        System.out.println("Raw JSON: " + artifacts.rawJson().toAbsolutePath());
+        System.out.println("Case CSV: " + artifacts.caseCsv().toAbsolutePath());
+        System.out.println("Markdown report: " + artifacts.markdownReport().toAbsolutePath());
+        System.out.println("Anomalies CSV: " + artifacts.anomaliesCsv().toAbsolutePath());
+    }
 
-        // B0.4 freezes execution and capture. B0.5 converts these immutable captures
-        // into deterministic correctness metrics and JSON/CSV/Markdown artifacts.
+    private ContextLifecycleBenchmarkResult.RunMetadata metadata(
+            String runId,
+            ContextLifecycleBenchmarkSuite suite,
+            CodeRepository repository,
+            String model,
+            AgentDTO agent,
+            ContextLifecycleBenchmarkPreflight.Snapshot snapshot,
+            OffsetDateTime startedAt,
+            OffsetDateTime endedAt,
+            int repeats) {
+        ContextCompressionProperties.TokenThreshold threshold = compressionProperties.thresholdFor(model);
+        AgentDTO.ChatOptions options = agent.getChatOptions();
+        Map<String, Object> modelParameters = new LinkedHashMap<>();
+        modelParameters.put("topP", options == null || options.getTopP() == null
+                ? "unavailable" : options.getTopP());
+        modelParameters.put("messageLength", options == null || options.getMessageLength() == null
+                ? "unavailable" : options.getMessageLength());
+        modelParameters.put("seed", "unavailable");
+        Map<String, Object> selector = new LinkedHashMap<>();
+        selector.put("enabled", codeRagProperties.getLlmSelector().isEnabled());
+        selector.put("clientType", codeRagProperties.getLlmSelector().getClientType().name());
+        selector.put("model", codeRagProperties.getLlmSelector().getModel());
+        selector.put("maxCandidateChars", codeRagProperties.getLlmSelector().getMaxCandidateChars());
+        selector.put("maxSelected", codeRagProperties.getLlmSelector().getMaxSelected());
+        selector.put("timeoutMs", codeRagProperties.getLlmSelector().getTimeoutMs());
+        Map<String, Object> compression = new LinkedHashMap<>();
+        compression.put("enabled", compressionProperties.isEnabled());
+        compression.put("maxContextTokens", threshold.getMaxContextTokens());
+        compression.put("maxSingleToolResultTokens", threshold.getMaxSingleToolResultTokens());
+        compression.put("keepRecentRounds", compressionProperties.getKeepRecentRounds());
+        compression.put("maxHistoryMessages", compressionProperties.getMaxHistoryMessages());
+        compression.put("charsPerToken", compressionProperties.getCharsPerToken());
+        compression.put("model", "same registered model client; dedicated compression model field unavailable");
+        return new ContextLifecycleBenchmarkResult.RunMetadata(
+                runId, suite.benchmarkSuiteVersion, suite.architectureLabel, snapshot.mainGit().commit(),
+                snapshot.mainGit().status(), model,
+                options == null ? null : options.getTemperature(), null, modelParameters,
+                repository.getId(), repository.getName(), snapshot.repositoryGit().commit(),
+                snapshot.repositoryGit().status(), snapshot.fileManifestMd5(), snapshot.chunkManifestMd5(),
+                snapshot.fileCount(), snapshot.chunkCount(), snapshot.embeddingCount(),
+                20, codeRagProperties.getAnswerEvidence().getRawTopK(), selector, compression,
+                startedAt, endedAt, 3, repeats,
+                "Provider usage when exposed; ESTIMATED_MESSAGE_CHARS_V1 otherwise, stored separately",
+                "Deterministic structured critical facts, exact values, and forbidden claims; no LLM judge");
     }
 
     private ContextLifecycleBenchmarkPreflight.Snapshot preflight(
