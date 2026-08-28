@@ -1,0 +1,321 @@
+{
+  "benchmarkSuiteVersion": "context-lifecycle-v1",
+  "architectureLabel": "LEGACY",
+  "legacyBehaviorCommit": "db9ff624a6cd48e08e002a79ec35a12065bc185d",
+  "repositorySnapshot": {
+    "repositoryName": "FlashDeal",
+    "repositoryId": "bf4ef891-330b-4ce8-9002-ba4c43ffe210",
+    "fileManifestMd5": "7baa292e917e30d3c81384e2b5cf76ca",
+    "chunkManifestMd5": "988c5abbe64e95bb4bf1ee1daf169a7c",
+    "fileCount": 167,
+    "chunkCount": 642,
+    "embeddingCount": 642
+  },
+  "cases": [
+    {
+      "caseId": "a_no_tool_hashmap",
+      "category": "A_SMALL_NO_COMPRESSION",
+      "question": "In one concise sentence, state whether Java HashMap is thread-safe.",
+      "expectedCriticalFacts": [{"id": "thread_safety", "anyOf": ["not thread-safe", "not thread safe", "线程不安全"]}],
+      "forbiddenClaims": ["HashMap is thread-safe"],
+      "allowedTools": ["terminate"]
+    },
+    {
+      "caseId": "a_small_db_repo",
+      "category": "A_SMALL_NO_COMPRESSION",
+      "question": "Query code_repository and report only FlashDeal's name, language, and status.",
+      "expectedCriticalFacts": [
+        {"id": "repo_name", "allOf": ["FlashDeal"]},
+        {"id": "repo_language_status", "allOf": ["java", "READY"]}
+      ],
+      "exactValues": [{"id": "status", "value": "READY"}],
+      "requiredTools": ["databaseQuery"],
+      "allowedTools": ["databaseQuery", "terminate"]
+    },
+    {
+      "caseId": "a_small_code_api",
+      "category": "A_SMALL_NO_COMPRESSION",
+      "question": "Where is the FlashDeal seckill order API implemented? Give the controller and method.",
+      "expectedCriticalFacts": [{"id": "api_location", "allOf": ["VoucherOrderController", "seckillVoucher"]}],
+      "expectedRefs": ["VoucherOrderController", "seckillVoucher"],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+
+    {
+      "caseId": "b_async_order_flow",
+      "category": "B_CURRENT_TASK_MULTI_TOOL_RAG",
+      "question": "Explain the complete FlashDeal flow after seckill qualification: service, MQ producer, consumer, and persistence. Cite the concrete files and methods.",
+      "expectedCriticalFacts": [
+        {"id": "producer", "allOf": ["VoucherOrderProducer", "sendSeckillOrder"]},
+        {"id": "consumer", "allOf": ["VoucherOrderConsumer", "handleSeckillOrder"]},
+        {"id": "persistence", "anyOf": ["createVoucherOrder", "createVoucherOrdersBatch"]}
+      ],
+      "expectedRefs": ["VoucherOrderServiceImpl", "VoucherOrderProducer", "VoucherOrderConsumer"],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+    {
+      "caseId": "b_duplicate_protection",
+      "category": "B_CURRENT_TASK_MULTI_TOOL_RAG",
+      "question": "Explain how FlashDeal prevents one user buying the same voucher twice across Redis precheck, database lookup, and unique-key fallback. Cite all relevant code.",
+      "expectedCriticalFacts": [
+        {"id": "redis", "allOf": ["sismember", "seckill.lua"]},
+        {"id": "database", "allOf": ["selectExistingUserVoucherPairs"]},
+        {"id": "unique_key", "allOf": ["DuplicateKeyException"]}
+      ],
+      "expectedRefs": ["seckill.lua", "VoucherOrderServiceImpl", "VoucherOrderMapper.xml"],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+    {
+      "caseId": "b_timeout_close_flow",
+      "category": "B_CURRENT_TASK_MULTI_TOOL_RAG",
+      "question": "Trace FlashDeal's unpaid-order timeout flow from delayed queue declaration through consumer handling, status transition, and Redis stock recovery. Cite exact symbols.",
+      "expectedCriticalFacts": [
+        {"id": "delay_queue", "allOf": ["ORDER_TIMEOUT_DELAY_QUEUE", "RabbitMqConfig"]},
+        {"id": "close", "allOf": ["closeUnpaidOrderIfNecessary"]},
+        {"id": "recovery", "anyOf": ["recoverRedisStockAfterClose", "Redis stock"]}
+      ],
+      "expectedRefs": ["RabbitMqConfig", "VoucherOrderConsumer", "VoucherOrderServiceImpl"],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+    {
+      "caseId": "b_two_level_cache",
+      "category": "B_CURRENT_TASK_MULTI_TOOL_RAG",
+      "question": "Explain the FlashDeal shop-detail lookup order across Caffeine, Redis, database fallback, and cache refill, with files and methods.",
+      "expectedCriticalFacts": [
+        {"id": "method", "allOf": ["queryShopWithTwoLevelCache"]},
+        {"id": "layers", "allOf": ["Caffeine", "Redis", "database"]},
+        {"id": "key", "allOf": ["CACHE_SHOP_KEY"]}
+      ],
+      "expectedRefs": ["ShopServiceImpl", "CaffeineConfig", "RedisConstants"],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+    {
+      "caseId": "b_batch_persistence",
+      "category": "B_CURRENT_TASK_MULTI_TOOL_RAG",
+      "question": "Trace FlashDeal batch order persistence from the service transaction to duplicate lookup, stock decrement SQL, and batch insert SQL. Cite exact mapper ids.",
+      "expectedCriticalFacts": [
+        {"id": "service", "anyOf": ["createVoucherOrdersBatchInTransaction", "createVoucherOrdersBatch"]},
+        {"id": "duplicate_lookup", "allOf": ["selectExistingUserVoucherPairs"]},
+        {"id": "sql", "allOf": ["decrementStockBatch", "insertBatch"]}
+      ],
+      "expectedRefs": ["VoucherOrderServiceImpl", "VoucherOrderMapper.xml", "SeckillVoucherMapper.xml"],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+
+    {
+      "caseId": "c_pressure_seckill_architecture",
+      "category": "C_CONTEXT_PRESSURE",
+      "question": "Produce an evidence-backed architecture walkthrough of FlashDeal seckill covering API, Lua return codes, reservation metadata, MQ constants/config, producer, consumer, transactional persistence, duplicate defense, timeout close, and stock recovery. Inspect each component before answering.",
+      "expectedCriticalFacts": [
+        {"id": "entry", "allOf": ["VoucherOrderController", "seckillVoucher"]},
+        {"id": "lua", "allOf": ["seckill.lua", "return 0", "return 1", "return 2", "return 3"]},
+        {"id": "mq", "allOf": ["VoucherOrderProducer", "VoucherOrderConsumer"]},
+        {"id": "timeout", "allOf": ["closeUnpaidOrderIfNecessary"]}
+      ],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+    {
+      "caseId": "c_pressure_cache_auth_rate",
+      "category": "C_CONTEXT_PRESSURE",
+      "question": "Compare three FlashDeal subsystems with concrete code evidence: two-level shop caching, login/refresh interceptor ordering and exclusions, and Redis-backed request rate limiting. Inspect all related files before synthesizing.",
+      "expectedCriticalFacts": [
+        {"id": "cache", "allOf": ["queryShopWithTwoLevelCache", "CACHE_SHOP_KEY"]},
+        {"id": "interceptors", "allOf": ["LoginInterceptor", "RefreshTokenInterceptor", "MvcConfig"]},
+        {"id": "rate", "allOf": ["RateLimitAspect", "buildRedisKey"]}
+      ],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+    {
+      "caseId": "c_pressure_mq_reliability",
+      "category": "C_CONTEXT_PRESSURE",
+      "question": "Explain FlashDeal MQ reliability end to end: exchange/queue/binding, publisher confirmation, consumer acknowledgement, retry/dead-letter behavior, outbox participation, and timeout queue handling. Cite exact files and symbols.",
+      "expectedCriticalFacts": [
+        {"id": "binding", "allOf": ["RabbitMqConfig", "SECKILL_ORDER_EXCHANGE", "SECKILL_ORDER_QUEUE"]},
+        {"id": "consumer", "allOf": ["VoucherOrderConsumer"]},
+        {"id": "outbox", "anyOf": ["OutboxEventServiceImpl", "outbox"]}
+      ],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+
+    {
+      "caseId": "d1_heavy_seckill_task",
+      "category": "D_CROSS_TASK_POLLUTION",
+      "sessionGroupId": "cross-1",
+      "taskOrder": 1,
+      "question": "Inspect and explain FlashDeal's full seckill order path across controller, Lua, producer, consumer, and persistence, citing every component.",
+      "expectedCriticalFacts": [{"id": "full_path", "allOf": ["VoucherOrderController", "seckill.lua", "VoucherOrderProducer", "VoucherOrderConsumer"]}],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+    {
+      "caseId": "d1_unrelated_hashmap_task",
+      "category": "D_CROSS_TASK_POLLUTION",
+      "sessionGroupId": "cross-1",
+      "taskOrder": 2,
+      "question": "Unrelated new task: in one sentence, is Java HashMap thread-safe?",
+      "expectedCriticalFacts": [{"id": "thread_safety", "anyOf": ["not thread-safe", "not thread safe", "线程不安全"]}],
+      "forbiddenClaims": ["VoucherOrder", "seckill.lua"],
+      "allowedTools": ["terminate"]
+    },
+    {
+      "caseId": "d2_heavy_cache_task",
+      "category": "D_CROSS_TASK_POLLUTION",
+      "sessionGroupId": "cross-2",
+      "taskOrder": 1,
+      "question": "Inspect FlashDeal shop caching, cache constants, Caffeine configuration, Redis fallback, and rebuild behavior in detail.",
+      "expectedCriticalFacts": [{"id": "cache_path", "allOf": ["ShopServiceImpl", "CaffeineConfig", "CACHE_SHOP_KEY"]}],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+    {
+      "caseId": "d2_unrelated_http_task",
+      "category": "D_CROSS_TASK_POLLUTION",
+      "sessionGroupId": "cross-2",
+      "taskOrder": 2,
+      "question": "Unrelated new task: briefly explain HTTP status 404.",
+      "expectedCriticalFacts": [{"id": "http_404", "anyOf": ["not found", "未找到", "不存在"]}],
+      "forbiddenClaims": ["CaffeineConfig", "CACHE_SHOP_KEY"],
+      "allowedTools": ["terminate"]
+    },
+    {
+      "caseId": "d3_heavy_timeout_task",
+      "category": "D_CROSS_TASK_POLLUTION",
+      "sessionGroupId": "cross-3",
+      "taskOrder": 1,
+      "question": "Inspect FlashDeal timeout-order delayed queue, consumer, service transition, and stock recovery in detail with exact symbols.",
+      "expectedCriticalFacts": [{"id": "timeout_path", "allOf": ["ORDER_TIMEOUT_DELAY_QUEUE", "closeUnpaidOrderIfNecessary"]}],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+    {
+      "caseId": "d3_unrelated_list_task",
+      "category": "D_CROSS_TASK_POLLUTION",
+      "sessionGroupId": "cross-3",
+      "taskOrder": 2,
+      "question": "Unrelated new task: name one key difference between ArrayList and LinkedList.",
+      "expectedCriticalFacts": [{"id": "list_difference", "anyOf": ["random access", "随机访问", "linked", "链表"]}],
+      "forbiddenClaims": ["ORDER_TIMEOUT_DELAY_QUEUE", "closeUnpaidOrderIfNecessary"],
+      "allowedTools": ["terminate"]
+    },
+
+    {
+      "caseId": "e_exact_lua_return_codes",
+      "category": "E_EXACT_DETAIL",
+      "question": "List the exact seckill.lua return codes and conditions in FlashDeal. Preserve the numeric mapping.",
+      "expectedCriticalFacts": [
+        {"id": "success", "allOf": ["0", "passed"]},
+        {"id": "stock", "allOf": ["1", "stock"]},
+        {"id": "duplicate", "allOf": ["2", "duplicate"]},
+        {"id": "missing", "allOf": ["3", "not"]}
+      ],
+      "exactValues": [
+        {"id": "success_code", "value": "0"},
+        {"id": "stock_code", "value": "1"},
+        {"id": "duplicate_code", "value": "2"},
+        {"id": "missing_stock_key_code", "value": "3"}
+      ],
+      "expectedRefs": ["seckill.lua"],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+    {
+      "caseId": "e_exact_mq_constants",
+      "category": "E_EXACT_DETAIL",
+      "question": "Give the exact values of FlashDeal's seckill order exchange, queue, and routing-key constants, with symbol names.",
+      "expectedCriticalFacts": [{"id": "symbols", "allOf": ["SECKILL_ORDER_EXCHANGE", "SECKILL_ORDER_QUEUE", "SECKILL_ORDER_ROUTING_KEY"]}],
+      "exactValues": [
+        {"id": "exchange", "value": "flashdeal.seckill.order.exchange"},
+        {"id": "queue", "value": "flashdeal.seckill.order.queue"},
+        {"id": "routing_key", "value": "flashdeal.seckill.order"}
+      ],
+      "expectedRefs": ["RabbitConstants"],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+    {
+      "caseId": "e_exact_login_ttl",
+      "category": "E_EXACT_DETAIL",
+      "question": "What is the exact LOGIN_USER_TTL value in FlashDeal, what time unit is used when refreshing it, and where is it applied?",
+      "expectedCriticalFacts": [
+        {"id": "ttl_symbol", "allOf": ["LOGIN_USER_TTL", "36000"]},
+        {"id": "unit", "allOf": ["TimeUnit.MINUTES"]},
+        {"id": "usage", "anyOf": ["RefreshTokenInterceptor", "UserServiceImpl"]}
+      ],
+      "exactValues": [{"id": "ttl", "value": "36000"}],
+      "expectedRefs": ["RedisConstants", "RefreshTokenInterceptor"],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+
+    {
+      "caseId": "f_long_planning_reliability_compare",
+      "category": "F_LONG_PLANNING",
+      "question": "Build a reasoned comparison of FlashDeal's duplicate-order, MQ delivery, and timeout-close safeguards. Gather evidence for each, explain failure boundaries, and cite the implementation sequence.",
+      "expectedCriticalFacts": [
+        {"id": "duplicate", "allOf": ["sismember", "selectExistingUserVoucherPairs"]},
+        {"id": "mq", "allOf": ["VoucherOrderProducer", "VoucherOrderConsumer"]},
+        {"id": "timeout", "allOf": ["closeUnpaidOrderIfNecessary"]}
+      ],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+    {
+      "caseId": "f_long_planning_data_structures",
+      "category": "F_LONG_PLANNING",
+      "question": "Inventory FlashDeal's Redis data structures for login, shop cache, sign-in bitmap, seckill stock/order/pending/reservation, and rate limiting. Explain each key pattern and operation with code evidence.",
+      "expectedCriticalFacts": [
+        {"id": "login", "allOf": ["LOGIN_USER_KEY"]},
+        {"id": "sign", "allOf": ["bitField", "USER_SIGN_KEY"]},
+        {"id": "seckill", "allOf": ["seckill:stock", "seckill:order", "seckill:pending"]},
+        {"id": "rate", "allOf": ["RateLimitAspect"]}
+      ],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+
+    {
+      "caseId": "g_safe_database_failure",
+      "category": "G_FAILURE_PROTOCOL",
+      "question": "Use databaseQuery to run this read-only but invalid query: SELECT definitely_missing_column FROM code_repository LIMIT 1. Then report the tool failure without inventing a value.",
+      "expectedCriticalFacts": [{"id": "failure_acknowledged", "anyOf": ["failed", "error", "失败", "不存在"]}],
+      "forbiddenClaims": ["definitely_missing_column ="],
+      "requiredTools": ["databaseQuery"],
+      "allowedTools": ["databaseQuery", "terminate"]
+    },
+    {
+      "caseId": "g_invalid_repo_failure",
+      "category": "G_FAILURE_PROTOCOL",
+      "question": "Call searchProjectCode with repoId 00000000-0000-0000-0000-000000000000 for query 'seckill flow'. Report that no reliable evidence is available; do not substitute the session repository.",
+      "expectedCriticalFacts": [{"id": "insufficient_evidence", "anyOf": ["no reliable evidence", "not found", "无法", "没有"]}],
+      "forbiddenClaims": ["VoucherOrderController implements the requested repository"],
+      "requiredTools": ["searchProjectCode"],
+      "allowedTools": ["searchProjectCode", "terminate"]
+    },
+
+    {
+      "caseId": "h_oversized_result_fixture",
+      "category": "H_OVERSIZED_RESULT",
+      "activation": "FIXTURE_ONLY",
+      "question": "Test-only fixture: return a deterministic oversized tool result and answer from its retained prefix.",
+      "expectedCriticalFacts": [{"id": "fixture", "allOf": ["oversized", "retained"]}],
+      "notes": "Inactive until an existing safe test-only tool can be wired without production behavior changes."
+    },
+    {
+      "caseId": "h_oversized_batch_fixture",
+      "category": "H_OVERSIZED_RESULT",
+      "activation": "FIXTURE_ONLY",
+      "question": "Test-only fixture: return two oversized results in one complete tool protocol batch.",
+      "expectedCriticalFacts": [{"id": "fixture", "allOf": ["two", "oversized", "batch"]}],
+      "notes": "Inactive specification retained for future architecture comparison; no production oversized behavior added."
+    }
+  ]
+}

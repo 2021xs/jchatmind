@@ -1,0 +1,26 @@
+jchatmind:
+  agent:
+    observability:
+      recovery-enabled: false
+  code-rag:
+    embedding-warmup:
+      enabled: false
+    answer-evidence:
+      raw-top-k: 20
+      final-top-k: 5
+      include-selector-debug: true
+  context-compression:
+    enabled: true
+    keep-recent-rounds: 2
+    max-history-messages: 8
+    max-summary-chars: 1200
+    max-context-tokens: 3500
+    max-single-tool-result-tokens: 1500
+    chars-per-token: 3
+    model-thresholds:
+      default:
+        max-context-tokens: 3500
+        max-single-tool-result-tokens: 1500
+      gpt-5.5:
+        max-context-tokens: 3500
+        max-single-tool-result-tokens: 1500
