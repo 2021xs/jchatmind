@@ -2,6 +2,7 @@ package com.kama.jchatmind.agent;
 
 import com.kama.jchatmind.converter.ChatMessageConverter;
 import com.kama.jchatmind.config.ToolCorrectionProperties;
+import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.message.AgentSseEvent;
 import com.kama.jchatmind.message.SseMessage;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
@@ -444,18 +445,32 @@ public class JChatMind {
         ToolCallback[] toolCallbacks = finalLoop
                 ? new ToolCallback[0]
                 : planningToolCallbacks();
+        List<Message> requestMessages = AgentMemoryHistorySanitizer.toSafeModelMessages(
+                this.chatMemory.get(this.chatSessionId));
         Prompt prompt = Prompt.builder()
                 .chatOptions(this.chatOptions)
-                .messages(AgentMemoryHistorySanitizer.toSafeModelMessages(this.chatMemory.get(this.chatSessionId)))
+                .messages(requestMessages)
                 .build();
-
-        this.lastChatResponse = this.chatClient
-                .prompt(prompt)
-                .system(thinkPrompt)
-                .toolCallbacks(toolCallbacks)
-                .call()
-                .chatClientResponse()
-                .chatResponse();
+        long modelCallStartedAtMs = System.currentTimeMillis();
+        try {
+            this.lastChatResponse = this.chatClient
+                    .prompt(prompt)
+                    .system(thinkPrompt)
+                    .toolCallbacks(toolCallbacks)
+                    .call()
+                    .chatClientResponse()
+                    .chatResponse();
+            publishModelCallObservation(
+                    AgentLifecycleObservationPublisher.ModelCallPhase.THINK,
+                    loopStep, requestMessages, thinkPrompt, modelCallStartedAtMs,
+                    this.lastChatResponse, null);
+        } catch (RuntimeException e) {
+            publishModelCallObservation(
+                    AgentLifecycleObservationPublisher.ModelCallPhase.THINK,
+                    loopStep, requestMessages, thinkPrompt, modelCallStartedAtMs,
+                    null, e);
+            throw e;
+        }
 
         throwIfCancellationRequested();
 
@@ -674,6 +689,8 @@ public class JChatMind {
                         .build();
                 long providerAttemptStartedAtMs = System.currentTimeMillis();
                 FinalStreamResult result = runFinalSynthesisAttempt(prompt, providerAttemptStartedAtMs);
+                publishFinalModelCallObservation(
+                        attempt, finalMessages, providerAttemptStartedAtMs, result);
                 accumulatedReasoningEventCount += result.metrics().reasoningEventCount();
                 accumulatedReasoningChars += result.metrics().reasoningChars();
                 throwIfCancellationRequested();
@@ -788,6 +805,57 @@ public class JChatMind {
                 taskControl.detachActiveStream(subscriber);
             }
         }
+    }
+
+    private void publishModelCallObservation(
+            AgentLifecycleObservationPublisher.ModelCallPhase phase,
+            int attempt,
+            List<Message> requestMessages,
+            String additionalSystemPrompt,
+            long startedAtMs,
+            ChatResponse response,
+            RuntimeException failure) {
+        Usage usage = response == null || response.getMetadata() == null
+                ? null : response.getMetadata().getUsage();
+        String providerFinishReason = response == null || response.getResult() == null
+                || response.getResult().getMetadata() == null
+                ? null : response.getResult().getMetadata().getFinishReason();
+        String outputText = response == null || response.getResult() == null
+                || response.getResult().getOutput() == null
+                ? null : response.getResult().getOutput().getText();
+        AgentLifecycleObservationPublisher.publishModelCall(
+                new AgentLifecycleObservationPublisher.ModelCallObservation(
+                        currentTaskId, chatSessionId, model, phase, attempt,
+                        requestMessages, additionalSystemPrompt, startedAtMs,
+                        Math.max(0, System.currentTimeMillis() - startedAtMs),
+                        usage == null ? null : usage.getPromptTokens(),
+                        usage == null ? null : usage.getCompletionTokens(),
+                        usage == null ? null : usage.getTotalTokens(),
+                        usage == null ? "UNAVAILABLE" : "PROVIDER_USAGE",
+                        providerFinishReason, outputText,
+                        failure == null ? null : failure.getClass().getSimpleName() + ": " + failure.getMessage()));
+    }
+
+    private void publishFinalModelCallObservation(int attempt,
+                                                  List<Message> requestMessages,
+                                                  long startedAtMs,
+                                                  FinalStreamResult result) {
+        Usage usage = result.metrics().usage();
+        AgentLifecycleObservationPublisher.publishModelCall(
+                new AgentLifecycleObservationPublisher.ModelCallObservation(
+                        currentTaskId, chatSessionId, model,
+                        AgentLifecycleObservationPublisher.ModelCallPhase.FINAL,
+                        attempt, requestMessages, null, startedAtMs,
+                        result.metrics().finalTtltMs() == null
+                                ? Math.max(0, System.currentTimeMillis() - startedAtMs)
+                                : result.metrics().finalTtltMs(),
+                        usage == null ? null : usage.getPromptTokens(),
+                        usage == null ? null : usage.getCompletionTokens(),
+                        usage == null ? null : usage.getTotalTokens(),
+                        usage == null ? "UNAVAILABLE" : "PROVIDER_USAGE",
+                        result.metrics().providerFinishReason(), result.answer(),
+                        result.error() == null ? null
+                                : result.error().getClass().getSimpleName() + ": " + result.error().getMessage()));
     }
 
     private void publishValidatedFinalDeltas(List<String> deltas) {
