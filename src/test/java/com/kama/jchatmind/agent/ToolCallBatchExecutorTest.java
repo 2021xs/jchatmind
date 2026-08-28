@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.config.ToolDuplicateDetectionProperties;
 import com.kama.jchatmind.config.ToolTimeoutProperties;
 import com.kama.jchatmind.config.ToolResultProperties;
+import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.mcp.McpToolCallException;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.tool.ToolExecutionContext;
@@ -34,6 +35,7 @@ import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -105,13 +107,23 @@ class ToolCallBatchExecutorTest {
     void fastToolReturnsOriginalResultAndKeepsSuccessTrace() {
         ToolCallback fastTool = callback("fastTool", ignored -> "original-result");
 
-        ToolCallBatchResult result = execute(List.of(fastTool), call("call-1", "fastTool"));
+        AtomicReference<AgentLifecycleObservationPublisher.ToolResultObservation> observed =
+                new AtomicReference<>();
+        ToolCallBatchResult result;
+        try (AgentLifecycleObservationPublisher.Registration ignored =
+                     AgentLifecycleObservationPublisher.registerToolResult(observed::set)) {
+            result = execute(List.of(fastTool), call("call-1", "fastTool"));
+        }
 
         assertTrue(result.succeeded());
         assertEquals("original-result",
                 result.getToolResponseMessage().getResponses().get(0).responseData());
         verify(toolExecutionService).afterToolSuccess(eq(executionContext), any(), eq("original-result"));
         verify(toolExecutionService, never()).afterToolFailure(eq(executionContext), any(), any(), any(Boolean.class));
+        assertEquals("task-1", observed.get().taskId());
+        assertEquals("original-result", observed.get().rawResult());
+        assertEquals("original-result", observed.get().contextResult());
+        assertEquals("SUCCESS", observed.get().status());
     }
 
     @Test

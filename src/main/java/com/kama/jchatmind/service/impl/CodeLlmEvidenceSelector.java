@@ -2,6 +2,7 @@ package com.kama.jchatmind.service.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.model.dto.CodeEvidenceCandidateCard;
 import com.kama.jchatmind.model.dto.CodeEvidenceSelectionResult;
@@ -9,6 +10,7 @@ import com.kama.jchatmind.model.dto.SelectorModelResponse;
 import com.kama.jchatmind.service.LlmSelectorClient;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -49,9 +51,12 @@ public class CodeLlmEvidenceSelector {
         List<LocalCandidate> localCandidates = localCandidates(candidates);
         PromptPayload prompt = buildPrompt(query, localCandidates);
         SelectorModelResponse modelCall;
+        long modelCallStartedAtMs = System.currentTimeMillis();
         try {
             modelCall = callModel(prompt.text());
+            publishModelCall(prompt.text(), modelCallStartedAtMs, modelCall, null);
         } catch (Exception e) {
+            publishModelCall(prompt.text(), modelCallStartedAtMs, null, e);
             CodeEvidenceSelectionResult fallback = fallbackResult(candidates, started,
                     executionFailureReason(e));
             fallback.setJsonParseOk(false);
@@ -108,6 +113,26 @@ public class CodeLlmEvidenceSelector {
             future.cancel(true);
             throw e;
         }
+    }
+
+    private void publishModelCall(String prompt,
+                                  long startedAtMs,
+                                  SelectorModelResponse response,
+                                  Exception failure) {
+        AgentLifecycleObservationPublisher.publishModelCall(
+                new AgentLifecycleObservationPublisher.ModelCallObservation(
+                        null, null, properties.getLlmSelector().getModel(),
+                        AgentLifecycleObservationPublisher.ModelCallPhase.SELECTOR,
+                        1, List.of(new UserMessage(prompt)), null, startedAtMs,
+                        Math.max(0, System.currentTimeMillis() - startedAtMs),
+                        response == null ? null : response.getPromptTokens(),
+                        response == null ? null : response.getCompletionTokens(),
+                        response == null ? null : response.getTotalTokens(),
+                        response == null ? "UNAVAILABLE" : "PROVIDER_USAGE",
+                        response == null ? null : response.getFinishReason(),
+                        response == null ? null : response.getContent(),
+                        failure == null ? null
+                                : failure.getClass().getSimpleName() + ": " + failure.getMessage()));
     }
 
     private void applyUsage(CodeEvidenceSelectionResult result, SelectorModelResponse modelCall) {

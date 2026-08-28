@@ -2,6 +2,7 @@ package com.kama.jchatmind.service.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.config.ContextCompressionProperties;
 import com.kama.jchatmind.mapper.ChatSessionMapper;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
@@ -104,20 +105,40 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
             return new CompressedContext(state.effectiveSummary(), recentMessages, false);
         }
 
+        String compressionPrompt = buildSummaryPrompt(state.effectiveSummary(), messagesToCompress);
         long start = System.currentTimeMillis();
         try {
             log.info("Context compression started: sessionId={}, historyMessages={}, toCompress={}, recentMessages={}",
                     sessionId, sortedMessages.size(), messagesToCompress.size(), recentMessages.size());
-            String summary = summarize(model, state.effectiveSummary(), messagesToCompress);
+            String summary = conversationSummaryClient.summarize(model, compressionPrompt);
             String boundedSummary = limit(summary, properties.getMaxSummaryChars());
             String lastCompressedMessageId = messagesToCompress.get(messagesToCompress.size() - 1).getId();
             saveMetadata(sessionId, metadata, boundedSummary, lastCompressedMessageId);
             long latencyMs = System.currentTimeMillis() - start;
+            if (AgentLifecycleObservationPublisher.isCompressionObservationEnabled()) {
+                List<ChatMessageDTO> compressedMessages = new ArrayList<>();
+                compressedMessages.add(summaryMessage(boundedSummary));
+                compressedMessages.addAll(recentMessages);
+                TokenCount afterTokenCount = totalContentTokens(model, compressedMessages);
+                AgentLifecycleObservationPublisher.publishCompression(
+                        new AgentLifecycleObservationPublisher.CompressionObservation(
+                                sessionId, model, check.reason(), check.effectiveContextTokens(),
+                                afterTokenCount.tokens(), check.rawHistoryTokens(),
+                                combineSources(check.tokenSource(), afterTokenCount.source()),
+                                compressionPrompt, state.effectiveSummary(), boundedSummary,
+                                latencyMs, true, null));
+            }
             log.info("Context compression done: sessionId={}, historyMessages={}, recentMessages={}, summaryChars={}, latencyMs={}",
                     sessionId, sortedMessages.size(), recentMessages.size(), length(boundedSummary), latencyMs);
             return new CompressedContext(boundedSummary, recentMessages, true);
         } catch (Exception e) {
             long latencyMs = System.currentTimeMillis() - start;
+            AgentLifecycleObservationPublisher.publishCompression(
+                    new AgentLifecycleObservationPublisher.CompressionObservation(
+                            sessionId, model, check.reason(), check.effectiveContextTokens(),
+                            check.effectiveContextTokens(), check.rawHistoryTokens(), check.tokenSource(),
+                            compressionPrompt, state.effectiveSummary(), null,
+                            latencyMs, false, e.getClass().getSimpleName() + ": " + e.getMessage()));
             log.warn("Context compression failed, fallback to recent messages: sessionId={}, historyMessages={}, recentMessages={}, latencyMs={}, error={}",
                     sessionId, sortedMessages.size(), recentMessages.size(), latencyMs, e.getMessage(), e);
             List<ChatMessageDTO> fallbackMessages = state.summaryUsable()
@@ -376,11 +397,6 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
             reasons.add("tool_result_tokens");
         }
         return reasons.isEmpty() ? "below_threshold" : String.join("+", reasons);
-    }
-
-    private String summarize(String model, String oldSummary, List<ChatMessageDTO> messagesToCompress) {
-        String prompt = buildSummaryPrompt(oldSummary, messagesToCompress);
-        return conversationSummaryClient.summarize(model, prompt);
     }
 
     private String buildSummaryPrompt(String oldSummary, List<ChatMessageDTO> messagesToCompress) {

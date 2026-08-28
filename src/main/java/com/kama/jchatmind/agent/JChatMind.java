@@ -656,8 +656,14 @@ public class JChatMind {
         }
 
         List<Message> executionTranscript = this.chatMemory.get(this.chatSessionId);
+        List<Message> currentTaskToolTranscript = taskToolTranscript.snapshot();
         FinalSynthesisRequest finalRequest = finalSynthesisRequestFactory.create(
-                executionTranscript, taskToolTranscript.snapshot(), originalUserQuestion);
+                executionTranscript, currentTaskToolTranscript, originalUserQuestion);
+        AgentLifecycleObservationPublisher.publishFinalProjection(
+                new AgentLifecycleObservationPublisher.FinalProjectionObservation(
+                        currentTaskId, chatSessionId, model, executionTranscript,
+                        currentTaskToolTranscript, finalRequest,
+                        taskToolTranscript.batchCount(), taskToolTranscript.toolCallCount()));
         int evidenceCount = finalRequest.evidenceBatches().stream()
                 .mapToInt(batch -> batch.evidence().size())
                 .sum();

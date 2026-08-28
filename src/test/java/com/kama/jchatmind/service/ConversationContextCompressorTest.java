@@ -2,6 +2,7 @@ package com.kama.jchatmind.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.config.ContextCompressionProperties;
+import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.mapper.ChatSessionMapper;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.dto.ChatSessionDTO;
@@ -20,6 +21,7 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -112,6 +114,30 @@ class ConversationContextCompressorTest {
         assertTrue(result.compressed());
         assertEquals(1, summaryClient.callCount);
         assertTrue(summaryClient.lastPrompt.contains("tool result with many many characters"));
+    }
+
+    @Test
+    void shouldPublishCompressionMeasurementsWithoutChangingCompressedContext() {
+        properties.setMaxContextTokens(40);
+        List<ChatMessageDTO> messages = messages(8);
+        when(chatSessionMapper.selectById(SESSION_ID)).thenReturn(chatSessionUnchecked(null));
+        AtomicReference<AgentLifecycleObservationPublisher.CompressionObservation> observed =
+                new AtomicReference<>();
+
+        ConversationContextCompressor.CompressedContext result;
+        try (AgentLifecycleObservationPublisher.Registration ignored =
+                     AgentLifecycleObservationPublisher.registerCompression(observed::set)) {
+            result = compressor.compressIfNeeded(SESSION_ID, MODEL, messages);
+        }
+
+        assertTrue(result.compressed());
+        assertNotNull(observed.get());
+        assertEquals(SESSION_ID, observed.get().sessionId());
+        assertEquals(summaryClient.lastPrompt, observed.get().compressionPrompt());
+        assertEquals(result.summary(), observed.get().outputSummary());
+        assertTrue(observed.get().tokensBeforeCompression() > 0);
+        assertTrue(observed.get().tokensAfterCompression() > 0);
+        assertTrue(observed.get().succeeded());
     }
 
     @Test

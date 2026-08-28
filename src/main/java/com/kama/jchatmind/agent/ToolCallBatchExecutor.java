@@ -1,5 +1,6 @@
 package com.kama.jchatmind.agent;
 
+import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.config.ToolTimeoutProperties;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.tool.ToolArgumentException;
@@ -350,6 +351,7 @@ public class ToolCallBatchExecutor {
                             record.getActualToolName(), record.getCanonicalToolName(), rawResult);
                     applyResultMetrics(record, guarded);
                     acceptedResult[0] = guarded.value();
+                    publishToolResult(executionContext, record, rawResult, guarded, "SUCCESS");
                     toolExecutionService.afterToolSuccess(executionContext, record, acceptedResult[0]);
                     record.setTerminalRecorded(true);
                 };
@@ -437,6 +439,7 @@ public class ToolCallBatchExecutor {
             ToolResultGuard.GuardedToolResult guarded = toolResultGuard.guard(
                     record.getActualToolName(), record.getCanonicalToolName(), feedback);
             applyResultMetrics(record, guarded);
+            publishToolResult(executionContext, record, feedback, guarded, "REJECTED");
             log.warn("Duplicate tool call rejected: taskId={}, toolName={}, consecutiveCount={}, hardStop={}",
                     executionContext.getTaskId(), record.getCanonicalToolName(),
                     duplicateCheck.consecutiveCount(), duplicateCheck.hardStop());
@@ -454,6 +457,7 @@ public class ToolCallBatchExecutor {
             ToolResultGuard.GuardedToolResult guarded = toolResultGuard.guard(
                     record.getActualToolName(), record.getCanonicalToolName(), feedback);
             applyResultMetrics(record, guarded);
+            publishToolResult(executionContext, record, feedback, guarded, "GUARDED");
             toolExecutionService.afterToolSuccess(executionContext, record, guarded.value());
             record.setTerminalRecorded(true);
             log.warn("Code search no-novelty guard rejected retrieval: taskId={}, toolName={}, searchCallCount={}",
@@ -480,5 +484,18 @@ public class ToolCallBatchExecutor {
         record.setStoredResultChars(guarded.storedChars());
         record.setMaxResultChars(guarded.maxResultChars());
         record.setRuntimeResultTruncated(guarded.truncated());
+    }
+
+    private void publishToolResult(ToolExecutionContext context,
+                                   ToolExecutionRecord record,
+                                   String rawResult,
+                                   ToolResultGuard.GuardedToolResult guarded,
+                                   String status) {
+        AgentLifecycleObservationPublisher.publishToolResult(
+                new AgentLifecycleObservationPublisher.ToolResultObservation(
+                        context.getTaskId(), context.getSessionId(), record.getToolCallId(),
+                        record.getCanonicalToolName(), record.getActualToolName(),
+                        rawResult, guarded.value(), guarded.originalChars(), guarded.storedChars(),
+                        guarded.truncated(), status));
     }
 }

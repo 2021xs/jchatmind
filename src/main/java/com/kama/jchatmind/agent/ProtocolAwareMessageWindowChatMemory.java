@@ -129,7 +129,7 @@ final class ProtocolAwareMessageWindowChatMemory implements ChatMemory {
         return result;
     }
 
-    private List<LogicalMessageGroup> logicalMessageGroups(List<Message> messages) {
+    private static List<LogicalMessageGroup> logicalMessageGroups(List<Message> messages) {
         List<LogicalMessageGroup> groups = new ArrayList<>();
         Set<String> historyToolCallIds = new HashSet<>();
         int index = 0;
@@ -185,8 +185,27 @@ final class ProtocolAwareMessageWindowChatMemory implements ChatMemory {
         return groups;
     }
 
-    private boolean hasToolCalls(AssistantMessage message) {
+    private static boolean hasToolCalls(AssistantMessage message) {
         return message.getToolCalls() != null && !message.getToolCalls().isEmpty();
+    }
+
+    static ProtocolValidation inspectProtocol(List<Message> messages) {
+        try {
+            logicalMessageGroups(messages == null ? List.of() : messages);
+            return new ProtocolValidation(0, 0, null);
+        } catch (IllegalStateException e) {
+            String diagnostic = e.getMessage();
+            int orphanCount = diagnostic != null
+                    && (diagnostic.contains("orphan tool response")
+                    || diagnostic.contains("incomplete tool response batch")
+                    || diagnostic.contains("unexpected or duplicate tool response")) ? 1 : 0;
+            return new ProtocolValidation(orphanCount, 1, diagnostic);
+        }
+    }
+
+    record ProtocolValidation(int orphanToolProtocolCount,
+                              int protocolValidationFailureCount,
+                              String diagnostic) {
     }
 
     private record LogicalMessageGroup(int startInclusive,
