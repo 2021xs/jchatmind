@@ -1,2 +1,4 @@
 /mvnw text eol=lf
 *.cmd text eol=crlf
+/docs/eval/context_lifecycle_flashdeal_snapshot_20260829/** -text
+/docs/eval/context_lifecycle_legacy_formal_baseline_20260829/** -text

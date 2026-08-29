@@ -1,0 +1,31 @@
+;
+; Archive created at 2026-08-29 01:47:21 UTC
+;     dbname: jchatmind_flashdeal_snapshot_build_20260829
+;     TOC Entries: 20
+;     Compression: gzip
+;     Dump Version: 1.15-0
+;     Format: CUSTOM
+;     Integer: 4 bytes
+;     Offset: 8 bytes
+;     Dumped from database version: 16.14 (Debian 16.14-1.pgdg12+1)
+;     Dumped by pg_dump version: 16.14 (Debian 16.14-1.pgdg12+1)
+;
+;
+; Selected TOC Entries:
+;
+2; 3079 32941 EXTENSION - vector 
+3619; 0 0 COMMENT - EXTENSION vector 
+216; 1259 33269 TABLE public code_chunk postgres
+217; 1259 33275 TABLE public code_file postgres
+218; 1259 33281 TABLE public code_repository postgres
+3610; 0 33269 TABLE DATA public code_chunk postgres
+3611; 0 33275 TABLE DATA public code_file postgres
+3612; 0 33281 TABLE DATA public code_repository postgres
+3457; 2606 33290 CONSTRAINT public code_chunk code_chunk_pkey postgres
+3462; 2606 33292 CONSTRAINT public code_file code_file_pkey postgres
+3465; 2606 33294 CONSTRAINT public code_repository code_repository_pkey postgres
+3458; 1259 33295 INDEX public idx_code_chunk_api postgres
+3459; 1259 33296 INDEX public idx_code_chunk_repo_type postgres
+3460; 1259 33297 INDEX public idx_code_chunk_symbol postgres
+3463; 1259 33298 INDEX public idx_code_file_repo_path postgres
+3466; 1259 33299 INDEX public idx_code_repository_created postgres

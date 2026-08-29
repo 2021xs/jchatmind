@@ -1,0 +1,43 @@
+{
+  "snapshotId": "flashdeal-code-rag-context-lifecycle-v1-20260829",
+  "createdAt": "2026-08-29T01:47:21Z",
+  "purpose": "Restore the exact FlashDeal Code RAG data used by the LEGACY context-lifecycle-v1 baseline",
+  "sourceDatabase": {
+    "database": "jchatmind",
+    "postgresVersion": "16.14",
+    "pgvectorImage": "pgvector/pgvector:pg16"
+  },
+  "repository": {
+    "id": "bf4ef891-330b-4ce8-9002-ba4c43ffe210",
+    "name": "FlashDeal",
+    "externalGitHead": "52d0baf1de5fc273efdb47f070b1187fbdafd2cf",
+    "externalGitWorkingTree": "DIRTY_RECORDED_NOT_PACKAGED",
+    "fileCount": 167,
+    "chunkCount": 642,
+    "embeddingCount": 642
+  },
+  "digests": {
+    "repositoryRowMd5": "be56e63d8103c466d855e99c17eff5c4",
+    "fileManifestMd5": "7baa292e917e30d3c81384e2b5cf76ca",
+    "chunkManifestMd5": "988c5abbe64e95bb4bf1ee1daf169a7c",
+    "fullFileRowsMd5": "0d2d675c6a30c63627fe31dedb1886fe",
+    "fullChunkRowsIncludingEmbeddingMd5": "77929902841960fe96ba19ad6fc8d4ce",
+    "embeddingMd5": "f0c30bad38b9a0cc9ad918968177335c"
+  },
+  "benchmarkIdentity": {
+    "architecture": "LEGACY",
+    "suiteVersion": "context-lifecycle-v1",
+    "baselineExecutionCommit": "6f5502df216ce9c74a5bee08797b1d795868e165",
+    "suiteSha256": "0a2e5d3fc464f4d0ef59a07f76bc60927dbf19440d9bb54f5b1e55c1cd93ba1d",
+    "profileSha256": "047edf0b4bd440675843207090413da8da3213fab5fbe9c5bcf0f653e9729797"
+  },
+  "artifacts": {
+    "flashdeal-code-rag.dump": "d6b241718103546ee1e706b846634087c02dda7c093a19eda8515196410f6798",
+    "flashdeal-code-rag-schema.sql": "d91f5b67bd01139f3225d2fb58480e6b2f49d083c837d03e9a2f73a5421e3ed8",
+    "flashdeal-code-rag.toc": "91b1ae731cefc9ef0c74041fa64e577d0a9a6fa21364efa562b9b85d96217f62"
+  },
+  "restoreValidation": {
+    "method": "pg_restore into a newly created database, followed by source/restored row and embedding digest comparison",
+    "result": "PASS"
+  }
+}
