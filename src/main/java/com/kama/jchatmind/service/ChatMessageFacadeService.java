@@ -35,11 +35,5 @@ public interface ChatMessageFacadeService {
 
     void deleteChatMessage(String chatMessageId);
 
-    /**
-     * Discards model-facing tool protocol messages produced by a cancelled Agent Task.
-     * Execution audit records are intentionally managed separately and remain durable.
-     */
-    int discardTaskToolMessages(String sessionId, String taskId);
-
     void updateChatMessage(String chatMessageId, UpdateChatMessageRequest request);
 }

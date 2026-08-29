@@ -168,6 +168,8 @@ class JChatMindFinalizationTest {
         agent.run();
 
         verify(clientHarness.client, never()).prompt(any(Prompt.class));
+        verify(messageService, never()).createToolProtocolBatch(
+                anyString(), anyString(), any(AssistantMessage.class), any(ToolResponseMessage.class));
         verify(logService, never()).finishTask(anyString(), anyString(), anyInt(), anyInt());
         verify(logService).cancelStepAndTask(any(), eq("task-1"), anyInt(), anyInt());
     }

@@ -2,7 +2,6 @@ package com.kama.jchatmind.mapper;
 
 import com.kama.jchatmind.model.entity.ChatMessage;
 import org.apache.ibatis.annotations.Mapper;
-import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
 
@@ -25,8 +24,6 @@ public interface ChatMessageMapper {
     int deleteById(String id);
 
     int deleteBySessionId(String sessionId);
-
-    int deleteTaskToolMessages(@Param("sessionId") String sessionId, @Param("taskId") String taskId);
 
     int updateById(ChatMessage chatMessage);
 }

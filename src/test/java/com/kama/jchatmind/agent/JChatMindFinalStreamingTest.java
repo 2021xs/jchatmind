@@ -439,7 +439,6 @@ class JChatMindFinalStreamingTest {
                     AgentSseEvent.Type.CANCELLED);
             assertThat(harness.eventTypes()).doesNotContain(AgentSseEvent.Type.FINAL_MESSAGE_DONE,
                     AgentSseEvent.Type.DONE, AgentSseEvent.Type.ERROR);
-            verify(harness.messageService).discardTaskToolMessages("session-1", "task-1");
             verify(harness.logService).cancelStepAndTask(anyString(), eq("task-1"), anyInt(), anyInt());
         } finally {
             executor.shutdownNow();
@@ -447,7 +446,7 @@ class JChatMindFinalStreamingTest {
     }
 
     @Test
-    void cancellationAfterCompletedToolBatchDiscardsTaskToolMemory() throws Exception {
+    void cancellationAfterCompletedToolBatchRetainsCompleteProtocol() throws Exception {
         CountDownLatch finalSubscribed = new CountDownLatch(1);
         ToolCallback search = callback("searchEvidence");
         Harness harness = new Harness(
@@ -456,7 +455,6 @@ class JChatMindFinalStreamingTest {
                 List.of(search));
         when(harness.batchExecutor.execute(any(), any(), any(), any()))
                 .thenReturn(toolResult("searchEvidence", "retrieved evidence"));
-        when(harness.messageService.discardTaskToolMessages("session-1", "task-1")).thenReturn(2);
         harness.agent.setFinalStreamingEnabled(true);
         AgentTaskRuntimeRegistry registry = new AgentTaskRuntimeRegistry();
         AgentTaskControl control = registry.register("task-1", "session-1");
@@ -480,11 +478,11 @@ class JChatMindFinalStreamingTest {
                     .filteredOn(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL)
                     .hasSize(1)
                     .allMatch(message -> "task-1".equals(message.getMetadata().getTaskId()));
-            verify(harness.messageService).discardTaskToolMessages("session-1", "task-1");
             assertThat(harness.events.stream()
                     .filter(event -> event.type() == AgentSseEvent.Type.CANCELLED)
                     .map(event -> event.payload().get("discardedToolMessages")))
-                    .containsExactly(2);
+                    .containsExactly(0);
+            verify(harness.logService).cancelStepAndTask(anyString(), eq("task-1"), anyInt(), anyInt());
             assertThat(harness.eventTypes()).doesNotContain(
                     AgentSseEvent.Type.FINAL_MESSAGE_DONE, AgentSseEvent.Type.DONE, AgentSseEvent.Type.ERROR);
         } finally {
@@ -512,7 +510,6 @@ class JChatMindFinalStreamingTest {
             context.getCancellationControl().throwIfCancellationRequested();
             return toolResult("searchEvidence", "must not be persisted");
         });
-        when(harness.messageService.discardTaskToolMessages("session-1", "task-1")).thenReturn(0);
         AgentTaskRuntimeRegistry registry = new AgentTaskRuntimeRegistry();
         AgentTaskControl control = registry.register("task-1", "session-1");
         harness.agent.setTaskRuntimeRegistry(registry);
@@ -528,11 +525,11 @@ class JChatMindFinalStreamingTest {
             assertThat(harness.persistedMessages).isEmpty();
             verify(harness.messageService, never()).createToolProtocolBatch(
                     anyString(), anyString(), any(AssistantMessage.class), any(ToolResponseMessage.class));
-            verify(harness.messageService).discardTaskToolMessages("session-1", "task-1");
             assertThat(harness.events.stream()
                     .filter(event -> event.type() == AgentSseEvent.Type.CANCELLED)
                     .map(event -> event.payload().get("discardedToolMessages")))
                     .containsExactly(0);
+            verify(harness.logService).cancelStepAndTask(anyString(), eq("task-1"), anyInt(), anyInt());
         } finally {
             releaseToolExecutor.countDown();
             executor.shutdownNow();

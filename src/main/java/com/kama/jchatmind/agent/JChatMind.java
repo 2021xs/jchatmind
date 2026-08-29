@@ -1341,14 +1341,12 @@ public class JChatMind {
     private void handleCancellation() {
         agentState = AgentState.FINISHED;
         Runnable cancellation = () -> {
-            int discardedToolMessages = chatMessageFacadeService.discardTaskToolMessages(
-                    chatSessionId, currentTaskId);
             agentTaskLogService.cancelStepAndTask(currentStep == null ? null : currentStep.getId(),
                     currentTaskId, nextStepNo - 1, toolCallCount);
             sendAgentEvent(AgentSseEvent.Type.CANCELLED, payload(
                     "status", AgentTaskLogService.STATUS_CANCELLED,
                     "finishReason", AgentTaskLogService.FINISH_REASON_CANCELLED,
-                    "discardedToolMessages", discardedToolMessages
+                    "discardedToolMessages", 0
             ));
             agentEventPublisher.complete(chatSessionId, currentTaskId);
         };

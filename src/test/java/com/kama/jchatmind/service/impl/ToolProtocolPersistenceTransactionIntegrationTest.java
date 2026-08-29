@@ -2,9 +2,15 @@ package com.kama.jchatmind.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.agent.AgentToolProtocolInspector;
+import com.kama.jchatmind.config.AgentObservabilityProperties;
 import com.kama.jchatmind.converter.ChatMessageConverter;
+import com.kama.jchatmind.mapper.AgentStepMapper;
+import com.kama.jchatmind.mapper.AgentTaskMapper;
 import com.kama.jchatmind.mapper.ChatMessageMapper;
+import com.kama.jchatmind.mapper.ChatSessionMapper;
+import com.kama.jchatmind.mapper.ToolCallLogMapper;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
+import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,12 +37,15 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import javax.sql.DataSource;
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 
 @Testcontainers(disabledWithoutDocker = true)
 @SpringJUnitConfig(ToolProtocolPersistenceTransactionIntegrationTest.Config.class)
@@ -53,8 +62,12 @@ class ToolProtocolPersistenceTransactionIntegrationTest {
     @org.springframework.beans.factory.annotation.Autowired
     private JdbcTemplate jdbc;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private AgentTaskLogService taskLogService;
+
     private String sessionId;
     private String taskId;
+    private String stepId;
 
     @BeforeEach
     void setUpSchema() {
@@ -69,9 +82,67 @@ class ToolProtocolPersistenceTransactionIntegrationTest {
                     updated_at timestamp
                 )
                 """);
-        jdbc.execute("TRUNCATE TABLE chat_message");
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS agent_task (
+                    id uuid PRIMARY KEY,
+                    session_id uuid NOT NULL,
+                    agent_id uuid,
+                    user_message_id uuid,
+                    status varchar(32) NOT NULL,
+                    goal text,
+                    finish_reason varchar(128),
+                    model_name varchar(128),
+                    max_steps integer,
+                    actual_steps integer,
+                    tool_call_count integer,
+                    latency_ms bigint,
+                    trace_id varchar(128),
+                    heartbeat_at timestamp,
+                    started_at timestamp,
+                    finished_at timestamp,
+                    updated_at timestamp,
+                    error_message text
+                )
+                """);
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS agent_step (
+                    id uuid PRIMARY KEY,
+                    task_id uuid NOT NULL,
+                    step_no integer NOT NULL,
+                    step_type varchar(64) NOT NULL,
+                    status varchar(32) NOT NULL,
+                    input_summary text,
+                    output_summary text,
+                    latency_ms bigint,
+                    model_name varchar(128),
+                    llm_latency_ms bigint,
+                    input_tokens integer,
+                    output_tokens integer,
+                    finish_reason varchar(128),
+                    started_at timestamp,
+                    finished_at timestamp,
+                    updated_at timestamp,
+                    error_message text
+                )
+                """);
+        jdbc.execute("TRUNCATE TABLE chat_message, agent_step, agent_task");
         sessionId = UUID.randomUUID().toString();
         taskId = UUID.randomUUID().toString();
+        stepId = UUID.randomUUID().toString();
+        LocalDateTime startedAt = LocalDateTime.now().minusSeconds(1);
+        jdbc.update("""
+                        INSERT INTO agent_task
+                        (id, session_id, status, goal, started_at, heartbeat_at, updated_at)
+                        VALUES (CAST(? AS uuid), CAST(? AS uuid), 'RUNNING', 'test', ?, ?, ?)
+                        """,
+                taskId, sessionId, Timestamp.valueOf(startedAt), Timestamp.valueOf(startedAt),
+                Timestamp.valueOf(startedAt));
+        jdbc.update("""
+                        INSERT INTO agent_step
+                        (id, task_id, step_no, step_type, status, input_summary, started_at, updated_at)
+                        VALUES (CAST(? AS uuid), CAST(? AS uuid), 2, 'TOOL_CALL', 'RUNNING', 'tool', ?, ?)
+                        """,
+                stepId, taskId, Timestamp.valueOf(startedAt), Timestamp.valueOf(startedAt));
     }
 
     @Test
@@ -102,20 +173,50 @@ class ToolProtocolPersistenceTransactionIntegrationTest {
         assertThat(inspection.protocolValidationFailureCount()).isZero();
     }
 
+    @Test
+    void cancellationRetainsMultipleCommittedBatchesAndKeepsCancelledAuditState() {
+        messageService.createToolProtocolBatch(
+                sessionId, taskId, assistantBatch("1"), responseBatch("1", "A1-ok", "B1-ok"));
+        messageService.createToolProtocolBatch(
+                sessionId, taskId, assistantBatch("2"), responseBatch("2", "A2-ok", "B2-ok"));
+        int rowsBeforeCancellation = messageCount();
+
+        boolean cancelled = taskLogService.cancelStepAndTask(stepId, taskId, 2, 4);
+
+        assertThat(cancelled).isTrue();
+        assertThat(rowsBeforeCancellation).isEqualTo(6);
+        assertThat(messageCount()).isEqualTo(rowsBeforeCancellation);
+        assertThat(status("agent_task", taskId)).isEqualTo(AgentTaskLogService.STATUS_CANCELLED);
+        assertThat(status("agent_step", stepId)).isEqualTo(AgentTaskLogService.STATUS_CANCELLED);
+        AgentToolProtocolInspector.Inspection inspection = AgentToolProtocolInspector.inspect(
+                toProtocolMessages(messageService.getChatMessageDTOsBySessionId(sessionId)));
+        assertThat(inspection.valid()).isTrue();
+        assertThat(inspection.orphanToolProtocolCount()).isZero();
+        assertThat(inspection.protocolValidationFailureCount()).isZero();
+    }
+
     private AssistantMessage assistantBatch() {
+        return assistantBatch("");
+    }
+
+    private AssistantMessage assistantBatch(String suffix) {
         return AssistantMessage.builder()
                 .content("")
                 .toolCalls(List.of(
-                        new AssistantMessage.ToolCall("call-a", "function", "toolA", "{}"),
-                        new AssistantMessage.ToolCall("call-b", "function", "toolB", "{}")))
+                        new AssistantMessage.ToolCall("call-a" + suffix, "function", "toolA", "{}"),
+                        new AssistantMessage.ToolCall("call-b" + suffix, "function", "toolB", "{}")))
                 .build();
     }
 
     private ToolResponseMessage responseBatch(String first, String second) {
+        return responseBatch("", first, second);
+    }
+
+    private ToolResponseMessage responseBatch(String suffix, String first, String second) {
         return ToolResponseMessage.builder()
                 .responses(List.of(
-                        new ToolResponseMessage.ToolResponse("call-a", "toolA", first),
-                        new ToolResponseMessage.ToolResponse("call-b", "toolB", second)))
+                        new ToolResponseMessage.ToolResponse("call-a" + suffix, "toolA", first),
+                        new ToolResponseMessage.ToolResponse("call-b" + suffix, "toolB", second)))
                 .build();
     }
 
@@ -138,6 +239,11 @@ class ToolProtocolPersistenceTransactionIntegrationTest {
 
     private int messageCount() {
         return jdbc.queryForObject("SELECT COUNT(*) FROM chat_message", Integer.class);
+    }
+
+    private String status(String table, String id) {
+        return jdbc.queryForObject("SELECT status FROM " + table + " WHERE id = CAST(? AS uuid)",
+                String.class, id);
     }
 
     @Configuration
@@ -166,13 +272,30 @@ class ToolProtocolPersistenceTransactionIntegrationTest {
         SqlSessionFactory sqlSessionFactory(DataSource dataSource) throws Exception {
             SqlSessionFactoryBean factory = new SqlSessionFactoryBean();
             factory.setDataSource(dataSource);
-            factory.setMapperLocations(new ClassPathResource("mapper/ChatMessageMapper.xml"));
+            factory.setMapperLocations(
+                    new ClassPathResource("mapper/ChatMessageMapper.xml"),
+                    new ClassPathResource("mapper/AgentTaskMapper.xml"),
+                    new ClassPathResource("mapper/AgentStepMapper.xml"));
             return factory.getObject();
         }
 
         @Bean
         ChatMessageMapper chatMessageMapper(SqlSessionFactory factory) throws Exception {
-            MapperFactoryBean<ChatMessageMapper> bean = new MapperFactoryBean<>(ChatMessageMapper.class);
+            return mapper(ChatMessageMapper.class, factory);
+        }
+
+        @Bean
+        AgentTaskMapper agentTaskMapper(SqlSessionFactory factory) throws Exception {
+            return mapper(AgentTaskMapper.class, factory);
+        }
+
+        @Bean
+        AgentStepMapper agentStepMapper(SqlSessionFactory factory) throws Exception {
+            return mapper(AgentStepMapper.class, factory);
+        }
+
+        private static <T> T mapper(Class<T> type, SqlSessionFactory factory) throws Exception {
+            MapperFactoryBean<T> bean = new MapperFactoryBean<>(type);
             bean.setSqlSessionFactory(factory);
             bean.afterPropertiesSet();
             return bean.getObject();
@@ -193,6 +316,15 @@ class ToolProtocolPersistenceTransactionIntegrationTest {
                                                            ChatMessageConverter converter,
                                                            ApplicationEventPublisher publisher) {
             return new ChatMessageFacadeServiceImpl(mapper, converter, publisher);
+        }
+
+        @Bean
+        AgentTaskLogService agentTaskLogService(AgentTaskMapper taskMapper,
+                                                AgentStepMapper stepMapper,
+                                                ObjectMapper objectMapper) {
+            return new AgentTaskLogServiceImpl(taskMapper, stepMapper,
+                    mock(ToolCallLogMapper.class), mock(ChatSessionMapper.class), objectMapper,
+                    new AgentObservabilityProperties());
         }
     }
 }
