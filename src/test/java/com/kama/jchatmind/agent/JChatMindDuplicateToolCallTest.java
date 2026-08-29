@@ -25,6 +25,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -76,12 +77,13 @@ class JChatMindDuplicateToolCallTest {
             verify(harness.toolExecutionService).afterToolFailure(
                     any(), any(), any(ToolDuplicateCallException.class), eq(false));
 
-            ArgumentCaptor<ChatMessageDTO> messages = ArgumentCaptor.forClass(ChatMessageDTO.class);
-            verify(harness.messageService, atLeastOnce()).createChatMessage(messages.capture());
-            assertTrue(messages.getAllValues().stream()
-                    .anyMatch(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL
-                            && message.getContent() != null
-                            && message.getContent().contains("reason=DUPLICATE_TOOL_CALL")));
+            ArgumentCaptor<ToolResponseMessage> persistedResponses =
+                    ArgumentCaptor.forClass(ToolResponseMessage.class);
+            verify(harness.messageService, atLeastOnce()).createToolProtocolBatch(
+                    eq("session-1"), eq("task-1"), any(AssistantMessage.class), persistedResponses.capture());
+            assertTrue(persistedResponses.getAllValues().stream()
+                    .flatMap(message -> message.getResponses().stream())
+                    .anyMatch(response -> response.responseData().contains("reason=DUPLICATE_TOOL_CALL")));
         }
     }
 

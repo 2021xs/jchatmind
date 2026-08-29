@@ -7,6 +7,7 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 
 import java.util.List;
+import java.util.Map;
 
 @Data
 @Builder
@@ -15,11 +16,19 @@ public class ToolCallBatchResult {
     private List<ToolExecutionRecord> records;
     private ToolExecutionResult toolExecutionResult;
     private ToolResponseMessage toolResponseMessage;
+    private Map<String, TerminalStatus> terminalStatuses;
     private RuntimeException error;
 
     public enum Status {
         SUCCESS,
         FAILED
+    }
+
+    public enum TerminalStatus {
+        SUCCESS,
+        ERROR,
+        REJECTED,
+        SKIPPED
     }
 
     public boolean succeeded() {

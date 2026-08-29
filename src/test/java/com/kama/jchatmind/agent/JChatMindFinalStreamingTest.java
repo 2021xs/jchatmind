@@ -493,7 +493,7 @@ class JChatMindFinalStreamingTest {
     }
 
     @Test
-    void cancellationDuringToolExecutionDiscardsPersistedAssistantToolCall() throws Exception {
+    void cancellationDuringToolExecutionPersistsNoProtocolMaterial() throws Exception {
         CountDownLatch toolStarted = new CountDownLatch(1);
         CountDownLatch releaseToolExecutor = new CountDownLatch(1);
         ToolCallback search = callback("searchEvidence");
@@ -512,7 +512,7 @@ class JChatMindFinalStreamingTest {
             context.getCancellationControl().throwIfCancellationRequested();
             return toolResult("searchEvidence", "must not be persisted");
         });
-        when(harness.messageService.discardTaskToolMessages("session-1", "task-1")).thenReturn(1);
+        when(harness.messageService.discardTaskToolMessages("session-1", "task-1")).thenReturn(0);
         AgentTaskRuntimeRegistry registry = new AgentTaskRuntimeRegistry();
         AgentTaskControl control = registry.register("task-1", "session-1");
         harness.agent.setTaskRuntimeRegistry(registry);
@@ -525,20 +525,14 @@ class JChatMindFinalStreamingTest {
             releaseToolExecutor.countDown();
             run.get(2, TimeUnit.SECONDS);
 
-            assertThat(harness.persistedMessages)
-                    .filteredOn(message -> message.getRole() == ChatMessageDTO.RoleType.ASSISTANT)
-                    .singleElement()
-                    .satisfies(message -> {
-                        assertThat(message.getMetadata().getTaskId()).isEqualTo("task-1");
-                        assertThat(message.getMetadata().getToolCalls()).hasSize(1);
-                    });
-            assertThat(harness.persistedMessages)
-                    .noneMatch(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL);
+            assertThat(harness.persistedMessages).isEmpty();
+            verify(harness.messageService, never()).createToolProtocolBatch(
+                    anyString(), anyString(), any(AssistantMessage.class), any(ToolResponseMessage.class));
             verify(harness.messageService).discardTaskToolMessages("session-1", "task-1");
             assertThat(harness.events.stream()
                     .filter(event -> event.type() == AgentSseEvent.Type.CANCELLED)
                     .map(event -> event.payload().get("discardedToolMessages")))
-                    .containsExactly(1);
+                    .containsExactly(0);
         } finally {
             releaseToolExecutor.countDown();
             executor.shutdownNow();
@@ -775,6 +769,34 @@ class JChatMindFinalStreamingTest {
                         .chatMessageId("message-" + messageSequence.incrementAndGet())
                         .build();
             });
+            org.mockito.Mockito.doAnswer(invocation -> {
+                String sessionId = invocation.getArgument(0);
+                String taskId = invocation.getArgument(1);
+                AssistantMessage assistant = invocation.getArgument(2);
+                ToolResponseMessage response = invocation.getArgument(3);
+                persistedMessages.add(ChatMessageDTO.builder()
+                        .sessionId(sessionId)
+                        .role(ChatMessageDTO.RoleType.ASSISTANT)
+                        .content(assistant.getText())
+                        .metadata(ChatMessageDTO.MetaData.builder()
+                                .taskId(taskId)
+                                .toolCalls(assistant.getToolCalls())
+                                .build())
+                        .build());
+                for (ToolResponseMessage.ToolResponse toolResponse : response.getResponses()) {
+                    persistedMessages.add(ChatMessageDTO.builder()
+                            .sessionId(sessionId)
+                            .role(ChatMessageDTO.RoleType.TOOL)
+                            .content(toolResponse.responseData())
+                            .metadata(ChatMessageDTO.MetaData.builder()
+                                    .taskId(taskId)
+                                    .toolResponse(toolResponse)
+                                    .build())
+                            .build());
+                }
+                return null;
+            }).when(messageService).createToolProtocolBatch(
+                    anyString(), anyString(), any(AssistantMessage.class), any(ToolResponseMessage.class));
             when(messageService.getChatMessageDTOsBySessionId(anyString())).thenReturn(List.of());
             when(finalCompletionService.complete(any())).thenAnswer(invocation -> {
                 FinalCompletionService.FinalCompletionCommand command = invocation.getArgument(0);

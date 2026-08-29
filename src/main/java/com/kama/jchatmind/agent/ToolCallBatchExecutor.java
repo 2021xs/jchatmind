@@ -10,8 +10,10 @@ import com.kama.jchatmind.tool.ToolExecutionContext;
 import com.kama.jchatmind.tool.ToolExecutionException;
 import com.kama.jchatmind.tool.ToolFailureException;
 import com.kama.jchatmind.tool.ToolExecutionRecord;
+import com.kama.jchatmind.tool.ToolPolicyRejectedException;
 import com.kama.jchatmind.tool.ToolRegistry;
 import com.kama.jchatmind.tool.ToolTimeoutException;
+import com.kama.jchatmind.tool.ToolUnknownException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -37,6 +39,8 @@ import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.CancellationException;
@@ -73,30 +77,43 @@ public class ToolCallBatchExecutor {
                                        ChatResponse chatResponse,
                                        ToolCallingManager toolCallingManager,
                                        ToolExecutionContext executionContext) {
+        List<AssistantMessage.ToolCall> requestedCalls = List.copyOf(requestedToolCalls(chatResponse));
+        validateRequestedCalls(requestedCalls);
         List<ToolExecutionRecord> records = new ArrayList<>();
-        Prompt executionPrompt = withTimeoutCallbacks(prompt, chatResponse, executionContext, records);
+        Map<String, TerminalResponse> terminalResponses = new LinkedHashMap<>();
+        Prompt executionPrompt = withTimeoutCallbacks(
+                prompt, requestedCalls, executionContext, records, terminalResponses);
 
         ToolExecutionResult toolExecutionResult;
         try {
             toolExecutionResult = toolCallingManager.executeToolCalls(executionPrompt, chatResponse);
         } catch (IllegalArgumentException e) {
-            return failed(records, new ToolArgumentException(e.getMessage(), e));
+            return failed(requestedCalls, records, terminalResponses,
+                    new ToolArgumentException(e.getMessage(), e));
         } catch (RuntimeException e) {
-            return failed(records, e);
+            return failed(requestedCalls, records, terminalResponses, e);
         } catch (Exception e) {
-            return failed(records, new ToolExecutionException(e.getMessage(), e));
+            return failed(requestedCalls, records, terminalResponses,
+                    new ToolExecutionException(e.getMessage(), e));
         }
 
         toolExecutionResult = guardToolExecutionResult(toolExecutionResult, records);
         ToolResponseMessage toolResponseMessage = (ToolResponseMessage) toolExecutionResult
                 .conversationHistory()
                 .get(toolExecutionResult.conversationHistory().size() - 1);
+        CompleteTerminalBatch completeBatch;
+        try {
+            completeBatch = completeSuccessfulBatch(requestedCalls, toolResponseMessage, terminalResponses);
+        } catch (RuntimeException e) {
+            return failed(requestedCalls, records, terminalResponses, e);
+        }
         recordUnfinishedToolResponses(executionContext, records, toolResponseMessage);
         return ToolCallBatchResult.builder()
                 .status(ToolCallBatchResult.Status.SUCCESS)
                 .records(records)
                 .toolExecutionResult(toolExecutionResult)
-                .toolResponseMessage(toolResponseMessage)
+                .toolResponseMessage(completeBatch.message())
+                .terminalStatuses(completeBatch.statuses())
                 .build();
     }
 
@@ -135,10 +152,16 @@ public class ToolCallBatchExecutor {
                 .build();
     }
 
-    private ToolCallBatchResult failed(List<ToolExecutionRecord> records, RuntimeException error) {
+    private ToolCallBatchResult failed(List<AssistantMessage.ToolCall> requestedCalls,
+                                       List<ToolExecutionRecord> records,
+                                       Map<String, TerminalResponse> terminalResponses,
+                                       RuntimeException error) {
+        CompleteTerminalBatch completeBatch = completeFailedBatch(requestedCalls, terminalResponses, error);
         return ToolCallBatchResult.builder()
                 .status(ToolCallBatchResult.Status.FAILED)
                 .records(records)
+                .toolResponseMessage(completeBatch.message())
+                .terminalStatuses(completeBatch.statuses())
                 .error(error)
                 .build();
     }
@@ -162,13 +185,14 @@ public class ToolCallBatchExecutor {
     }
 
     private Prompt withTimeoutCallbacks(Prompt prompt,
-                                        ChatResponse chatResponse,
+                                        List<AssistantMessage.ToolCall> requestedCalls,
                                         ToolExecutionContext executionContext,
-                                        List<ToolExecutionRecord> records) {
+                                        List<ToolExecutionRecord> records,
+                                        Map<String, TerminalResponse> terminalResponses) {
         List<ToolCallback> availableCallbacks = callbacksFrom(prompt);
         Map<String, Object> toolContext = toolContextFrom(prompt);
         List<ToolCallback> timeoutCallbacks = timeoutCallbacks(
-                requestedToolCalls(chatResponse), availableCallbacks, executionContext, records);
+                requestedCalls, availableCallbacks, executionContext, records, terminalResponses);
         ToolCallingChatOptions options = DefaultToolCallingChatOptions.builder()
                 .internalToolExecutionEnabled(false)
                 .toolCallbacks(timeoutCallbacks)
@@ -200,10 +224,137 @@ public class ToolCallBatchExecutor {
         return chatResponse.getResult().getOutput().getToolCalls();
     }
 
+    private void validateRequestedCalls(List<AssistantMessage.ToolCall> requestedCalls) {
+        if (requestedCalls.isEmpty()) {
+            throw new IllegalArgumentException("Tool batch must contain at least one requested call");
+        }
+        Set<String> ids = new HashSet<>();
+        for (AssistantMessage.ToolCall call : requestedCalls) {
+            if (call == null || call.id() == null || call.id().isBlank()) {
+                throw new IllegalArgumentException("Every requested tool call must have a non-blank id");
+            }
+            if (!ids.add(call.id())) {
+                throw new IllegalArgumentException("Duplicate requested toolCallId: " + call.id());
+            }
+        }
+    }
+
+    private CompleteTerminalBatch completeSuccessfulBatch(
+            List<AssistantMessage.ToolCall> requestedCalls,
+            ToolResponseMessage responseMessage,
+            Map<String, TerminalResponse> observedResponses) {
+        Map<String, ToolResponseMessage.ToolResponse> responsesById = new LinkedHashMap<>();
+        for (ToolResponseMessage.ToolResponse response : responseMessage.getResponses()) {
+            if (response == null || response.id() == null || response.id().isBlank()) {
+                throw new ToolExecutionException("Tool response is missing toolCallId", null);
+            }
+            if (responsesById.putIfAbsent(response.id(), response) != null) {
+                throw new ToolExecutionException("Duplicate terminal response for toolCallId " + response.id(), null);
+            }
+        }
+
+        List<ToolResponseMessage.ToolResponse> ordered = new ArrayList<>();
+        Map<String, ToolCallBatchResult.TerminalStatus> statuses = new LinkedHashMap<>();
+        for (AssistantMessage.ToolCall call : requestedCalls) {
+            ToolResponseMessage.ToolResponse response = responsesById.remove(call.id());
+            if (response == null) {
+                throw new ToolExecutionException("Missing terminal response for toolCallId " + call.id(), null);
+            }
+            ordered.add(response);
+            TerminalResponse observed = observedResponses.get(call.id());
+            statuses.put(call.id(), observed == null
+                    ? ToolCallBatchResult.TerminalStatus.SUCCESS
+                    : observed.status());
+        }
+        if (!responsesById.isEmpty()) {
+            throw new ToolExecutionException(
+                    "Unexpected terminal response toolCallIds: " + responsesById.keySet(), null);
+        }
+        return completeBatch(ordered, statuses, responseMessage.getMetadata());
+    }
+
+    private CompleteTerminalBatch completeFailedBatch(
+            List<AssistantMessage.ToolCall> requestedCalls,
+            Map<String, TerminalResponse> observedResponses,
+            RuntimeException error) {
+        List<ToolResponseMessage.ToolResponse> ordered = new ArrayList<>();
+        Map<String, ToolCallBatchResult.TerminalStatus> statuses = new LinkedHashMap<>();
+        boolean failingCallAssigned = observedResponses.values().stream()
+                .anyMatch(response -> response.status() == ToolCallBatchResult.TerminalStatus.ERROR
+                        || response.status() == ToolCallBatchResult.TerminalStatus.REJECTED);
+        for (AssistantMessage.ToolCall call : requestedCalls) {
+            TerminalResponse terminal = observedResponses.get(call.id());
+            if (terminal == null) {
+                if (!failingCallAssigned) {
+                    terminal = failureResponse(call, error);
+                    failingCallAssigned = true;
+                } else {
+                    terminal = skippedResponse(call);
+                }
+            }
+            ordered.add(terminal.response());
+            statuses.put(call.id(), terminal.status());
+        }
+        return completeBatch(ordered, statuses, Map.of());
+    }
+
+    private CompleteTerminalBatch completeBatch(
+            List<ToolResponseMessage.ToolResponse> responses,
+            Map<String, ToolCallBatchResult.TerminalStatus> statuses,
+            Map<String, Object> metadata) {
+        ToolResponseMessage message = ToolResponseMessage.builder()
+                .responses(responses)
+                .metadata(metadata)
+                .build();
+        return new CompleteTerminalBatch(message, Map.copyOf(statuses));
+    }
+
+    private TerminalResponse failureResponse(AssistantMessage.ToolCall call, RuntimeException error) {
+        ToolCallBatchResult.TerminalStatus status = error instanceof ToolUnknownException
+                || error instanceof ToolPolicyRejectedException
+                || error instanceof ToolDuplicateCallException
+                ? ToolCallBatchResult.TerminalStatus.REJECTED
+                : ToolCallBatchResult.TerminalStatus.ERROR;
+        String errorType = error instanceof ToolFailureException failure
+                ? failure.getErrorType()
+                : error.getClass().getSimpleName();
+        String message = error instanceof ToolFailureException failure
+                ? failure.getSafeMessage()
+                : error.getMessage();
+        String payload = "TOOL_CALL_TERMINAL:\n"
+                + "status=" + status + "\n"
+                + "toolName=" + call.name() + "\n"
+                + "errorType=" + errorType + "\n"
+                + "message=" + safeTerminalMessage(message);
+        return new TerminalResponse(status,
+                new ToolResponseMessage.ToolResponse(call.id(), call.name(), payload));
+    }
+
+    private TerminalResponse skippedResponse(AssistantMessage.ToolCall call) {
+        String payload = "TOOL_CALL_TERMINAL:\n"
+                + "status=SKIPPED\n"
+                + "reason=BATCH_ABORTED\n"
+                + "toolName=" + call.name() + "\n"
+                + "message=Not executed because an earlier tool call in the same batch failed.";
+        return new TerminalResponse(ToolCallBatchResult.TerminalStatus.SKIPPED,
+                new ToolResponseMessage.ToolResponse(call.id(), call.name(), payload));
+    }
+
+    private String safeTerminalMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return "Tool execution failed before a result was returned.";
+        }
+        String singleLine = message.replaceAll("\\s+", " ").trim();
+        return singleLine.length() <= 500
+                ? singleLine
+                : singleLine.substring(0, 484) + "...[truncated]";
+    }
+
     private List<ToolCallback> timeoutCallbacks(List<AssistantMessage.ToolCall> toolCalls,
                                                 List<ToolCallback> availableCallbacks,
                                                 ToolExecutionContext executionContext,
-                                                List<ToolExecutionRecord> records) {
+                                                List<ToolExecutionRecord> records,
+                                                Map<String, TerminalResponse> terminalResponses) {
         Map<String, Deque<AssistantMessage.ToolCall>> callsByActualName = new LinkedHashMap<>();
         for (AssistantMessage.ToolCall toolCall : toolCalls) {
             callsByActualName.computeIfAbsent(toolCall.name(), ignored -> new ArrayDeque<>()).add(toolCall);
@@ -214,7 +365,7 @@ public class ToolCallBatchExecutor {
             String actualToolName = entry.getKey();
             ToolCallback delegate = findDelegate(actualToolName, availableCallbacks);
             callbacks.add(new RuntimeTimeoutToolCallback(
-                    actualToolName, entry.getValue(), delegate, executionContext, records));
+                    actualToolName, entry.getValue(), delegate, executionContext, records, terminalResponses));
         }
         return callbacks;
     }
@@ -265,18 +416,21 @@ public class ToolCallBatchExecutor {
         private final ToolCallback delegate;
         private final ToolExecutionContext executionContext;
         private final List<ToolExecutionRecord> records;
+        private final Map<String, TerminalResponse> terminalResponses;
         private final ToolDefinition executionDefinition;
 
         private RuntimeTimeoutToolCallback(String actualToolName,
                                            Deque<AssistantMessage.ToolCall> pendingCalls,
                                            ToolCallback delegate,
                                            ToolExecutionContext executionContext,
-                                           List<ToolExecutionRecord> records) {
+                                           List<ToolExecutionRecord> records,
+                                           Map<String, TerminalResponse> terminalResponses) {
             this.actualToolName = actualToolName;
             this.pendingCalls = pendingCalls;
             this.delegate = delegate;
             this.executionContext = executionContext;
             this.records = records;
+            this.terminalResponses = terminalResponses;
             ToolDefinition delegateDefinition = delegate == null ? null : delegate.getToolDefinition();
             this.executionDefinition = ToolDefinition.builder()
                     .name(actualToolName)
@@ -310,97 +464,113 @@ public class ToolCallBatchExecutor {
             if (toolCall == null) {
                 throw new ToolExecutionException("Missing requested tool call for " + actualToolName, null);
             }
-
-            ToolExecutionRecord record = toolExecutionService.beforeToolCall(executionContext, toolCall);
-            records.add(record);
-            if (delegate == null) {
-                throw new ToolExecutionException("Tool callback not found for " + actualToolName, null);
-            }
-
-            TaskEvidenceState taskEvidenceState = executionContext.getTaskEvidenceState();
-            if (TaskEvidenceState.CODE_SEARCH_TOOL_NAME.equals(record.getCanonicalToolName())
-                    && taskEvidenceState != null
-                    && taskEvidenceState.isCodeSearchBlocked()) {
-                return rejectCodeSearchWithoutNovelty(record, taskEvidenceState);
-            }
-
-            ToolDuplicateCallDetector.DuplicateCheck duplicateCheck = duplicateCallDetector.check(
-                    executionContext.getDuplicateCallState(),
-                    record.getCanonicalToolName(),
-                    toolCall.arguments());
-            if (duplicateCheck.rejected()) {
-                return rejectDuplicateCall(record, duplicateCheck);
-            }
-
-            Duration timeout = timeoutProperties.timeoutFor(
-                    record.getActualToolName(), record.getCanonicalToolName());
-            Future<String> future = toolExecutor.submit(() -> delegate.call(toolInput, toolContext));
-            if (cancellationControl != null) {
-                cancellationControl.attachToolFuture(future);
-            }
             try {
-                String rawResult = future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
-                if (cancellationControl != null && cancellationControl.isCancellationRequested()) {
-                    toolExecutionService.afterToolCancellation(executionContext, record);
-                    record.setTerminalRecorded(true);
-                    throw new AgentTaskCancelledException(executionContext.getTaskId());
+                ToolExecutionRecord record = toolExecutionService.beforeToolCall(executionContext, toolCall);
+                records.add(record);
+                if (delegate == null) {
+                    throw new ToolExecutionException("Tool callback not found for " + actualToolName, null);
                 }
-                final String[] acceptedResult = new String[1];
-                Runnable success = () -> {
-                    ToolResultGuard.GuardedToolResult guarded = toolResultGuard.guard(
-                            record.getActualToolName(), record.getCanonicalToolName(), rawResult);
-                    applyResultMetrics(record, guarded);
-                    acceptedResult[0] = guarded.value();
-                    publishToolResult(executionContext, record, rawResult, guarded, "SUCCESS");
-                    toolExecutionService.afterToolSuccess(executionContext, record, acceptedResult[0]);
-                    record.setTerminalRecorded(true);
-                };
-                boolean accepted = cancellationControl == null
-                        ? runSuccess(success)
-                        : cancellationControl.runIfActive(success);
-                if (!accepted) {
-                    toolExecutionService.afterToolCancellation(executionContext, record);
-                    record.setTerminalRecorded(true);
-                    throw new AgentTaskCancelledException(executionContext.getTaskId());
+
+                TaskEvidenceState taskEvidenceState = executionContext.getTaskEvidenceState();
+                if (TaskEvidenceState.CODE_SEARCH_TOOL_NAME.equals(record.getCanonicalToolName())
+                        && taskEvidenceState != null
+                        && taskEvidenceState.isCodeSearchBlocked()) {
+                    String response = rejectCodeSearchWithoutNovelty(record, taskEvidenceState);
+                    recordTerminal(toolCall, ToolCallBatchResult.TerminalStatus.REJECTED, response);
+                    return response;
                 }
-                return acceptedResult[0];
-            } catch (TimeoutException e) {
-                boolean cancelRequested = future.cancel(true);
-                ToolTimeoutException timeoutError = new ToolTimeoutException(
-                        "Tool '" + record.getCanonicalToolName() + "' exceeded runtime timeout of "
-                                + timeout.toMillis() + " ms; interrupt/cancel requested=" + cancelRequested
-                                + ", Agent Task will stop",
-                        e);
-                toolExecutionService.afterToolFailure(executionContext, record, timeoutError, false);
-                record.setTerminalRecorded(true);
-                log.warn("Tool runtime timeout: taskId={}, toolName={}, timeoutMs={}, cancelRequested={}",
-                        executionContext.getTaskId(), record.getCanonicalToolName(), timeout.toMillis(), cancelRequested);
-                throw timeoutError;
-            } catch (CancellationException e) {
-                if (cancellationControl != null && cancellationControl.isCancellationRequested()) {
-                    toolExecutionService.afterToolCancellation(executionContext, record);
-                    record.setTerminalRecorded(true);
-                    throw new AgentTaskCancelledException(executionContext.getTaskId());
+
+                ToolDuplicateCallDetector.DuplicateCheck duplicateCheck = duplicateCallDetector.check(
+                        executionContext.getDuplicateCallState(),
+                        record.getCanonicalToolName(),
+                        toolCall.arguments());
+                if (duplicateCheck.rejected()) {
+                    String response = rejectDuplicateCall(record, duplicateCheck);
+                    recordTerminal(toolCall, ToolCallBatchResult.TerminalStatus.REJECTED, response);
+                    return response;
                 }
-                throw new ToolExecutionException("Tool Future was cancelled", e);
-            } catch (InterruptedException e) {
-                future.cancel(true);
-                Thread.currentThread().interrupt();
-                if (cancellationControl != null && cancellationControl.isCancellationRequested()) {
-                    toolExecutionService.afterToolCancellation(executionContext, record);
-                    record.setTerminalRecorded(true);
-                    throw new AgentTaskCancelledException(executionContext.getTaskId());
-                }
-                throw new ToolExecutionException("Agent thread interrupted while waiting for tool "
-                        + record.getCanonicalToolName(), e);
-            } catch (ExecutionException e) {
-                resetDuplicateSequenceForCorrectableFailure(e.getCause());
-                throw propagate(e.getCause());
-            } finally {
+
+                Duration timeout = timeoutProperties.timeoutFor(
+                        record.getActualToolName(), record.getCanonicalToolName());
+                Future<String> future = toolExecutor.submit(() -> delegate.call(toolInput, toolContext));
                 if (cancellationControl != null) {
-                    cancellationControl.detachToolFuture(future);
+                    cancellationControl.attachToolFuture(future);
                 }
+                try {
+                    String rawResult = future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+                    if (cancellationControl != null && cancellationControl.isCancellationRequested()) {
+                        toolExecutionService.afterToolCancellation(executionContext, record);
+                        record.setTerminalRecorded(true);
+                        throw new AgentTaskCancelledException(executionContext.getTaskId());
+                    }
+                    final String[] acceptedResult = new String[1];
+                    Runnable success = () -> {
+                        ToolResultGuard.GuardedToolResult guarded = toolResultGuard.guard(
+                                record.getActualToolName(), record.getCanonicalToolName(), rawResult);
+                        applyResultMetrics(record, guarded);
+                        acceptedResult[0] = guarded.value();
+                        publishToolResult(executionContext, record, rawResult, guarded, "SUCCESS");
+                        toolExecutionService.afterToolSuccess(executionContext, record, acceptedResult[0]);
+                        record.setTerminalRecorded(true);
+                    };
+                    boolean accepted = cancellationControl == null
+                            ? runSuccess(success)
+                            : cancellationControl.runIfActive(success);
+                    if (!accepted) {
+                        toolExecutionService.afterToolCancellation(executionContext, record);
+                        record.setTerminalRecorded(true);
+                        throw new AgentTaskCancelledException(executionContext.getTaskId());
+                    }
+                    recordTerminal(toolCall, ToolCallBatchResult.TerminalStatus.SUCCESS, acceptedResult[0]);
+                    return acceptedResult[0];
+                } catch (TimeoutException e) {
+                    boolean cancelRequested = future.cancel(true);
+                    ToolTimeoutException timeoutError = new ToolTimeoutException(
+                            "Tool '" + record.getCanonicalToolName() + "' exceeded runtime timeout of "
+                                    + timeout.toMillis() + " ms; interrupt/cancel requested=" + cancelRequested
+                                    + ", Agent Task will stop",
+                            e);
+                    toolExecutionService.afterToolFailure(executionContext, record, timeoutError, false);
+                    record.setTerminalRecorded(true);
+                    log.warn("Tool runtime timeout: taskId={}, toolName={}, timeoutMs={}, cancelRequested={}",
+                            executionContext.getTaskId(), record.getCanonicalToolName(), timeout.toMillis(), cancelRequested);
+                    throw timeoutError;
+                } catch (CancellationException e) {
+                    if (cancellationControl != null && cancellationControl.isCancellationRequested()) {
+                        toolExecutionService.afterToolCancellation(executionContext, record);
+                        record.setTerminalRecorded(true);
+                        throw new AgentTaskCancelledException(executionContext.getTaskId());
+                    }
+                    throw new ToolExecutionException("Tool Future was cancelled", e);
+                } catch (InterruptedException e) {
+                    future.cancel(true);
+                    Thread.currentThread().interrupt();
+                    if (cancellationControl != null && cancellationControl.isCancellationRequested()) {
+                        toolExecutionService.afterToolCancellation(executionContext, record);
+                        record.setTerminalRecorded(true);
+                        throw new AgentTaskCancelledException(executionContext.getTaskId());
+                    }
+                    throw new ToolExecutionException("Agent thread interrupted while waiting for tool "
+                            + record.getCanonicalToolName(), e);
+                } catch (ExecutionException e) {
+                    resetDuplicateSequenceForCorrectableFailure(e.getCause());
+                    throw propagate(e.getCause());
+                } finally {
+                    if (cancellationControl != null) {
+                        cancellationControl.detachToolFuture(future);
+                    }
+                }
+            } catch (RuntimeException error) {
+                terminalResponses.putIfAbsent(toolCall.id(), failureResponse(toolCall, error));
+                throw error;
             }
+        }
+
+        private void recordTerminal(AssistantMessage.ToolCall call,
+                                    ToolCallBatchResult.TerminalStatus status,
+                                    String responseData) {
+            terminalResponses.put(call.id(), new TerminalResponse(status,
+                    new ToolResponseMessage.ToolResponse(call.id(), call.name(), responseData)));
         }
 
         private boolean runSuccess(Runnable success) {
@@ -497,5 +667,13 @@ public class ToolCallBatchExecutor {
                         record.getCanonicalToolName(), record.getActualToolName(),
                         rawResult, guarded.value(), guarded.originalChars(), guarded.storedChars(),
                         guarded.truncated(), status));
+    }
+
+    private record TerminalResponse(ToolCallBatchResult.TerminalStatus status,
+                                    ToolResponseMessage.ToolResponse response) {
+    }
+
+    private record CompleteTerminalBatch(ToolResponseMessage message,
+                                         Map<String, ToolCallBatchResult.TerminalStatus> statuses) {
     }
 }

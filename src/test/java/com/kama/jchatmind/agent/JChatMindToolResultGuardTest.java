@@ -153,19 +153,16 @@ class JChatMindToolResultGuardTest {
                 .orElseThrow();
         String promptResult = nextThinkToolResponse.getResponses().get(0).responseData();
 
-        ArgumentCaptor<ChatMessageDTO> messages = ArgumentCaptor.forClass(ChatMessageDTO.class);
-        verify(messageService, atLeastOnce()).createChatMessage(messages.capture());
-        ChatMessageDTO storedToolMessage = messages.getAllValues().stream()
-                .filter(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL)
-                .findFirst()
-                .orElseThrow();
+        ArgumentCaptor<ToolResponseMessage> persistedResponse = ArgumentCaptor.forClass(ToolResponseMessage.class);
+        verify(messageService).createToolProtocolBatch(
+                eq("session-1"), eq("task-1"), any(AssistantMessage.class), persistedResponse.capture());
+        String storedToolResult = persistedResponse.getValue().getResponses().get(0).responseData();
 
         assertEquals(maxResultChars, promptResult.codePointCount(0, promptResult.length()));
         assertTrue(promptResult.contains("[TRUNCATED: originalChars="));
         assertFalse(promptResult.contains("RAW-TAIL"));
         assertNotEquals(rawResult, promptResult);
-        assertEquals(promptResult, storedToolMessage.getContent());
-        assertEquals(promptResult, storedToolMessage.getMetadata().getToolResponse().responseData());
+        assertEquals(promptResult, storedToolResult);
         verify(toolExecutionService).afterToolSuccess(any(), any(ToolExecutionRecord.class), eq(promptResult));
     }
 

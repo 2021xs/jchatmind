@@ -101,7 +101,8 @@ class JChatMindFinalizationTest {
         verify(logService).failStepAndTask(anyString(), eq("task-1"),
                 org.mockito.ArgumentMatchers.contains("Final synthesis"), anyInt(), eq(1));
         verify(logService, never()).finishTask(anyString(), anyString(), anyInt(), anyInt());
-        verify(messageService, times(2)).createChatMessage(any(ChatMessageDTO.class));
+        verify(messageService).createToolProtocolBatch(
+                eq("session-1"), eq("task-1"), any(AssistantMessage.class), any(ToolResponseMessage.class));
         verify(finalCompletionService, never()).complete(any());
     }
 

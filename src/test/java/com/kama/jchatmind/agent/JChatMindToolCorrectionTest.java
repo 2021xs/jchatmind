@@ -21,6 +21,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -106,6 +107,8 @@ class JChatMindToolCorrectionTest {
                 .thenReturn(ToolCallBatchResult.builder()
                         .status(ToolCallBatchResult.Status.FAILED)
                         .records(List.of(record))
+                        .toolResponseMessage(errorResponse())
+                        .terminalStatuses(Map.of("call-1", ToolCallBatchResult.TerminalStatus.ERROR))
                         .error(new ToolArgumentException(
                                 "Failed to parse JSON argument: missing required field query", null))
                         .build());
@@ -155,12 +158,11 @@ class JChatMindToolCorrectionTest {
         verify(sseService, never()).sendEvent(eq("session-1"),
                 org.mockito.ArgumentMatchers.argThat(event -> event.getType() == AgentSseEvent.Type.ERROR));
 
-        ArgumentCaptor<ChatMessageDTO> messageCaptor = ArgumentCaptor.forClass(ChatMessageDTO.class);
-        verify(chatMessageFacadeService, atLeastOnce()).createChatMessage(messageCaptor.capture());
-        assertTrue(messageCaptor.getAllValues().stream()
-                .anyMatch(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL
-                        && message.getContent() != null
-                        && message.getContent().contains("Tool call failed")));
+        ArgumentCaptor<ToolResponseMessage> responseCaptor = ArgumentCaptor.forClass(ToolResponseMessage.class);
+        verify(chatMessageFacadeService).createToolProtocolBatch(
+                eq("session-1"), eq("task-1"), any(AssistantMessage.class), responseCaptor.capture());
+        assertTrue(responseCaptor.getValue().getResponses().stream()
+                .anyMatch(response -> response.responseData().contains("Tool call failed")));
     }
 
     @Test
@@ -211,6 +213,8 @@ class JChatMindToolCorrectionTest {
                 .thenReturn(ToolCallBatchResult.builder()
                         .status(ToolCallBatchResult.Status.FAILED)
                         .records(List.of(record))
+                        .toolResponseMessage(errorResponse())
+                        .terminalStatuses(Map.of("call-1", ToolCallBatchResult.TerminalStatus.ERROR))
                         .error(new ToolArgumentException(
                                 "Failed to parse JSON argument: missing required field query", null))
                         .build());
@@ -255,5 +259,12 @@ class JChatMindToolCorrectionTest {
         verify(batchExecutor).recordFailure(any(), eq(List.of(record)), any(ToolArgumentException.class), eq(true));
         verify(batchExecutor).recordFailure(any(), eq(List.of(record)), any(ToolArgumentException.class), eq(false));
         verify(logService).failStepAndTask(anyString(), eq("task-1"), anyString(), anyInt(), anyInt());
+    }
+
+    private static ToolResponseMessage errorResponse() {
+        return ToolResponseMessage.builder()
+                .responses(List.of(new ToolResponseMessage.ToolResponse(
+                        "call-1", "searchProjectCode", "TOOL_CALL_TERMINAL:\nstatus=ERROR")))
+                .build();
     }
 }

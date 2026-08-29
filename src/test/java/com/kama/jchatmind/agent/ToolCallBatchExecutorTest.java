@@ -14,6 +14,7 @@ import com.kama.jchatmind.tool.ToolDuplicateCallState;
 import com.kama.jchatmind.tool.ToolArgumentException;
 import com.kama.jchatmind.tool.ToolRegistry;
 import com.kama.jchatmind.tool.ToolTimeoutException;
+import com.kama.jchatmind.tool.ToolUnknownException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,6 +33,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -127,6 +129,38 @@ class ToolCallBatchExecutorTest {
     }
 
     @Test
+    void allSuccessfulCallsProduceExactlyOneMatchingResponseEach() {
+        ToolCallBatchResult result = execute(
+                List.of(callback("toolA", ignored -> "A-ok"), callback("toolB", ignored -> "B-ok")),
+                call("call-a", "toolA"), call("call-b", "toolB"));
+
+        assertTrue(result.succeeded());
+        assertCompleteIds(result, Set.of("call-a", "call-b"));
+        assertEquals(List.of("A-ok", "B-ok"), result.getToolResponseMessage().getResponses().stream()
+                .map(response -> response.responseData())
+                .toList());
+    }
+
+    @Test
+    void partialSuccessPreservesEarlierExactResultAndAddsFailureResponse() {
+        ToolCallBatchResult result = execute(
+                List.of(callback("toolA", ignored -> "A-complete-result"),
+                        callback("toolB", ignored -> {
+                            throw new ToolArgumentException("invalid toolB argument", null);
+                        })),
+                call("call-a", "toolA"), call("call-b", "toolB"));
+
+        assertEquals(ToolCallBatchResult.Status.FAILED, result.getStatus());
+        assertCompleteIds(result, Set.of("call-a", "call-b"));
+        assertEquals("A-complete-result",
+                result.getToolResponseMessage().getResponses().get(0).responseData());
+        assertEquals(ToolCallBatchResult.TerminalStatus.SUCCESS,
+                result.getTerminalStatuses().get("call-a"));
+        assertEquals(ToolCallBatchResult.TerminalStatus.ERROR,
+                result.getTerminalStatuses().get("call-b"));
+    }
+
+    @Test
     void mcpInvocationFailureRemainsFailureThroughUnifiedRuntime() {
         ToolCallback mcpTool = callback("mcp_docs_search_docs", ignored -> {
             throw new McpToolCallException("mcp_docs_search_docs",
@@ -166,6 +200,9 @@ class ToolCallBatchExecutorTest {
 
         assertEquals(ToolCallBatchResult.Status.FAILED, result.getStatus());
         assertInstanceOf(ToolTimeoutException.class, result.getError());
+        assertCompleteIds(result, Set.of("call-1"));
+        assertEquals(ToolCallBatchResult.TerminalStatus.ERROR,
+                result.getTerminalStatuses().get("call-1"));
         assertTrue(interrupted.await(1, TimeUnit.SECONDS));
         ArgumentCaptor<Throwable> error = ArgumentCaptor.forClass(Throwable.class);
         verify(toolExecutionService).afterToolFailure(eq(executionContext), any(), error.capture(), eq(false));
@@ -280,6 +317,13 @@ class ToolCallBatchExecutorTest {
         assertEquals("A-ok", result.getToolResponseMessage().getResponses().get(0).responseData());
         assertTrue(result.getToolResponseMessage().getResponses().get(1).responseData().contains("[TRUNCATED:"));
         assertEquals("C-ok", result.getToolResponseMessage().getResponses().get(2).responseData());
+        assertCompleteIds(result, Set.of("call-a", "call-b", "call-c"));
+        assertEquals(ToolCallBatchResult.TerminalStatus.SUCCESS,
+                result.getTerminalStatuses().get("call-a"));
+        assertEquals(ToolCallBatchResult.TerminalStatus.SUCCESS,
+                result.getTerminalStatuses().get("call-b"));
+        assertEquals(ToolCallBatchResult.TerminalStatus.SUCCESS,
+                result.getTerminalStatuses().get("call-c"));
         assertEquals(1, toolCInvocations.get());
         assertTrue(result.getRecords().get(1).isRuntimeResultTruncated());
     }
@@ -307,6 +351,16 @@ class ToolCallBatchExecutorTest {
         assertEquals(ToolCallBatchResult.Status.FAILED, result.getStatus());
         assertEquals(2, result.getRecords().size());
         assertEquals(0, toolCInvocations.get());
+        assertCompleteIds(result, Set.of("call-a", "call-b", "call-c"));
+        assertEquals("A-ok", result.getToolResponseMessage().getResponses().get(0).responseData());
+        assertEquals(ToolCallBatchResult.TerminalStatus.SUCCESS,
+                result.getTerminalStatuses().get("call-a"));
+        assertEquals(ToolCallBatchResult.TerminalStatus.ERROR,
+                result.getTerminalStatuses().get("call-b"));
+        assertEquals(ToolCallBatchResult.TerminalStatus.SKIPPED,
+                result.getTerminalStatuses().get("call-c"));
+        assertTrue(result.getToolResponseMessage().getResponses().get(1).responseData().contains("status=ERROR"));
+        assertTrue(result.getToolResponseMessage().getResponses().get(2).responseData().contains("status=SKIPPED"));
         verify(toolExecutionService).afterToolSuccess(
                 eq(executionContext), eq(result.getRecords().get(0)), eq("A-ok"));
         verify(toolExecutionService).afterToolFailure(
@@ -341,6 +395,9 @@ class ToolCallBatchExecutorTest {
         String feedback = result.getToolResponseMessage().getResponses().get(2).responseData();
         assertTrue(feedback.contains("reason=DUPLICATE_TOOL_CALL"));
         assertTrue(feedback.contains("consecutiveCount=3"));
+        assertCompleteIds(result, Set.of("call-1", "call-2", "call-3"));
+        assertEquals(ToolCallBatchResult.TerminalStatus.REJECTED,
+                result.getTerminalStatuses().get("call-3"));
         verify(toolExecutionService, times(2)).afterToolSuccess(eq(executionContext), any(), eq("A-ok"));
         verify(toolExecutionService).afterToolFailure(
                 eq(executionContext), eq(result.getRecords().get(2)),
@@ -387,6 +444,9 @@ class ToolCallBatchExecutorTest {
                     List.of(invalidTool), call("call-" + i, "toolA", "{\"repoId\":\"repo-1\"}"));
             assertEquals(ToolCallBatchResult.Status.FAILED, result.getStatus());
             assertInstanceOf(ToolArgumentException.class, result.getError());
+            assertCompleteIds(result, Set.of("call-" + i));
+            assertEquals(ToolCallBatchResult.TerminalStatus.ERROR,
+                    result.getTerminalStatuses().get("call-" + i));
         }
 
         assertEquals(3, invocations.get());
@@ -431,6 +491,21 @@ class ToolCallBatchExecutorTest {
         verify(toolExecutionService).afterToolSuccess(eq(guardedContext), any(),
                 org.mockito.ArgumentMatchers.contains("CODE_SEARCH_NO_NOVELTY_GUARD"));
         verify(toolExecutionService, never()).afterToolFailure(eq(guardedContext), any(), any(), any(Boolean.class));
+    }
+
+    @Test
+    void unknownToolProducesOneRejectedTerminalResponse() {
+        when(toolExecutionService.beforeToolCall(eq(executionContext), any()))
+                .thenThrow(new ToolUnknownException("Unknown tool: missingTool"));
+
+        ToolCallBatchResult result = execute(List.of(), call("call-unknown", "missingTool"));
+
+        assertEquals(ToolCallBatchResult.Status.FAILED, result.getStatus());
+        assertCompleteIds(result, Set.of("call-unknown"));
+        assertEquals(ToolCallBatchResult.TerminalStatus.REJECTED,
+                result.getTerminalStatuses().get("call-unknown"));
+        assertTrue(result.getToolResponseMessage().getResponses().get(0).responseData()
+                .contains("status=REJECTED"));
     }
 
     @Test
@@ -517,6 +592,14 @@ class ToolCallBatchExecutorTest {
                 return function.apply(toolInput);
             }
         };
+    }
+
+    private void assertCompleteIds(ToolCallBatchResult result, Set<String> requestedIds) {
+        Set<String> responseIds = result.getToolResponseMessage().getResponses().stream()
+                .map(response -> response.id())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(requestedIds, responseIds);
+        assertEquals(requestedIds.size(), result.getToolResponseMessage().getResponses().size());
     }
 
     private void sleep(long millis) {

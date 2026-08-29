@@ -9,7 +9,6 @@ import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.dto.KnowledgeBaseDTO;
 import com.kama.jchatmind.model.entity.AgentStep;
 import com.kama.jchatmind.model.entity.AgentTask;
-import com.kama.jchatmind.model.response.CreateChatMessageResponse;
 import com.kama.jchatmind.model.vo.ChatMessageVO;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
@@ -128,7 +127,6 @@ public class JChatMind {
     private FinalContextCompiler finalContextCompiler = new FinalContextCompiler();
     private final FinalOutputValidator finalOutputValidator = new FinalOutputValidator();
 
-    private final List<ChatMessageDTO> pendingChatMessages = new ArrayList<>();
 
     public JChatMind() {
     }
@@ -241,68 +239,6 @@ public class JChatMind {
                 })
                 .collect(Collectors.joining("\n\n"));
         log.info("\n\n========== Tool Calling ==========\n{}\n=================================\n", logMessage);
-    }
-
-    private String saveMessage(Message message) {
-        ChatMessageDTO.ChatMessageDTOBuilder builder = ChatMessageDTO.builder();
-        if (message instanceof AssistantMessage) {
-            AssistantMessage assistantMessage = (AssistantMessage) message;
-            ChatMessageDTO chatMessageDTO = builder.role(ChatMessageDTO.RoleType.ASSISTANT)
-                    .content(assistantMessage.getText())
-                    .sessionId(this.chatSessionId)
-                    .metadata(ChatMessageDTO.MetaData.builder()
-                            .taskId(currentTaskId)
-                            .toolCalls(assistantMessage.getToolCalls())
-                            .build())
-                    .build();
-            CreateChatMessageResponse chatMessage = chatMessageFacadeService.createChatMessage(chatMessageDTO);
-            chatMessageDTO.setId(chatMessage.getChatMessageId());
-            pendingChatMessages.add(chatMessageDTO);
-            return chatMessage.getChatMessageId();
-        } else if (message instanceof ToolResponseMessage) {
-            ToolResponseMessage toolResponseMessage = (ToolResponseMessage) message;
-            for (ToolResponseMessage.ToolResponse toolResponse : toolResponseMessage.getResponses()) {
-                ChatMessageDTO chatMessageDTO = builder.role(ChatMessageDTO.RoleType.TOOL)
-                        .content(toolResponse.responseData())
-                        .sessionId(this.chatSessionId)
-                        .metadata(ChatMessageDTO.MetaData.builder()
-                                .taskId(currentTaskId)
-                                .toolResponse(toolResponse)
-                                .build())
-                        .build();
-                CreateChatMessageResponse chatMessage = chatMessageFacadeService.createChatMessage(chatMessageDTO);
-                chatMessageDTO.setId(chatMessage.getChatMessageId());
-                pendingChatMessages.add(chatMessageDTO);
-            }
-            return null;
-        } else {
-            throw new IllegalArgumentException("Unsupported message type: " + message.getClass().getName());
-        }
-    }
-
-    private void refreshPendingMessages() {
-        for (ChatMessageDTO message : pendingChatMessages) {
-            if (!isUserVisibleMessage(message)) {
-                continue;
-            }
-            ChatMessageVO vo = chatMessageConverter.toVO(message);
-            SseMessage sseMessage = SseMessage.builder()
-                    .type(SseMessage.Type.AI_GENERATED_CONTENT)
-                    .payload(SseMessage.Payload.builder().message(vo).build())
-                    .metadata(SseMessage.Metadata.builder().chatMessageId(message.getId()).build())
-                    .build();
-            agentEventPublisher.sendMessage(this.chatSessionId, sseMessage);
-        }
-        pendingChatMessages.clear();
-    }
-
-    private boolean isUserVisibleMessage(ChatMessageDTO message) {
-        if (message == null || message.getRole() != ChatMessageDTO.RoleType.ASSISTANT) {
-            return false;
-        }
-        return message.getMetadata() == null
-                || message.getMetadata().getToolCalls() == null
-                || message.getMetadata().getToolCalls().isEmpty();
     }
 
     private void sendAgentEvent(AgentSseEvent.Type type, Map<String, Object> payload) {
@@ -489,10 +425,6 @@ public class JChatMind {
             throw new ToolExecutionException("Finalization returned an empty final answer", null);
         }
 
-        if (toolCalls != null && !toolCalls.isEmpty()) {
-            saveMessage(output);
-            refreshPendingMessages();
-        }
         logToolCalls(toolCalls);
 
         if (finalizationRound) {
@@ -973,11 +905,31 @@ public class JChatMind {
         List<ToolExecutionRecord> records = execution.getRecords();
         toolCallCount += records.size();
 
+        PreparedToolCorrection correction = null;
+        ToolResponseMessage terminalResponseMessage = execution.getToolResponseMessage();
         if (!execution.succeeded()) {
-            if (tryRequestToolSelfCorrection(executionContext, records, execution.getError())) {
-                return true;
+            correction = prepareToolSelfCorrection(executionContext, execution);
+            if (correction != null) {
+                terminalResponseMessage = correction.responseMessage();
+            } else {
+                toolCallBatchExecutor.recordFailure(executionContext, records, execution.getError(), false);
             }
-            toolCallBatchExecutor.recordFailure(executionContext, records, execution.getError(), false);
+        }
+
+        chatMessageFacadeService.createToolProtocolBatch(
+                chatSessionId, currentTaskId, assistantToolCallMessage, terminalResponseMessage);
+
+        if (correction != null) {
+            List<Message> correctedMemory = new ArrayList<>(this.chatMemory.get(this.chatSessionId));
+            correctedMemory.add(assistantToolCallMessage);
+            correctedMemory.add(terminalResponseMessage);
+            this.chatMemory.clear(this.chatSessionId);
+            this.chatMemory.add(this.chatSessionId, correctedMemory);
+            log.info("Tool failure fed back for self-correction: errorType={}, attempts={}",
+                    correction.decision().errorType(), toolCorrectionAttempts);
+            return true;
+        }
+        if (!execution.succeeded()) {
             throw execution.getError();
         }
 
@@ -985,15 +937,12 @@ public class JChatMind {
         this.chatMemory.clear(this.chatSessionId);
         this.chatMemory.add(this.chatSessionId, execution.getToolExecutionResult().conversationHistory());
 
-        ToolResponseMessage toolResponseMessage = execution.getToolResponseMessage();
+        ToolResponseMessage toolResponseMessage = terminalResponseMessage;
         String collect = toolResponseMessage.getResponses()
                 .stream()
                 .map(resp -> "Tool " + resp.name() + " result: " + truncate(resp.responseData()))
                 .collect(Collectors.joining("\n"));
         log.info("Tool call result: {}", collect);
-
-        saveMessage(toolResponseMessage);
-        refreshPendingMessages();
 
         if (duplicateCallState.isHardStopRequested()) {
             forceFinalAnswer = true;
@@ -1009,32 +958,23 @@ public class JChatMind {
         return false;
     }
 
-    private boolean tryRequestToolSelfCorrection(ToolExecutionContext executionContext,
-                                                 List<ToolExecutionRecord> records,
-                                                 Exception error) {
+    private PreparedToolCorrection prepareToolSelfCorrection(ToolExecutionContext executionContext,
+                                                             ToolCallBatchResult execution) {
+        List<ToolExecutionRecord> records = execution.getRecords();
+        RuntimeException error = execution.getError();
         if (!toolCorrectionProperties.isEnabled() || records.isEmpty()) {
-            return false;
+            return null;
         }
         ToolFailureDecision decision = toolFailureClassifier.classify(error);
         if (!decision.correctable()) {
-            return false;
+            return null;
         }
         if (!reserveCorrectionAttempts(records, decision.errorType())) {
-            return false;
+            return null;
         }
 
         toolCallBatchExecutor.recordFailure(executionContext, records, error, true);
-        ToolResponseMessage failureResponseMessage = buildFailureToolResponseMessage(records, decision);
-        List<Message> correctedMemory = new ArrayList<>(this.chatMemory.get(this.chatSessionId));
-        correctedMemory.add(this.lastChatResponse.getResult().getOutput());
-        correctedMemory.add(failureResponseMessage);
-        this.chatMemory.clear(this.chatSessionId);
-        this.chatMemory.add(this.chatSessionId, correctedMemory);
-        saveMessage(failureResponseMessage);
-        refreshPendingMessages();
-        log.info("Tool failure fed back for self-correction: errorType={}, attempts={}",
-                decision.errorType(), toolCorrectionAttempts);
-        return true;
+        return new PreparedToolCorrection(buildFailureToolResponseMessage(execution, decision), decision);
     }
 
     private boolean reserveCorrectionAttempts(List<ToolExecutionRecord> records, String errorType) {
@@ -1058,18 +998,28 @@ public class JChatMind {
         return record.getActualToolName() + ":" + errorType;
     }
 
-    private ToolResponseMessage buildFailureToolResponseMessage(List<ToolExecutionRecord> records,
+    private ToolResponseMessage buildFailureToolResponseMessage(ToolCallBatchResult execution,
                                                                 ToolFailureDecision decision) {
-        List<ToolResponseMessage.ToolResponse> responses = records.stream()
-                .map(record -> new ToolResponseMessage.ToolResponse(
-                        record.getToolCallId(),
-                        record.getActualToolName(),
-                        correctionPayload(record, decision)
-                ))
+        Map<String, ToolExecutionRecord> recordsById = execution.getRecords().stream()
+                .collect(Collectors.toMap(ToolExecutionRecord::getToolCallId, record -> record));
+        List<ToolResponseMessage.ToolResponse> responses = execution.getToolResponseMessage().getResponses().stream()
+                .map(response -> {
+                    ToolCallBatchResult.TerminalStatus status = execution.getTerminalStatuses().get(response.id());
+                    ToolExecutionRecord record = recordsById.get(response.id());
+                    if (status != ToolCallBatchResult.TerminalStatus.ERROR || record == null) {
+                        return response;
+                    }
+                    return new ToolResponseMessage.ToolResponse(
+                            response.id(), response.name(), correctionPayload(record, decision));
+                })
                 .collect(Collectors.toList());
         return ToolResponseMessage.builder()
                 .responses(responses)
                 .build();
+    }
+
+    private record PreparedToolCorrection(ToolResponseMessage responseMessage,
+                                          ToolFailureDecision decision) {
     }
 
     private String correctionPayload(ToolExecutionRecord record, ToolFailureDecision decision) {
@@ -1408,7 +1358,6 @@ public class JChatMind {
             taskControl.completeCancellation(cancellation);
         }
         pendingFinalAssistantMessage = null;
-        pendingChatMessages.clear();
     }
 
     private final class FinalStreamSubscriber extends BaseSubscriber<ChatResponse> {

@@ -3,6 +3,7 @@ package com.kama.jchatmind.service.impl;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.kama.jchatmind.agent.AgentToolProtocolInspector;
 import com.kama.jchatmind.converter.ChatMessageConverter;
 import com.kama.jchatmind.event.ChatEvent;
 import com.kama.jchatmind.exception.BizException;
@@ -20,6 +21,9 @@ import com.kama.jchatmind.service.ChatMessageFacadeService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -133,6 +137,54 @@ public class ChatMessageFacadeServiceImpl implements ChatMessageFacadeService {
     }
 
     @Override
+    @Transactional
+    public void createToolProtocolBatch(String sessionId,
+                                        String taskId,
+                                        AssistantMessage assistantMessage,
+                                        ToolResponseMessage toolResponseMessage) {
+        if (!StringUtils.hasText(sessionId) || !StringUtils.hasText(taskId)) {
+            throw new IllegalArgumentException("sessionId and taskId are required for tool protocol persistence");
+        }
+        if (assistantMessage == null || assistantMessage.getToolCalls() == null
+                || assistantMessage.getToolCalls().isEmpty()) {
+            throw new IllegalArgumentException("Assistant tool-call message is required");
+        }
+        if (toolResponseMessage == null || toolResponseMessage.getResponses() == null
+                || toolResponseMessage.getResponses().isEmpty()) {
+            throw new IllegalArgumentException("Terminal tool response batch is required");
+        }
+
+        AgentToolProtocolInspector.Inspection inspection = AgentToolProtocolInspector.inspect(
+                List.<Message>of(assistantMessage, toolResponseMessage));
+        if (!inspection.valid()) {
+            throw new IllegalArgumentException("Invalid terminal tool protocol batch: " + inspection.diagnostic());
+        }
+
+        LocalDateTime batchCreatedAt = LocalDateTime.now();
+        doCreateChatMessage(ChatMessageDTO.builder()
+                .role(ChatMessageDTO.RoleType.ASSISTANT)
+                .content(assistantMessage.getText())
+                .sessionId(sessionId)
+                .metadata(ChatMessageDTO.MetaData.builder()
+                        .taskId(taskId)
+                        .toolCalls(assistantMessage.getToolCalls())
+                        .build())
+                .build(), batchCreatedAt);
+        for (int i = 0; i < toolResponseMessage.getResponses().size(); i++) {
+            ToolResponseMessage.ToolResponse response = toolResponseMessage.getResponses().get(i);
+            doCreateChatMessage(ChatMessageDTO.builder()
+                    .role(ChatMessageDTO.RoleType.TOOL)
+                    .content(response.responseData())
+                    .sessionId(sessionId)
+                    .metadata(ChatMessageDTO.MetaData.builder()
+                            .taskId(taskId)
+                            .toolResponse(response)
+                            .build())
+                    .build(), batchCreatedAt.plusNanos((i + 1L) * 1_000L));
+        }
+    }
+
+    @Override
     public CreateChatMessageResponse agentCreateChatMessage(CreateChatMessageRequest request) {
         ChatMessage chatMessage = doCreateChatMessage(request);
         // 和 createChatMessage 的区别在于，Agent 创建的 chatMessage 不需要发布事件
@@ -149,14 +201,17 @@ public class ChatMessageFacadeServiceImpl implements ChatMessageFacadeService {
     }
 
     private ChatMessage doCreateChatMessage(ChatMessageDTO chatMessageDTO) {
+        return doCreateChatMessage(chatMessageDTO, LocalDateTime.now());
+    }
+
+    private ChatMessage doCreateChatMessage(ChatMessageDTO chatMessageDTO, LocalDateTime createdAt) {
         try {
             // 将 ChatMessageDTO 转换为 ChatMessage 实体
             ChatMessage chatMessage = chatMessageConverter.toEntity(chatMessageDTO);
 
             // 设置创建时间和更新时间
-            LocalDateTime now = LocalDateTime.now();
-            chatMessage.setCreatedAt(now);
-            chatMessage.setUpdatedAt(now);
+            chatMessage.setCreatedAt(createdAt);
+            chatMessage.setUpdatedAt(createdAt);
             // 插入数据库，ID 由数据库自动生成
             int result = chatMessageMapper.insert(chatMessage);
             if (result <= 0) {

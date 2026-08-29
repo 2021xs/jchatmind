@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -84,6 +85,11 @@ class JChatMindToolTimeoutTest {
                 .thenReturn(ToolCallBatchResult.builder()
                         .status(ToolCallBatchResult.Status.FAILED)
                         .records(List.of(record))
+                        .toolResponseMessage(ToolResponseMessage.builder()
+                                .responses(List.of(new ToolResponseMessage.ToolResponse(
+                                        "call-1", "slowTool", "TOOL_CALL_TERMINAL:\nstatus=ERROR")))
+                                .build())
+                        .terminalStatuses(Map.of("call-1", ToolCallBatchResult.TerminalStatus.ERROR))
                         .error(timeout)
                         .build());
 
@@ -107,6 +113,8 @@ class JChatMindToolTimeoutTest {
         assertThrows(RuntimeException.class, agent::run);
 
         verify(batchExecutor, times(1)).execute(any(), any(), any(), any());
+        verify(messageService).createToolProtocolBatch(
+                eq("session-1"), eq("task-1"), any(AssistantMessage.class), any(ToolResponseMessage.class));
         verify(logService).failStepAndTask(anyString(), eq("task-1"),
                 org.mockito.ArgumentMatchers.contains("runtime timeout"), anyInt(), eq(1));
         verify(logService, never()).finishTask(anyString(), anyString(), anyInt(), anyInt());
