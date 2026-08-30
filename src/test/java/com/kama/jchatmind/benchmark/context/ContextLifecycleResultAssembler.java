@@ -28,11 +28,21 @@ final class ContextLifecycleResultAssembler {
     private final ContextOriginAttributor attributor;
     private final DeterministicCorrectnessScorer correctnessScorer = new DeterministicCorrectnessScorer();
     private final FinalContextCompiler finalContextCompiler;
+    private final ContextLifecycleBenchmarkResult.ExecutionArchitecture executionArchitecture;
 
     ContextLifecycleResultAssembler(int charsPerToken, FinalSynthesisProperties finalProperties) {
+        this(charsPerToken, finalProperties, ContextLifecycleBenchmarkResult.ExecutionArchitecture.LEGACY);
+    }
+
+    ContextLifecycleResultAssembler(
+            int charsPerToken,
+            FinalSynthesisProperties finalProperties,
+            ContextLifecycleBenchmarkResult.ExecutionArchitecture executionArchitecture) {
         measurer = new EstimatedMessageTokenMeasurer(charsPerToken);
         attributor = new ContextOriginAttributor(measurer);
         finalContextCompiler = new FinalContextCompiler(finalProperties);
+        this.executionArchitecture = Objects.requireNonNull(
+                executionArchitecture, "executionArchitecture cannot be null");
     }
 
     ContextLifecycleBenchmarkResult.CaseResult assemble(ContextLifecycleCaseExecution execution) {
@@ -152,8 +162,11 @@ final class ContextLifecycleResultAssembler {
     private TranscriptMetrics transcriptMetrics(
             AgentLifecycleObservationPublisher.FinalProjectionObservation projection,
             List<ContextLifecycleBenchmarkResult.ModelCallMetric> calls) {
+        if (executionArchitecture == ContextLifecycleBenchmarkResult.ExecutionArchitecture.TASK_AWARE) {
+            return TranscriptMetrics.removed(lastFinalTokens(calls));
+        }
         if (projection == null) {
-            return new TranscriptMetrics(0, 0, null, lastFinalTokens(calls), 0);
+            return TranscriptMetrics.present(0, 0, null, lastFinalTokens(calls), 0);
         }
         int transcriptTokens = measurer.measure(projection.currentTaskToolTranscript(), null).tokens();
         Integer before = null;
@@ -166,7 +179,7 @@ final class ContextLifecycleResultAssembler {
         }
         Integer after = lastFinalTokens(calls);
         int contribution = before == null || after == null ? 0 : Math.max(0, after - before);
-        return new TranscriptMetrics(projection.currentTaskToolTranscript().size(), transcriptTokens,
+        return TranscriptMetrics.present(projection.currentTaskToolTranscript().size(), transcriptTokens,
                 before, after, contribution);
     }
 
@@ -195,8 +208,8 @@ final class ContextLifecycleResultAssembler {
                 value(firstOrigins, ContextOriginAttributor.COMPLETED_TASK_TOOL),
                 value(firstOrigins, ContextOriginAttributor.SESSION_SUMMARY),
                 value(firstOrigins, ContextOriginAttributor.UNKNOWN),
-                transcript.entries(), transcript.tokens(), transcript.before(), transcript.after(),
-                transcript.contribution());
+                transcript.entries(), transcript.tokens(), transcript.tokenStatus(), transcript.before(),
+                transcript.after(), transcript.contribution(), transcript.contributionStatus());
     }
 
     private int value(Map<String, Integer> values, String key) {
@@ -224,7 +237,8 @@ final class ContextLifecycleResultAssembler {
                         .getOrDefault(ContextOriginAttributor.COMPLETED_TASK_TOOL, 0)).orElse(0);
         return new ContextLifecycleBenchmarkResult.ToolMetrics(
                 execution.toolCalls().size(), countByTool, produced,
-                currentAndCompletedToolContext + transcript.contribution(), largest, crossTask);
+                currentAndCompletedToolContext + (transcript.contribution() == null
+                        ? 0 : transcript.contribution()), largest, crossTask);
     }
 
     private List<ContextLifecycleBenchmarkResult.ToolCallMetric> toolCalls(
@@ -374,6 +388,28 @@ final class ContextLifecycleResultAssembler {
         return value.getActualToolName() == null ? "UNKNOWN" : value.getActualToolName();
     }
 
-    private record TranscriptMetrics(int entries, int tokens, Integer before, Integer after, int contribution) {
+    private record TranscriptMetrics(
+            int entries,
+            Integer tokens,
+            ContextLifecycleBenchmarkResult.TranscriptMetricStatus tokenStatus,
+            Integer before,
+            Integer after,
+            Integer contribution,
+            ContextLifecycleBenchmarkResult.TranscriptMetricStatus contributionStatus) {
+
+        static TranscriptMetrics present(
+                int entries, int tokens, Integer before, Integer after, int contribution) {
+            return new TranscriptMetrics(entries, tokens,
+                    ContextLifecycleBenchmarkResult.TranscriptMetricStatus.PRESENT,
+                    before, after, contribution,
+                    ContextLifecycleBenchmarkResult.TranscriptMetricStatus.PRESENT);
+        }
+
+        static TranscriptMetrics removed(Integer finalContextTokens) {
+            return new TranscriptMetrics(0, null,
+                    ContextLifecycleBenchmarkResult.TranscriptMetricStatus.REMOVED_NOT_APPLICABLE,
+                    null, finalContextTokens, null,
+                    ContextLifecycleBenchmarkResult.TranscriptMetricStatus.REMOVED_NOT_APPLICABLE);
+        }
     }
 }

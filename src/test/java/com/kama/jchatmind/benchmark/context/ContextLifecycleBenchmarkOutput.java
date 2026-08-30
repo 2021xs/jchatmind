@@ -17,6 +17,7 @@ final class ContextLifecycleBenchmarkOutput {
     static final String RAW_JSON = "context-lifecycle-raw.json";
     static final String CASE_CSV = "context-lifecycle-cases.csv";
     static final String REPORT_MD = "context-lifecycle-legacy-baseline.md";
+    static final String TASK_AWARE_REPORT_MD = "context-lifecycle-task-aware.md";
     static final String ANOMALIES_CSV = "context-lifecycle-anomalies.csv";
 
     private final ObjectMapper objectMapper;
@@ -29,7 +30,9 @@ final class ContextLifecycleBenchmarkOutput {
         Files.createDirectories(directory);
         Path raw = directory.resolve(RAW_JSON);
         Path csv = directory.resolve(CASE_CSV);
-        Path report = directory.resolve(REPORT_MD);
+        Path report = directory.resolve(result.run().executionArchitecture()
+                == ContextLifecycleBenchmarkResult.ExecutionArchitecture.LEGACY
+                ? REPORT_MD : TASK_AWARE_REPORT_MD);
         Path anomalies = directory.resolve(ANOMALIES_CSV);
         objectMapper.writerWithDefaultPrettyPrinter().writeValue(raw.toFile(), result);
         Files.writeString(csv, caseCsv(result), StandardCharsets.UTF_8);
@@ -49,11 +52,14 @@ final class ContextLifecycleBenchmarkOutput {
                 "tool_result_context_tokens", "cross_task_tool_tokens", "compression_count",
                 "compression_input_tokens", "compression_output_tokens", "compression_tokens_removed",
                 "max_summary_depth", "critical_fact_recall", "exact_value_accuracy", "forbidden_claim_count",
-                "orphan_protocol_count", "protocol_failure_count"));
+                "orphan_protocol_count", "protocol_failure_count",
+                "task_tool_transcript_tokens", "task_tool_transcript_status",
+                "transcript_merge_contribution_tokens", "transcript_merge_contribution_status"));
         for (ContextLifecycleBenchmarkResult.CaseResult value : result.cases()) {
             row(csv, List.of(
-                    result.run().benchmarkRunId(), result.run().architectureLabel(), result.run().gitCommit(),
-                    value.benchmarkCaseId(), value.caseCategory(), value.repeatIndex(), safe(value.taskStatus()),
+                    result.run().benchmarkRunId(), result.run().executionArchitecture().name(),
+                    result.run().gitCommit(), value.benchmarkCaseId(), value.caseCategory(),
+                    value.repeatIndex(), safe(value.taskStatus()),
                     value.taskTotalLatencyMs(), value.thinkTotalLatencyMs(), value.toolTotalLatencyMs(),
                     value.compressionTotalLatencyMs(), value.finalLatencyMs(),
                     nullable(value.tokens().taskInput().actualTokens()), nullable(value.tokens().taskInput().estimatedTokens()),
@@ -65,7 +71,11 @@ final class ContextLifecycleBenchmarkOutput {
                     value.compression().compressionOutputTokens(), value.compression().compressionTokensRemoved(),
                     value.compression().maxSummaryDepth(), format(value.correctness().criticalFactRecall()),
                     format(value.correctness().exactValueAccuracy()), value.correctness().forbiddenClaimCount(),
-                    value.stability().orphanToolProtocolCount(), value.stability().protocolValidationFailureCount()));
+                    value.stability().orphanToolProtocolCount(), value.stability().protocolValidationFailureCount(),
+                    nullableMetric(value.context().taskToolTranscriptEstimatedTokens()),
+                    value.context().taskToolTranscriptStatus().name(),
+                    nullableMetric(value.context().finalTranscriptContributionTokens()),
+                    value.context().finalTranscriptContributionStatus().name()));
         }
         return csv.toString();
     }
@@ -114,13 +124,20 @@ final class ContextLifecycleBenchmarkOutput {
                 ? "样本数少于 20；P95 仅按 nearest-rank 输出，不代表稳定尾延迟。"
                 : "P95 使用 nearest-rank；建议结合三次重复的分布解释。";
 
+        boolean legacy = run.executionArchitecture()
+                == ContextLifecycleBenchmarkResult.ExecutionArchitecture.LEGACY;
+        String title = legacy
+                ? "# JChatMind Context Lifecycle Legacy Baseline Report\n\n"
+                : "# JChatMind Context Lifecycle TASK_AWARE Report\n\n";
         StringBuilder md = new StringBuilder();
-        md.append("# JChatMind Context Lifecycle Legacy Baseline Report\n\n")
+        md.append(title)
                 .append("> 本报告由固定 Benchmark Runner 从真实执行结果生成，不包含手工填写的指标。\n\n")
                 .append("## Environment\n\n")
                 .append("| Field | Value |\n| --- | --- |\n")
                 .append("| benchmark run | ").append(escapeMd(run.benchmarkRunId())).append(" |\n")
-                .append("| architecture | ").append(escapeMd(run.architectureLabel())).append(" |\n")
+                .append("| architecture | ").append(run.executionArchitecture()).append(" |\n")
+                .append("| suite architecture provenance | ")
+                .append(escapeMd(run.architectureLabel())).append(" |\n")
                 .append("| git commit | `").append(run.gitCommit()).append("` |\n")
                 .append("| working tree | ").append(escapeMd(run.workingTreeStatus())).append(" |\n")
                 .append("| suite version | ").append(escapeMd(run.benchmarkSuiteVersion())).append(" |\n")
@@ -157,7 +174,7 @@ final class ContextLifecycleBenchmarkOutput {
                 .append(metricRow(cases, "working context tokens", value -> value.context().maxWorkingContextTokensObserved()))
                 .append(metricRow(cases, "final context tokens", value -> value.context().finalContextTokens()))
                 .append(metricRow(cases, "cross-task tool tokens", value -> value.tools().crossTaskToolResultTokens()))
-                .append(metricRow(cases, "TaskToolTranscript estimated tokens", value -> value.context().taskToolTranscriptEstimatedTokens()))
+                .append(transcriptMetricRow(cases, "TaskToolTranscript estimated tokens", true))
                 .append("\n").append(p95Note).append("\n\n")
                 .append("## Tool\n\n")
                 .append("| Metric | Total / Max |\n| --- | ---: |\n")
@@ -189,23 +206,91 @@ final class ContextLifecycleBenchmarkOutput {
                 .append("| context overflow | ").append(cases.stream().mapToInt(value -> value.stability().contextOverflowCount()).sum()).append(" |\n")
                 .append("| compression failure | ").append(cases.stream().mapToInt(value -> value.stability().compressionFailureCount()).sum()).append(" |\n")
                 .append("| tool execution failure | ").append(cases.stream().mapToInt(value -> value.stability().toolExecutionFailureCount()).sum()).append(" |\n\n")
-                .append("## Legacy Architecture Observations\n\n")
+                .append(legacy ? "## Legacy Architecture Observations\n\n"
+                        : "## TASK_AWARE Architecture Observations\n\n")
                 .append("- Final request 中 TaskToolTranscript 的估算 token 合计：")
-                .append(cases.stream().mapToInt(value -> value.context().taskToolTranscriptEstimatedTokens()).sum()).append("。\n")
+                .append(transcriptMetricTotal(cases, true)).append("。\n")
                 .append("- Final request 因 transcript merge 增加的可归因估算 token 合计：")
-                .append(cases.stream().mapToInt(value -> value.context().finalTranscriptContributionTokens()).sum()).append("。\n")
+                .append(transcriptMetricTotal(cases, false)).append("。\n")
                 .append("- Task2 首轮 THINK 中归因到 completed-task tool protocol 的估算 token 合计：")
                 .append(cases.stream().mapToInt(value -> value.tools().crossTaskToolResultTokens()).sum()).append("。\n")
                 .append("- 以上 token 均使用统一 message estimator；provider usage 仅保存在 raw JSON 的 actual 字段，不与估算值混算。\n\n")
                 .append("## Measurement Limitations\n\n")
                 .append("- Compression 调用当前 provider usage 不可取得，其 input/output token 仅为估算。\n")
-                .append("- Working context、来源归因、Tool Result 与 TaskToolTranscript 均为 `ESTIMATED_MESSAGE_CHARS_V1`。\n")
+                .append(legacy
+                        ? "- Working context、来源归因、Tool Result 与 TaskToolTranscript 均为 `ESTIMATED_MESSAGE_CHARS_V1`。\n"
+                        : "- Working context、来源归因与 Tool Result 使用 `ESTIMATED_MESSAGE_CHARS_V1`；"
+                        + "TaskToolTranscript 已标记为 `REMOVED_NOT_APPLICABLE`。\n")
                 .append("- `summaryDepth` 定义为同一 task 内按发生顺序累计的 compression generation。\n")
                 .append("- Correctness 使用确定性 structured fact coverage，不使用 LLM judge；语义同义词覆盖受 case 词表限制。\n")
                 .append("- 外部 repo 工作区状态被记录但 snapshot 由数据库 file/chunk manifests 冻结。\n\n")
                 .append("## Anomalies\n\n")
                 .append("详见 `").append(ANOMALIES_CSV).append("`；空数据行表示本次未发现异常。\n");
         return md.toString();
+    }
+
+    private String transcriptMetricRow(
+            List<ContextLifecycleBenchmarkResult.CaseResult> cases,
+            String label,
+            boolean transcriptTokens) {
+        ContextLifecycleBenchmarkResult.TranscriptMetricStatus status =
+                uniformTranscriptStatus(cases, transcriptTokens);
+        if (status == ContextLifecycleBenchmarkResult.TranscriptMetricStatus.REMOVED_NOT_APPLICABLE) {
+            return "| " + label + " | REMOVED_NOT_APPLICABLE | REMOVED_NOT_APPLICABLE"
+                    + " | REMOVED_NOT_APPLICABLE |\n";
+        }
+        List<Long> values = cases.stream()
+                .map(value -> transcriptMetricValue(value, transcriptTokens))
+                .mapToLong(Integer::longValue)
+                .sorted()
+                .boxed()
+                .toList();
+        return "| " + label + " | " + percentile(values, 0.50) + " | "
+                + percentile(values, 0.95) + " | "
+                + (values.isEmpty() ? 0 : values.get(values.size() - 1)) + " |\n";
+    }
+
+    private String transcriptMetricTotal(
+            List<ContextLifecycleBenchmarkResult.CaseResult> cases,
+            boolean transcriptTokens) {
+        ContextLifecycleBenchmarkResult.TranscriptMetricStatus status =
+                uniformTranscriptStatus(cases, transcriptTokens);
+        if (status == ContextLifecycleBenchmarkResult.TranscriptMetricStatus.REMOVED_NOT_APPLICABLE) {
+            return status.name();
+        }
+        return String.valueOf(cases.stream()
+                .map(value -> transcriptMetricValue(value, transcriptTokens))
+                .mapToInt(Integer::intValue)
+                .sum());
+    }
+
+    private ContextLifecycleBenchmarkResult.TranscriptMetricStatus uniformTranscriptStatus(
+            List<ContextLifecycleBenchmarkResult.CaseResult> cases,
+            boolean transcriptTokens) {
+        List<ContextLifecycleBenchmarkResult.TranscriptMetricStatus> statuses = cases.stream()
+                .map(value -> transcriptTokens
+                        ? value.context().taskToolTranscriptStatus()
+                        : value.context().finalTranscriptContributionStatus())
+                .distinct()
+                .toList();
+        if (statuses.size() > 1) {
+            throw new IllegalStateException("Transcript metric status must be uniform within one benchmark run");
+        }
+        return statuses.isEmpty()
+                ? ContextLifecycleBenchmarkResult.TranscriptMetricStatus.PRESENT
+                : statuses.get(0);
+    }
+
+    private Integer transcriptMetricValue(
+            ContextLifecycleBenchmarkResult.CaseResult value,
+            boolean transcriptTokens) {
+        Integer metric = transcriptTokens
+                ? value.context().taskToolTranscriptEstimatedTokens()
+                : value.context().finalTranscriptContributionTokens();
+        if (metric == null) {
+            throw new IllegalStateException("PRESENT Transcript metric cannot have a null value");
+        }
+        return metric;
     }
 
     private String metricRow(List<ContextLifecycleBenchmarkResult.CaseResult> cases,
@@ -246,6 +331,10 @@ final class ContextLifecycleBenchmarkOutput {
 
     private Object nullable(Object value) {
         return value == null ? "unavailable" : value;
+    }
+
+    private Object nullableMetric(Integer value) {
+        return value == null ? "" : value;
     }
 
     private String safe(String value) {

@@ -81,6 +81,8 @@ class ContextLifecycleBenchmarkTest {
         OffsetDateTime startedAt = OffsetDateTime.now();
         ContextLifecycleBenchmarkSuite suite = loadSuite();
         suite.validate();
+        ContextLifecycleBenchmarkResult.ExecutionArchitecture executionArchitecture =
+                ContextLifecycleBenchmarkResult.ExecutionArchitecture.configured();
         List<ContextLifecycleBenchmarkCase> cases = selectedCases(suite.cases);
         assertFalse(cases.isEmpty(), "No active context lifecycle benchmark cases selected");
         int repeats = positiveProperty("context.benchmark.repeats", 1);
@@ -95,7 +97,8 @@ class ContextLifecycleBenchmarkTest {
         ContextLifecycleBenchmarkPreflight.Snapshot snapshot = preflight(suite, repository, model);
         String runId = "context-lifecycle-" + startedAt.toString().replace(':', '-')
                 + "-" + UUID.randomUUID().toString().substring(0, 8);
-        printPreflight(runId, suite, cases, repeats, repository, model, agentConfig, snapshot);
+        printPreflight(runId, suite, executionArchitecture, cases, repeats,
+                repository, model, agentConfig, snapshot);
 
         List<ContextLifecycleCaseExecution> executions = new ArrayList<>();
         Map<String, String> groupedSessions = new HashMap<>();
@@ -114,11 +117,11 @@ class ContextLifecycleBenchmarkTest {
                 runId, executions.size(), modelCalls,
                 executions.stream().filter(value -> value.executionFailure() != null).count());
         ContextLifecycleResultAssembler assembler = new ContextLifecycleResultAssembler(
-                compressionProperties.getCharsPerToken(), finalSynthesisProperties);
+                compressionProperties.getCharsPerToken(), finalSynthesisProperties, executionArchitecture);
         List<ContextLifecycleBenchmarkResult.CaseResult> caseResults = executions.stream()
                 .map(assembler::assemble).toList();
         ContextLifecycleBenchmarkResult result = new ContextLifecycleBenchmarkResult(
-                metadata(runId, suite, repository, model, agentConfig, snapshot,
+                metadata(runId, suite, executionArchitecture, repository, model, agentConfig, snapshot,
                         startedAt, OffsetDateTime.now(), repeats), caseResults);
         Path outputDirectory = Path.of("target", "benchmark", "context-lifecycle", runId);
         ContextLifecycleBenchmarkOutput.Artifacts artifacts =
@@ -132,6 +135,7 @@ class ContextLifecycleBenchmarkTest {
     private ContextLifecycleBenchmarkResult.RunMetadata metadata(
             String runId,
             ContextLifecycleBenchmarkSuite suite,
+            ContextLifecycleBenchmarkResult.ExecutionArchitecture executionArchitecture,
             CodeRepository repository,
             String model,
             AgentDTO agent,
@@ -163,7 +167,8 @@ class ContextLifecycleBenchmarkTest {
         compression.put("charsPerToken", compressionProperties.getCharsPerToken());
         compression.put("model", "same registered model client; dedicated compression model field unavailable");
         return new ContextLifecycleBenchmarkResult.RunMetadata(
-                runId, suite.benchmarkSuiteVersion, suite.architectureLabel, snapshot.mainGit().commit(),
+                runId, suite.benchmarkSuiteVersion, suite.architectureLabel, executionArchitecture,
+                snapshot.mainGit().commit(),
                 snapshot.mainGit().status(), model,
                 options == null ? null : options.getTemperature(), null, modelParameters,
                 repository.getId(), repository.getName(), snapshot.repositoryGit().commit(),
@@ -328,6 +333,7 @@ class ContextLifecycleBenchmarkTest {
 
     private void printPreflight(String runId,
                                 ContextLifecycleBenchmarkSuite suite,
+                                ContextLifecycleBenchmarkResult.ExecutionArchitecture executionArchitecture,
                                 List<ContextLifecycleBenchmarkCase> cases,
                                 int repeats,
                                 CodeRepository repository,
@@ -339,7 +345,8 @@ class ContextLifecycleBenchmarkTest {
         System.out.println("benchmark run id: " + runId);
         System.out.println("git commit: " + snapshot.mainGit().commit());
         System.out.println("working tree: " + snapshot.mainGit().status().replace('\n', ' '));
-        System.out.println("architecture: " + suite.architectureLabel);
+        System.out.println("suite architecture provenance: " + suite.architectureLabel);
+        System.out.println("execution architecture: " + executionArchitecture);
         System.out.println("model: " + model);
         System.out.println("temperature: " + (agent.getChatOptions() == null
                 ? "unavailable" : agent.getChatOptions().getTemperature()));

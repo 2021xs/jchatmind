@@ -2,6 +2,7 @@ package com.kama.jchatmind.benchmark.context;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -21,6 +22,7 @@ record ContextLifecycleBenchmarkResult(
             String benchmarkRunId,
             String benchmarkSuiteVersion,
             String architectureLabel,
+            ExecutionArchitecture executionArchitecture,
             String gitCommit,
             String workingTreeStatus,
             String model,
@@ -48,6 +50,9 @@ record ContextLifecycleBenchmarkResult(
             String correctnessScoring) {
 
         RunMetadata {
+            if (executionArchitecture == null) {
+                throw new IllegalArgumentException("executionArchitecture is required");
+            }
             modelParameters = immutable(modelParameters);
             selectorConfig = immutable(selectorConfig);
             contextCompressionConfig = immutable(contextCompressionConfig);
@@ -137,14 +142,49 @@ record ContextLifecycleBenchmarkResult(
             int sessionSummaryTokens,
             int unknownTokens,
             int taskToolTranscriptEntryCount,
-            int taskToolTranscriptEstimatedTokens,
+            Integer taskToolTranscriptEstimatedTokens,
+            TranscriptMetricStatus taskToolTranscriptStatus,
             Integer finalContextTokensBeforeTranscriptMerge,
             Integer finalContextTokensAfterTranscriptMerge,
-            int finalTranscriptContributionTokens) {
+            Integer finalTranscriptContributionTokens,
+            TranscriptMetricStatus finalTranscriptContributionStatus) {
 
         ContextMetrics {
             contextTokensBeforeEachThink = immutable(contextTokensBeforeEachThink);
+            validateTranscriptMetric(taskToolTranscriptEstimatedTokens, taskToolTranscriptStatus,
+                    "taskToolTranscriptEstimatedTokens");
+            validateTranscriptMetric(finalTranscriptContributionTokens, finalTranscriptContributionStatus,
+                    "finalTranscriptContributionTokens");
         }
+    }
+
+    enum ExecutionArchitecture {
+        LEGACY,
+        TASK_AWARE;
+
+        static final String PROPERTY = "context.benchmark.architecture";
+
+        static ExecutionArchitecture configured() {
+            return parse(System.getProperty(PROPERTY, LEGACY.name()));
+        }
+
+        static ExecutionArchitecture parse(String value) {
+            if (value == null || value.isBlank()) {
+                throw new IllegalArgumentException(PROPERTY + " must be LEGACY or TASK_AWARE");
+            }
+            try {
+                return valueOf(value.trim().toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException error) {
+                throw new IllegalArgumentException(
+                        "Unsupported " + PROPERTY + ": " + value + "; expected LEGACY or TASK_AWARE",
+                        error);
+            }
+        }
+    }
+
+    enum TranscriptMetricStatus {
+        PRESENT,
+        REMOVED_NOT_APPLICABLE
     }
 
     record ToolMetrics(
@@ -248,6 +288,19 @@ record ContextLifecycleBenchmarkResult(
 
     private static boolean blank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private static void validateTranscriptMetric(
+            Integer value, TranscriptMetricStatus status, String field) {
+        if (status == null) {
+            throw new IllegalArgumentException(field + " status is required");
+        }
+        if (status == TranscriptMetricStatus.PRESENT && value == null) {
+            throw new IllegalArgumentException(field + " value is required when status is PRESENT");
+        }
+        if (status == TranscriptMetricStatus.REMOVED_NOT_APPLICABLE && value != null) {
+            throw new IllegalArgumentException(field + " value must be null when component is removed");
+        }
     }
 
     private static <T> List<T> immutable(List<T> values) {
