@@ -31,7 +31,7 @@ class ToolSafetyPolicyTest {
     void registryShouldRejectUnknownDisabledAndUnauthorizedTools() {
         InMemoryToolRegistry registry = new InMemoryToolRegistry();
         registry.initialize(List.of(
-                new KnowledgeTools(mock(RagService.class), registry),
+                new KnowledgeTools(mock(RagService.class)),
                 new CodeSearchTools(mock(CodeRagAnswerEvidenceService.class)),
                 new CodeChunkTools(mock(CodeChunkMapper.class), mock(CodeRepositoryMapper.class)),
                 new DataBaseTools(mock(JdbcTemplate.class)),

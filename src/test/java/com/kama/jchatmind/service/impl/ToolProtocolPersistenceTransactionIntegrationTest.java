@@ -5,6 +5,7 @@ import com.kama.jchatmind.agent.AgentToolProtocolInspector;
 import com.kama.jchatmind.agent.tools.CodeChunkTools;
 import com.kama.jchatmind.agent.tools.CodeSearchTools;
 import com.kama.jchatmind.agent.tools.DataBaseTools;
+import com.kama.jchatmind.agent.tools.KnowledgeTools;
 import com.kama.jchatmind.agent.tools.SqlSafetyValidator;
 import com.kama.jchatmind.config.AgentObservabilityProperties;
 import com.kama.jchatmind.config.DatabaseToolProperties;
@@ -20,10 +21,12 @@ import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.dto.CodeAnswerEvidenceResult;
 import com.kama.jchatmind.model.dto.CodeChunkExactReadResult;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
+import com.kama.jchatmind.model.dto.RagSearchResult;
 import com.kama.jchatmind.model.entity.CodeRepository;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
+import com.kama.jchatmind.service.RagService;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -339,6 +342,56 @@ class ToolProtocolPersistenceTransactionIntegrationTest {
                 .orElseThrow();
         assertThat(databaseResponse.getContent()).isEqualTo(canonical).contains(tailMarker);
         assertThat(sha256(databaseResponse.getContent())).isEqualTo(expectedFingerprint);
+        AgentToolProtocolInspector.Inspection inspection = AgentToolProtocolInspector.inspect(
+                toProtocolMessages(persisted));
+        assertThat(inspection.valid()).isTrue();
+        assertThat(inspection.orphanToolProtocolCount()).isZero();
+        assertThat(inspection.protocolValidationFailureCount()).isZero();
+    }
+
+    @Test
+    void oversizedKnowledgeCanonicalResultRetainsTailAndFingerprintAfterReload() throws Exception {
+        String tailMarker = "_KNOWLEDGE_CANONICAL_TAIL";
+        RagService ragService = mock(RagService.class);
+        when(ragService.similaritySearchWithMetadata("kb-1", "large query"))
+                .thenReturn(List.of(RagSearchResult.builder()
+                        .chunkId("chunk-large")
+                        .title("Large Knowledge")
+                        .sourceType("document_chunk")
+                        .sourceId("document-1")
+                        .score(0.91)
+                        .metadata("{\"category\":\"large\"}")
+                        .content("x".repeat(7_000) + tailMarker)
+                        .build()));
+        String canonical = new KnowledgeTools(ragService).knowledgeQuery("kb-1", "large query");
+        String expectedFingerprint = sha256(canonical);
+        assertThat(canonical).hasSize(7_179);
+        assertThat(expectedFingerprint)
+                .isEqualTo("acf5ed3607e74cafe1eec39a6a09de9363626ab28a91ed406e99bef28ab38ae1");
+        assertThat(canonical)
+                .hasSizeGreaterThan(6_000)
+                .contains("chunkId: chunk-large")
+                .endsWith(tailMarker)
+                .doesNotContain("...[truncated]");
+
+        AssistantMessage assistant = AssistantMessage.builder().content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        "call-knowledge", "function", "knowledgeQuery",
+                        "{\"kbsId\":\"kb-1\",\"query\":\"large query\"}")))
+                .build();
+        ToolResponseMessage response = ToolResponseMessage.builder()
+                .responses(List.of(new ToolResponseMessage.ToolResponse(
+                        "call-knowledge", "knowledgeQuery", canonical)))
+                .build();
+        messageService.createToolProtocolBatch(sessionId, taskId, assistant, response);
+
+        List<ChatMessageDTO> persisted = messageService.getChatMessageDTOsBySessionId(sessionId);
+        ChatMessageDTO knowledgeResponse = persisted.stream()
+                .filter(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL)
+                .findFirst()
+                .orElseThrow();
+        assertThat(knowledgeResponse.getContent()).isEqualTo(canonical).endsWith(tailMarker);
+        assertThat(sha256(knowledgeResponse.getContent())).isEqualTo(expectedFingerprint);
         AgentToolProtocolInspector.Inspection inspection = AgentToolProtocolInspector.inspect(
                 toProtocolMessages(persisted));
         assertThat(inspection.valid()).isTrue();

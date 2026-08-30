@@ -2,18 +2,21 @@ package com.kama.jchatmind.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
+import com.kama.jchatmind.agent.tools.KnowledgeTools;
 import com.kama.jchatmind.config.ToolDuplicateDetectionProperties;
 import com.kama.jchatmind.config.ToolCorrectionProperties;
 import com.kama.jchatmind.config.ToolResultProperties;
 import com.kama.jchatmind.config.ToolTimeoutProperties;
 import com.kama.jchatmind.converter.ChatMessageConverter;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
+import com.kama.jchatmind.model.dto.RagSearchResult;
 import com.kama.jchatmind.model.entity.AgentStep;
 import com.kama.jchatmind.model.entity.AgentTask;
 import com.kama.jchatmind.model.response.CreateChatMessageResponse;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
 import com.kama.jchatmind.service.ConversationContextCompressor;
+import com.kama.jchatmind.service.RagService;
 import com.kama.jchatmind.service.SseService;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.tool.ToolExecutionRecord;
@@ -74,13 +77,52 @@ class JChatMindToolResultGuardTest {
                 """ + String.join("\n", IntStream.rangeClosed(1, 50)
                 .mapToObj(index -> "%d | %s".formatted(index, "x".repeat(100)))
                 .toList()) + "\nDB-CANONICAL-TAIL";
-        int maxResultChars = 100;
-        ToolCallback largeTool = callback("databaseQuery", rawResult);
+
+        assertToolResultLifecycle("databaseQuery", rawResult, "DB-CANONICAL-TAIL", 100, true);
+    }
+
+    @Test
+    void oversizedKnowledgeCanonicalResultIsPersistedBeforeBoundedModelViewIsBuilt() {
+        String tailMarker = "_KNOWLEDGE_CANONICAL_TAIL";
+        RagService ragService = mock(RagService.class);
+        when(ragService.similaritySearchWithMetadata("kb-1", "large query"))
+                .thenReturn(List.of(RagSearchResult.builder()
+                        .chunkId("chunk-large")
+                        .title("Large Knowledge")
+                        .sourceType("document_chunk")
+                        .sourceId("document-1")
+                        .score(0.91)
+                        .metadata("{\"category\":\"large\"}")
+                        .content("x".repeat(7_000) + tailMarker)
+                        .build()));
+        String canonical = new KnowledgeTools(ragService).knowledgeQuery("kb-1", "large query");
+
+        assertTrue(canonical.length() > 6_000);
+        assertToolResultLifecycle("knowledgeQuery", canonical, tailMarker, 100, true);
+    }
+
+    @Test
+    void normalKnowledgeCanonicalResultRemainsExactInPersistentAndModelViews() {
+        RagService ragService = mock(RagService.class);
+        when(ragService.similaritySearchWithMetadata("kb-1", "small query"))
+                .thenReturn(List.of(RagSearchResult.builder()
+                        .chunkId("chunk-small")
+                        .content("KNOWLEDGE-SMALL-TAIL")
+                        .build()));
+        String canonical = new KnowledgeTools(ragService).knowledgeQuery("kb-1", "small query");
+
+        assertToolResultLifecycle(
+                "knowledgeQuery", canonical, "KNOWLEDGE-SMALL-TAIL", 8_000, false);
+    }
+
+    private void assertToolResultLifecycle(String toolName, String rawResult, String tailMarker,
+                                           int maxResultChars, boolean expectBoundedView) {
+        ToolCallback largeTool = callback(toolName, rawResult);
 
         ChatResponse toolCallResponse = response(AssistantMessage.builder()
                 .content("")
                 .toolCalls(List.of(new AssistantMessage.ToolCall(
-                        "call-1", "function", "databaseQuery", "{}")))
+                        "call-1", "function", toolName, "{}")))
                 .build());
         ChatResponse finalResponse = response(AssistantMessage.builder()
                 .content("done")
@@ -113,13 +155,13 @@ class JChatMindToolResultGuardTest {
         when(toolExecutionService.beforeToolCall(any(), any()))
                 .thenReturn(ToolExecutionRecord.builder()
                         .toolCallId("call-1")
-                        .actualToolName("databaseQuery")
-                        .canonicalToolName("databaseQuery")
+                        .actualToolName(toolName)
+                        .canonicalToolName(toolName)
                         .toolCallLogId("tool-log-1")
                         .startedAtMillis(System.currentTimeMillis())
                         .build());
         ToolRegistry toolRegistry = mock(ToolRegistry.class);
-        when(toolRegistry.canonicalName("databaseQuery")).thenReturn("databaseQuery");
+        when(toolRegistry.canonicalName(toolName)).thenReturn(toolName);
 
         ToolResultProperties resultProperties = new ToolResultProperties();
         resultProperties.setDefaultMaxResultChars(maxResultChars);
@@ -155,7 +197,7 @@ class JChatMindToolResultGuardTest {
                     List.of(new UserMessage("find evidence")), List.of(largeTool), List.of(), "session-1",
                     mock(SseService.class), toolExecutionService, messageService,
                     mock(ChatMessageConverter.class), logService, compressor, "user-message-1",
-                    List.of("databaseQuery"), new ToolCorrectionProperties(), new ToolFailureClassifier(), batchExecutor);
+                    List.of(toolName), new ToolCorrectionProperties(), new ToolFailureClassifier(), batchExecutor);
             JChatMindSafeFinalTestSupport.configure(agent, requestSpec, "validated final answer");
 
             agent.run();
@@ -179,10 +221,16 @@ class JChatMindToolResultGuardTest {
                 eq("session-1"), eq("task-1"), persistedAssistant.capture(), persistedResponse.capture());
         String storedToolResult = persistedResponse.getValue().getResponses().get(0).responseData();
 
-        assertEquals(maxResultChars, promptResult.codePointCount(0, promptResult.length()));
-        assertTrue(promptResult.contains("[TRUNCATED: originalChars="));
-        assertFalse(promptResult.contains("DB-CANONICAL-TAIL"));
-        assertNotEquals(rawResult, promptResult);
+        if (expectBoundedView) {
+            assertEquals(maxResultChars, promptResult.codePointCount(0, promptResult.length()));
+            assertTrue(promptResult.contains("[TRUNCATED: originalChars="));
+            assertFalse(promptResult.contains(tailMarker));
+            assertNotEquals(rawResult, promptResult);
+        } else {
+            assertEquals(rawResult, promptResult);
+            assertTrue(promptResult.contains(tailMarker));
+            assertFalse(promptResult.contains("[TRUNCATED: originalChars="));
+        }
         assertEquals(rawResult, storedToolResult);
         assertEquals(promptResult, finalProjection.get().executionTranscript().stream()
                 .filter(ToolResponseMessage.class::isInstance)
@@ -204,7 +252,7 @@ class JChatMindToolResultGuardTest {
                 messageService, resultGuard, toolExecutionService);
         persistenceBeforeProjection.verify(messageService).createToolProtocolBatch(
                 eq("session-1"), eq("task-1"), any(AssistantMessage.class), any(ToolResponseMessage.class));
-        persistenceBeforeProjection.verify(resultGuard).guard("databaseQuery", "databaseQuery", rawResult);
+        persistenceBeforeProjection.verify(resultGuard).guard(toolName, toolName, rawResult);
         persistenceBeforeProjection.verify(toolExecutionService)
                 .afterToolSuccess(any(), any(ToolExecutionRecord.class), eq(promptResult));
     }

@@ -202,6 +202,35 @@ class ToolExecutionServiceImplTest {
     }
 
     @Test
+    void knowledgeAuditSummaryRemainsBoundedWithoutChangingAgentResultBody() {
+        ToolExecutionServiceImpl service = new ToolExecutionServiceImpl(
+                toolRegistry,
+                agentTaskLogService,
+                agentEventPublisher,
+                new ToolFailureClassifier(),
+                emptyProvider(),
+                emptyProvider()
+        );
+        ToolExecutionRecord record = ToolExecutionRecord.builder()
+                .toolCallId("call-knowledge")
+                .toolCallLogId("log-knowledge")
+                .canonicalToolName("knowledgeQuery")
+                .actualToolName("knowledgeQuery")
+                .startedAtMillis(System.currentTimeMillis())
+                .build();
+        String agentResultBody = "x".repeat(7_000) + "_KNOWLEDGE_CANONICAL_TAIL";
+        String auditSummary = "x".repeat(5_980) + "\n...[truncated]";
+        when(toolRegistry.truncateResult("knowledgeQuery", agentResultBody)).thenReturn(auditSummary);
+
+        service.afterToolSuccess(context(List.of("knowledgeQuery")), record, agentResultBody);
+
+        verify(agentTaskLogService).finishToolCall(
+                eq("log-knowledge"), eq(auditSummary), anyLong(), eq(true));
+        assertTrue(auditSummary.length() < agentResultBody.length());
+        assertTrue(agentResultBody.endsWith("_KNOWLEDGE_CANONICAL_TAIL"));
+    }
+
+    @Test
     void fakeMcpPrefixedToolWithoutRegistryRegistrationIsRejectedAsUnknownTool() {
         ToolExecutionServiceImpl service = new ToolExecutionServiceImpl(
                 toolRegistry,
