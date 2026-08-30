@@ -36,7 +36,10 @@ public class FinalCompletionServiceImpl implements FinalCompletionService {
                 .role(ChatMessageDTO.RoleType.ASSISTANT)
                 .content(command.finalAnswer())
                 .sessionId(command.sessionId())
-                .metadata(ChatMessageDTO.MetaData.builder().toolCalls(List.of()).build())
+                .metadata(ChatMessageDTO.MetaData.builder()
+                        .taskId(command.taskId())
+                        .toolCalls(List.of())
+                        .build())
                 .build();
         CreateChatMessageResponse created = chatMessageFacadeService.createChatMessage(finalMessage);
         Assert.notNull(created, "Final AssistantMessage persistence result cannot be null");

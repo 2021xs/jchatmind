@@ -2,6 +2,7 @@ package com.kama.jchatmind.service.impl;
 
 import com.kama.jchatmind.agent.AgentTaskControl;
 import com.kama.jchatmind.agent.AgentTaskRuntimeRegistry;
+import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.entity.AgentTask;
 import com.kama.jchatmind.model.request.CreateChatMessageRequest;
 import com.kama.jchatmind.model.response.CreateChatMessageResponse;
@@ -9,8 +10,10 @@ import com.kama.jchatmind.service.AgentTaskLifecycleService;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -30,13 +33,23 @@ class AgentTaskLifecycleServiceImplTest {
 
         AgentTaskLifecycleService service = new AgentTaskLifecycleServiceImpl(
                 logService, messageService, new AgentTaskRuntimeRegistry());
+        CreateChatMessageRequest userMessageRequest = CreateChatMessageRequest.builder()
+                .sessionId("session-1")
+                .role(ChatMessageDTO.RoleType.USER)
+                .metadata(ChatMessageDTO.MetaData.builder().model("model").build())
+                .build();
         AgentTaskLifecycleService.ReservedTask reserved = service.reserve(
                 "session-1", "agent-1", "model", 12, "trace-1",
-                CreateChatMessageRequest.builder().sessionId("session-1").build());
+                userMessageRequest);
 
         assertEquals("task-1", reserved.task().getId());
         assertEquals("message-1", reserved.userMessageId());
+        assertEquals("message-1", reserved.task().getUserMessageId());
         verify(logService).bindUserMessage("task-1", "message-1");
+        ArgumentCaptor<CreateChatMessageRequest> persistedUser =
+                ArgumentCaptor.forClass(CreateChatMessageRequest.class);
+        verify(messageService).agentCreateChatMessage(persistedUser.capture());
+        assertNull(persistedUser.getValue().getMetadata().getTaskId());
     }
 
     @Test
