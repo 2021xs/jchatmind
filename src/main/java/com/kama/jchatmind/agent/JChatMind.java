@@ -88,6 +88,8 @@ public class JChatMind {
     private String userMessageId;
     private String originalUserQuestion;
     private String currentTaskId;
+    private ConversationContextCompressor.CurrentTaskWorkingState currentTaskWorkingState =
+            ConversationContextCompressor.CurrentTaskWorkingState.empty();
     private AgentStep currentStep;
     private AgentExecutionContext agentExecutionContext;
     private List<String> runtimeToolNames;
@@ -281,16 +283,9 @@ public class JChatMind {
         return step;
     }
 
-    private List<Message> toMemoryMessages(ConversationContextCompressor.CompressedContext compressedContext) {
+    private List<Message> toMemoryMessages(List<ChatMessageDTO> messages) {
         List<Message> memory = new ArrayList<>();
-        if (StringUtils.hasLength(systemPrompt)) {
-            memory.add(new SystemMessage(systemPrompt));
-        }
-        if (StringUtils.hasLength(compressedContext.summary())) {
-            memory.add(new SystemMessage(ConversationContextCompressor.summaryMessageContent(
-                    compressedContext.summary())));
-        }
-        for (ChatMessageDTO chatMessageDTO : compressedContext.recentMessages()) {
+        for (ChatMessageDTO chatMessageDTO : messages) {
             switch (chatMessageDTO.getRole()) {
                 case SYSTEM:
                     if (StringUtils.hasLength(chatMessageDTO.getContent())) {
@@ -326,13 +321,91 @@ public class JChatMind {
         return memory;
     }
 
+    private List<ChatMessageDTO> currentTaskProtocolMessages(List<ChatMessageDTO> allMessages) {
+        return allMessages.stream()
+                .filter(message -> message != null && message.getMetadata() != null)
+                .filter(message -> currentTaskId.equals(message.getMetadata().getTaskId()))
+                .filter(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL
+                        || message.getRole() == ChatMessageDTO.RoleType.ASSISTANT
+                        && message.getMetadata().getToolCalls() != null
+                        && !message.getMetadata().getToolCalls().isEmpty())
+                .toList();
+    }
+
+    private List<ChatMessageDTO> projectPersistentToolResponses(List<ChatMessageDTO> protocolMessages) {
+        return protocolMessages.stream().map(message -> {
+            if (message.getRole() != ChatMessageDTO.RoleType.TOOL) {
+                return message;
+            }
+            if (message.getMetadata() == null || message.getMetadata().getToolResponse() == null) {
+                throw new IllegalStateException("Persistent current-task ToolResponse is missing metadata: messageId="
+                        + message.getId());
+            }
+            ToolResponseMessage.ToolResponse projected =
+                    toolCallBatchExecutor.projectPersistedResponseForContext(
+                            message.getMetadata().getToolResponse());
+            return ChatMessageDTO.builder()
+                    .id(message.getId())
+                    .sessionId(message.getSessionId())
+                    .role(message.getRole())
+                    .content(projected.responseData())
+                    .metadata(ChatMessageDTO.MetaData.builder()
+                            .model(message.getMetadata().getModel())
+                            .taskId(message.getMetadata().getTaskId())
+                            .toolResponse(projected)
+                            .toolCalls(message.getMetadata().getToolCalls())
+                            .build())
+                    .createdAt(message.getCreatedAt())
+                    .updatedAt(message.getUpdatedAt())
+                    .build();
+        }).toList();
+    }
+
+    private ChatMessageDTO currentUserMessage(List<ChatMessageDTO> allMessages) {
+        return allMessages.stream()
+                .filter(message -> userMessageId != null && userMessageId.equals(message.getId()))
+                .filter(message -> message.getRole() == ChatMessageDTO.RoleType.USER)
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                        "Current task original User message is not available: messageId=" + userMessageId));
+    }
+
+    private List<Message> taskAwareMemory(
+            ConversationContextCompressor.CompletedConversationProjection conversation,
+            ConversationContextCompressor.CurrentTaskCompression currentTask) {
+        List<Message> memory = new ArrayList<>();
+        if (StringUtils.hasLength(systemPrompt)) {
+            memory.add(new SystemMessage(systemPrompt));
+        }
+        memory.addAll(AgentMemoryHistorySanitizer.toSafeReplayMessages(
+                conversation.summary(), conversation.messages()));
+        if (StringUtils.hasText(currentTask.state().summary())) {
+            memory.add(new SystemMessage(ConversationContextCompressor.currentTaskSummaryMessageContent(
+                    currentTask.state().summary())));
+        }
+        memory.addAll(toMemoryMessages(currentTask.uncoveredProtocolMessages()));
+        return memory;
+    }
+
     private void compressContextBeforeThinkIfNeeded() {
         if (conversationContextCompressor == null || currentTaskId == null) {
             return;
         }
         List<ChatMessageDTO> allMessages = chatMessageFacadeService.getChatMessageDTOsBySessionId(chatSessionId);
+        List<ChatMessageDTO> persistentProtocol = currentTaskProtocolMessages(allMessages);
+        if (persistentProtocol.isEmpty()) {
+            return;
+        }
+        ConversationContextCompressor.CompletedConversationProjection conversation =
+                conversationContextCompressor.projectCompletedConversation(
+                        chatSessionId, model, userMessageId, allMessages);
+        ChatMessageDTO currentUser = currentUserMessage(allMessages);
+        List<ChatMessageDTO> projectedProtocol = projectPersistentToolResponses(
+                persistentProtocol);
         ConversationContextCompressor.CompressionCheck check =
-                conversationContextCompressor.check(chatSessionId, model, allMessages);
+                conversationContextCompressor.checkCurrentTask(
+                        model, currentUser, conversation.summary(), conversation.messages(),
+                        projectedProtocol, currentTaskWorkingState);
         if (!check.needed()) {
             return;
         }
@@ -345,16 +418,25 @@ public class JChatMind {
                         + ", maxToolResultTokens=" + check.maxSingleToolResultTokens()
                         + ", newCompressibleMessages=" + check.newCompressibleMessages());
         try {
-            ConversationContextCompressor.CompressedContext compressedContext =
-                    conversationContextCompressor.compressIfNeeded(chatSessionId, model, allMessages);
+            ConversationContextCompressor.CurrentTaskCompression compressedContext =
+                    conversationContextCompressor.compressCurrentTaskIfNeeded(
+                            chatSessionId, model, currentUser, conversation.summary(), conversation.messages(),
+                            projectedProtocol, currentTaskWorkingState);
+            currentTaskWorkingState = compressedContext.state();
             if (compressedContext.compressed()) {
                 this.chatMemory.clear(this.chatSessionId);
-                this.chatMemory.add(this.chatSessionId, toMemoryMessages(compressedContext));
+                this.chatMemory.add(this.chatSessionId, taskAwareMemory(conversation, compressedContext));
             }
             agentTaskLogService.finishStep(compressionStep.getId(),
                     "compressed=" + compressedContext.compressed()
-                            + ", summaryChars=" + (compressedContext.summary() == null ? 0 : compressedContext.summary().length())
-                            + ", recentMessages=" + compressedContext.recentMessages().size());
+                            + ", summaryChars=" + (compressedContext.state().summary() == null
+                            ? 0 : compressedContext.state().summary().length())
+                            + ", coveredThroughLogicalGroup="
+                            + compressedContext.state().coveredThroughLogicalGroup()
+                            + ", summaryDepth=" + compressedContext.state().summaryDepth()
+                            + ", compressionCount=" + compressedContext.state().compressionCount()
+                            + ", uncoveredProtocolMessages="
+                            + compressedContext.uncoveredProtocolMessages().size());
             sendAgentEvent(AgentSseEvent.Type.STEP_DONE, payload(
                     "stepId", compressionStep.getId(),
                     "stepNo", compressionStep.getStepNo(),
@@ -1114,6 +1196,7 @@ public class JChatMind {
         duplicateCallState.reset();
         taskEvidenceState.reset();
         taskToolTranscript.clear();
+        currentTaskWorkingState = ConversationContextCompressor.CurrentTaskWorkingState.empty();
         forceFinalAnswer = false;
         finalizationRequired = false;
         pendingFinalSynthesisStep = null;

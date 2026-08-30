@@ -19,8 +19,28 @@ public interface ConversationContextCompressor {
                                                                   String currentUserMessageId,
                                                                   List<ChatMessageDTO> allMessages);
 
+    CompressionCheck checkCurrentTask(String model,
+                                      ChatMessageDTO originalUser,
+                                      String conversationSummary,
+                                      List<ChatMessageDTO> completedConversationMessages,
+                                      List<ChatMessageDTO> currentTaskProtocolMessages,
+                                      CurrentTaskWorkingState state);
+
+    CurrentTaskCompression compressCurrentTaskIfNeeded(String sessionId,
+                                                        String model,
+                                                        ChatMessageDTO originalUser,
+                                                        String conversationSummary,
+                                                        List<ChatMessageDTO> completedConversationMessages,
+                                                        List<ChatMessageDTO> currentTaskProtocolMessages,
+                                                        CurrentTaskWorkingState state);
+
     static String summaryMessageContent(String summary) {
         return SUMMARY_PREFIX + summary + SUMMARY_SUFFIX;
+    }
+
+    static String currentTaskSummaryMessageContent(String summary) {
+        return "[Current task working summary]\n" + summary
+                + "\n\nNote: This is lossy runtime working state. Preserve the raw current user question as authoritative.";
     }
 
     record CompressionCheck(boolean needed,
@@ -61,5 +81,29 @@ public interface ConversationContextCompressor {
                                            String coverageBoundaryMessageId,
                                            boolean freshRebuild,
                                            int unlinkedLegacyFinalCount) {
+    }
+
+    record CurrentTaskWorkingState(String summary,
+                                   int coveredThroughLogicalGroup,
+                                   int summaryDepth,
+                                   int compressionCount,
+                                   boolean compressionSuppressed) {
+
+        public CurrentTaskWorkingState(String summary,
+                                       int coveredThroughLogicalGroup,
+                                       int summaryDepth,
+                                       int compressionCount) {
+            this(summary, coveredThroughLogicalGroup, summaryDepth, compressionCount, false);
+        }
+
+        public static CurrentTaskWorkingState empty() {
+            return new CurrentTaskWorkingState(null, 0, 0, 0, false);
+        }
+    }
+
+    record CurrentTaskCompression(CurrentTaskWorkingState state,
+                                  List<ChatMessageDTO> uncoveredProtocolMessages,
+                                  CompressionCheck check,
+                                  boolean compressed) {
     }
 }

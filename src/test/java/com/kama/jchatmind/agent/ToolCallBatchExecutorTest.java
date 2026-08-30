@@ -29,6 +29,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -297,7 +298,10 @@ class ToolCallBatchExecutorTest {
         assertTrue(result.succeeded());
         assertEquals(raw, result.getToolResponseMessage().getResponses().get(0).responseData());
         String guarded = lastContextView.toolResponseMessage().getResponses().get(0).responseData();
+        String reloaded = batchExecutor.projectPersistedResponseForContext(
+                result.getToolResponseMessage().getResponses().get(0)).responseData();
         assertEquals(100, guarded.codePointCount(0, guarded.length()));
+        assertEquals(guarded, reloaded);
         assertTrue(guarded.contains("[TRUNCATED: originalChars="));
         assertTrue(result.getRecords().get(0).isRuntimeResultTruncated());
         assertEquals(raw.length(), result.getRecords().get(0).getOriginalResultChars());
@@ -305,6 +309,53 @@ class ToolCallBatchExecutorTest {
         assertEquals(raw, observed.get().rawResult());
         assertEquals(guarded, observed.get().contextResult());
         verify(toolExecutionService).afterToolSuccess(eq(executionContext), any(), eq(guarded));
+    }
+
+    @Test
+    void smallPersistentReloadUsesExactSameContextProjectionPolicy() {
+        String canonical = "PARTIAL\nrowsReturned=50\nhasMore=true";
+        ToolCallBatchResult result = execute(
+                List.of(callback("fastTool", ignored -> canonical)), call("call-small", "fastTool"));
+
+        String live = lastContextView.toolResponseMessage().getResponses().get(0).responseData();
+        String reloaded = batchExecutor.projectPersistedResponseForContext(
+                result.getToolResponseMessage().getResponses().get(0)).responseData();
+
+        assertEquals(canonical, live);
+        assertEquals(canonical, reloaded);
+    }
+
+    @Test
+    void persistentReloadProjectionFailureKeepsTerminalResponseFailClosed() {
+        resultProperties.setDefaultMaxResultChars(10);
+        ToolResponseMessage.ToolResponse persistent =
+                new ToolResponseMessage.ToolResponse("call-failed-projection", "fastTool", "x".repeat(200));
+
+        ToolResponseMessage.ToolResponse projected =
+                batchExecutor.projectPersistedResponseForContext(persistent);
+
+        assertEquals(persistent.id(), projected.id());
+        assertEquals(persistent.name(), projected.name());
+        assertEquals("TOOL_RESULT_CONTEXT_UNAVAILABLE: persisted; unsafe to inject.", projected.responseData());
+    }
+
+    @Test
+    void persistentReloadProjectionIsToolAgnosticAndPreservesProtocolIdentity() {
+        List<String> toolNames = List.of(
+                "searchProjectCode", "getCodeChunk", "databaseQuery", "knowledgeQuery", "mcp.snapshot");
+        for (int index = 0; index < toolNames.size(); index++) {
+            String toolName = toolNames.get(index);
+            String body = index == 2 ? "PARTIAL\nrowsReturned=50\nhasMore=true" : "canonical-" + toolName;
+            ToolResponseMessage.ToolResponse persistent =
+                    new ToolResponseMessage.ToolResponse("call-" + index, toolName, body);
+
+            ToolResponseMessage.ToolResponse projected =
+                    batchExecutor.projectPersistedResponseForContext(persistent);
+
+            assertEquals(persistent.id(), projected.id());
+            assertEquals(persistent.name(), projected.name());
+            assertEquals(body, projected.responseData());
+        }
     }
 
     @Test

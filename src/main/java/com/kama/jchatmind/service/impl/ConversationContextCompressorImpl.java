@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -41,6 +42,17 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
             "- Important Constraints / Exact Values",
             "- Decisions / Preferences Relevant to Future Turns",
             "- Open Conversation-level Follow-ups");
+    private static final String CURRENT_TASK_SUMMARY_HEADER = "Current Task Working Summary";
+    private static final List<String> CURRENT_TASK_SUMMARY_SECTIONS = List.of(
+            "- Original Goal",
+            "- Confirmed Facts",
+            "- Exact Constraints / Values",
+            "- Important Relationships / Decisions",
+            "- Stable References",
+            "- Unresolved Questions",
+            "- Next Planning Needs");
+    private static final Pattern STABLE_REF_PATTERN = Pattern.compile(
+            "(?s).*repoId\\s*[:=]\\s*\\S+.*chunkId\\s*[:=]\\s*\\S+.*");
 
     private final ContextCompressionProperties properties;
     private final ConversationSummaryClient conversationSummaryClient;
@@ -125,6 +137,89 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         }
         return new CompletedConversationProjection(existingSummary, uncoveredMessages,
                 boundaryPair.finalMessage().getId(), false, unlinkedLegacyFinalCount);
+    }
+
+    @Override
+    public CompressionCheck checkCurrentTask(String model,
+                                             ChatMessageDTO originalUser,
+                                             String conversationSummary,
+                                             List<ChatMessageDTO> completedConversationMessages,
+                                             List<ChatMessageDTO> currentTaskProtocolMessages,
+                                             CurrentTaskWorkingState state) {
+        CurrentTaskWorkingState safeState = state == null ? CurrentTaskWorkingState.empty() : state;
+        CurrentTaskInputs inputs = currentTaskInputs(originalUser, conversationSummary,
+                completedConversationMessages, currentTaskProtocolMessages, safeState);
+        ContextCompressionProperties.TokenThreshold threshold = properties.thresholdFor(model);
+        TokenCount effective = totalContentTokens(model, inputs.effectiveMessages());
+        MaxToolResultTokenCount maxTool = maxSingleToolResultTokens(model, inputs.effectiveMessages());
+        boolean overContext = effective.tokens() >= threshold.getMaxContextTokens();
+        boolean overSingleResult = maxTool.tokens() >= threshold.getMaxSingleToolResultTokens();
+        boolean overMessages = inputs.effectiveMessages().size() > properties.getMaxHistoryMessages();
+        boolean needed = properties.isEnabled() && !inputs.uncoveredGroups().isEmpty()
+                && !safeState.compressionSuppressed()
+                && (overContext || overSingleResult || overMessages);
+        String reason = !properties.isEnabled() ? "disabled"
+                : inputs.uncoveredGroups().isEmpty() ? "no_new_messages"
+                : safeState.compressionSuppressed() ? "previous_failure"
+                : overSingleResult ? "single_tool_result_tokens"
+                : overContext ? "context_tokens"
+                : overMessages ? "history_messages"
+                : "not_needed";
+        return new CompressionCheck(needed, reason, inputs.effectiveMessages().size(),
+                effective.tokens(), effective.tokens(), maxTool.tokens(),
+                inputs.uncoveredProtocolMessages().size(),
+                combineSources(effective.source(), maxTool.source()),
+                threshold.getMaxContextTokens(), threshold.getMaxSingleToolResultTokens());
+    }
+
+    @Override
+    public CurrentTaskCompression compressCurrentTaskIfNeeded(String sessionId,
+                                                               String model,
+                                                               ChatMessageDTO originalUser,
+                                                               String conversationSummary,
+                                                               List<ChatMessageDTO> completedConversationMessages,
+                                                               List<ChatMessageDTO> currentTaskProtocolMessages,
+                                                               CurrentTaskWorkingState state) {
+        CurrentTaskWorkingState safeState = state == null ? CurrentTaskWorkingState.empty() : state;
+        CurrentTaskInputs inputs = currentTaskInputs(originalUser, conversationSummary,
+                completedConversationMessages, currentTaskProtocolMessages, safeState);
+        CompressionCheck check = checkCurrentTask(model, originalUser, conversationSummary,
+                completedConversationMessages, currentTaskProtocolMessages, safeState);
+        if (!check.needed()) {
+            return new CurrentTaskCompression(safeState, inputs.uncoveredProtocolMessages(), check, false);
+        }
+
+        String prompt = buildCurrentTaskSummaryPrompt(originalUser, safeState.summary(),
+                inputs.uncoveredProtocolMessages());
+        long start = System.currentTimeMillis();
+        try {
+            String generated = conversationSummaryClient.summarize(model, prompt);
+            String summary = generated == null ? null : generated.strip();
+            validateCurrentTaskSummary(model, summary, safeState.summary(),
+                    inputs.uncoveredProtocolMessages());
+            CurrentTaskWorkingState updated = new CurrentTaskWorkingState(
+                    summary,
+                    inputs.allGroups().size(),
+                    safeState.summaryDepth() + 1,
+                    safeState.compressionCount() + 1,
+                    false);
+            publishCurrentTaskCompression(sessionId, model, check, prompt, safeState.summary(), summary,
+                    System.currentTimeMillis() - start, true, null);
+            return new CurrentTaskCompression(updated, List.of(), check, true);
+        } catch (Exception error) {
+            publishCurrentTaskCompression(sessionId, model, check, prompt, safeState.summary(), null,
+                    System.currentTimeMillis() - start, false,
+                    error.getClass().getSimpleName() + ": " + error.getMessage());
+            log.warn("Current task working summary failed closed: sessionId={}, coveredGroups={}, error={}",
+                    sessionId, safeState.coveredThroughLogicalGroup(), error.getMessage(), error);
+            CurrentTaskWorkingState suppressed = new CurrentTaskWorkingState(
+                    safeState.summary(),
+                    safeState.coveredThroughLogicalGroup(),
+                    safeState.summaryDepth(),
+                    safeState.compressionCount(),
+                    true);
+            return new CurrentTaskCompression(suppressed, inputs.uncoveredProtocolMessages(), check, false);
+        }
     }
 
     @Override
@@ -365,6 +460,149 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
             messages.add(currentUser);
         }
         return List.copyOf(messages);
+    }
+
+    private CurrentTaskInputs currentTaskInputs(ChatMessageDTO originalUser,
+                                                String conversationSummary,
+                                                List<ChatMessageDTO> completedConversationMessages,
+                                                List<ChatMessageDTO> currentTaskProtocolMessages,
+                                                CurrentTaskWorkingState state) {
+        if (originalUser == null || originalUser.getRole() != ChatMessageDTO.RoleType.USER
+                || !StringUtils.hasText(originalUser.getContent())) {
+            throw new IllegalStateException("Current task requires its explicitly linked original User message");
+        }
+        CurrentTaskWorkingState safeState = state == null ? CurrentTaskWorkingState.empty() : state;
+        List<ChatMessageDTO> protocol = currentTaskProtocolMessages == null
+                ? List.of() : List.copyOf(currentTaskProtocolMessages);
+        List<LogicalMessageGroup> groups = logicalMessageGroups(protocol);
+        for (LogicalMessageGroup group : groups) {
+            if (!hasToolCalls(protocol.get(group.startInclusive()))) {
+                throw new IllegalStateException("Current task coverage can contain only complete tool protocol groups");
+            }
+        }
+        if (safeState.coveredThroughLogicalGroup() < 0
+                || safeState.coveredThroughLogicalGroup() > groups.size()) {
+            throw new IllegalStateException("Current task working summary coverage boundary is invalid");
+        }
+        int uncoveredStart = safeState.coveredThroughLogicalGroup() == groups.size()
+                ? protocol.size()
+                : groups.get(safeState.coveredThroughLogicalGroup()).startInclusive();
+        List<ChatMessageDTO> uncovered = List.copyOf(protocol.subList(uncoveredStart, protocol.size()));
+        List<LogicalMessageGroup> uncoveredGroups = groups.subList(
+                safeState.coveredThroughLogicalGroup(), groups.size());
+
+        List<ChatMessageDTO> effective = new ArrayList<>();
+        if (StringUtils.hasText(conversationSummary)) {
+            effective.add(summaryMessage(conversationSummary));
+        }
+        if (completedConversationMessages != null) {
+            effective.addAll(completedConversationMessages);
+        }
+        if (StringUtils.hasText(safeState.summary())) {
+            effective.add(currentTaskSummaryMessage(safeState.summary()));
+        }
+        effective.addAll(uncovered);
+        return new CurrentTaskInputs(List.copyOf(groups), List.copyOf(uncoveredGroups), uncovered,
+                List.copyOf(effective));
+    }
+
+    private String buildCurrentTaskSummaryPrompt(ChatMessageDTO originalUser,
+                                                 String existingSummary,
+                                                 List<ChatMessageDTO> uncoveredProtocolMessages) {
+        String previous = StringUtils.hasText(existingSummary) ? existingSummary : "none";
+        return "你是一个 Java Agent 当前任务Working Context摘要器。\n"
+                + "输入只包含原始用户问题、已有Current Task Working Summary以及当前任务未覆盖的完整Tool protocol groups。\n"
+                + "保留会影响后续Planning的成功事实、失败/拒绝/跳过状态、PARTIAL/hasMore语义、精确数值、顺序与因果。\n"
+                + "存在repoId/chunkId时以原格式保留稳定引用。不要复制完整Tool正文，不要添加未确认事实。\n"
+                + "必须严格使用以下结构并保留全部section标题：\n\n"
+                + CURRENT_TASK_SUMMARY_HEADER + "\n\n"
+                + String.join("\n", CURRENT_TASK_SUMMARY_SECTIONS) + "\n\n"
+                + "没有内容的section写none。控制在 " + properties.getMaxSummaryChars() + " 字符以内。\n\n"
+                + "Original User Question:\n" + originalUser.getContent() + "\n\n"
+                + "Existing Current Task Working Summary:\n" + previous + "\n\n"
+                + "Uncovered complete Tool protocol groups:\n"
+                + formatCurrentTaskProtocol(uncoveredProtocolMessages);
+    }
+
+    private String formatCurrentTaskProtocol(List<ChatMessageDTO> messages) {
+        return messages.stream().map(message -> {
+            if (hasToolCalls(message)) {
+                String calls = message.getMetadata().getToolCalls().stream()
+                        .map(call -> "id=" + call.id() + ", name=" + call.name()
+                                + ", arguments=" + nullToEmpty(call.arguments()))
+                        .collect(Collectors.joining("; "));
+                return "Assistant tool_calls: " + calls;
+            }
+            String responseId = toolResponseId(message);
+            String toolName = message.getMetadata() == null || message.getMetadata().getToolResponse() == null
+                    ? "unknown" : message.getMetadata().getToolResponse().name();
+            return "ToolResponse: id=" + responseId + ", name=" + toolName + "\n"
+                    + nullToEmpty(message.getContent());
+        }).collect(Collectors.joining("\n\n"));
+    }
+
+    private void validateCurrentTaskSummary(String model,
+                                            String summary,
+                                            String existingSummary,
+                                            List<ChatMessageDTO> uncoveredProtocolMessages) {
+        if (!StringUtils.hasText(summary) || !summary.startsWith(CURRENT_TASK_SUMMARY_HEADER)) {
+            throw new IllegalStateException("Current task summary has invalid structure");
+        }
+        int previousIndex = -1;
+        for (String section : CURRENT_TASK_SUMMARY_SECTIONS) {
+            int index = summary.indexOf(section);
+            if (index <= previousIndex) {
+                throw new IllegalStateException("Current task summary is missing ordered section: " + section);
+            }
+            previousIndex = index;
+        }
+        if (summary.length() > properties.getMaxSummaryChars()) {
+            throw new IllegalStateException("Current task summary exceeds maxSummaryChars");
+        }
+        boolean mentionsStableRef = summary.contains("repoId") || summary.contains("chunkId");
+        if (mentionsStableRef && !STABLE_REF_PATTERN.matcher(summary).matches()) {
+            throw new IllegalStateException("Current task summary contains malformed stable reference");
+        }
+        List<ChatMessageDTO> before = new ArrayList<>();
+        if (StringUtils.hasText(existingSummary)) {
+            before.add(currentTaskSummaryMessage(existingSummary));
+        }
+        before.addAll(uncoveredProtocolMessages);
+        int beforeTokens = totalContentTokens(model, before).tokens();
+        int afterTokens = tokenCounter.countText(model,
+                ConversationContextCompressor.currentTaskSummaryMessageContent(summary)).tokens();
+        if (afterTokens >= beforeTokens) {
+            throw new IllegalStateException("Current task summary did not reduce tokens");
+        }
+    }
+
+    private void publishCurrentTaskCompression(String sessionId,
+                                               String model,
+                                               CompressionCheck check,
+                                               String prompt,
+                                               String previousSummary,
+                                               String outputSummary,
+                                               long latencyMs,
+                                               boolean succeeded,
+                                               String failure) {
+        int afterTokens = succeeded
+                ? tokenCounter.countText(model,
+                ConversationContextCompressor.currentTaskSummaryMessageContent(outputSummary)).tokens()
+                : check.effectiveContextTokens();
+        AgentLifecycleObservationPublisher.publishCompression(
+                new AgentLifecycleObservationPublisher.CompressionObservation(
+                        sessionId, model, "current_task_" + check.reason(),
+                        check.effectiveContextTokens(), afterTokens, check.rawHistoryTokens(),
+                        check.tokenSource(), prompt, previousSummary, outputSummary,
+                        latencyMs, succeeded, failure));
+    }
+
+    private ChatMessageDTO currentTaskSummaryMessage(String summary) {
+        return ChatMessageDTO.builder()
+                .id("current-task-working-summary")
+                .role(ChatMessageDTO.RoleType.SYSTEM)
+                .content(ConversationContextCompressor.currentTaskSummaryMessageContent(summary))
+                .build();
     }
 
     private boolean completedProjectionNeedsRefresh(String model,
@@ -783,5 +1021,11 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                                              ChatMessageDTO userMessage,
                                              ChatMessageDTO finalMessage,
                                              int finalOrder) {
+    }
+
+    private record CurrentTaskInputs(List<LogicalMessageGroup> allGroups,
+                                     List<LogicalMessageGroup> uncoveredGroups,
+                                     List<ChatMessageDTO> uncoveredProtocolMessages,
+                                     List<ChatMessageDTO> effectiveMessages) {
     }
 }

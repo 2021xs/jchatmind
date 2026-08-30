@@ -151,6 +151,16 @@ public class ToolCallBatchExecutor {
                 replaceLastToolResponse(batchResult.getToolExecutionResult(), contextResponseMessage));
     }
 
+    ToolResponseMessage.ToolResponse projectPersistedResponseForContext(
+            ToolResponseMessage.ToolResponse persistentResponse) {
+        if (persistentResponse == null) {
+            throw new IllegalArgumentException("Persistent tool response is required");
+        }
+        ToolResultGuard.GuardedToolResult guarded = contextProjection(null, persistentResponse);
+        return new ToolResponseMessage.ToolResponse(
+                persistentResponse.id(), persistentResponse.name(), guarded.value());
+    }
+
     private ToolResultGuard.GuardedToolResult contextProjection(
             ToolExecutionRecord record,
             ToolResponseMessage.ToolResponse persistentResponse) {
