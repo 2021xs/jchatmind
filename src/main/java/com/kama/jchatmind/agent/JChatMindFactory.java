@@ -364,6 +364,13 @@ public class JChatMindFactory {
     public JChatMind create(String agentId, String chatSessionId, String userMessageId,
                            String runtimeSystemContext, String traceId, String runtimeModel,
                            List<String> runtimeAllowedToolNames) {
+        return create(agentId, chatSessionId, userMessageId, runtimeSystemContext, traceId,
+                runtimeModel, runtimeAllowedToolNames, null);
+    }
+
+    public JChatMind create(String agentId, String chatSessionId, String userMessageId,
+                           String runtimeSystemContext, String traceId, String runtimeModel,
+                           List<String> runtimeAllowedToolNames, String trustedRepoId) {
         Agent agent = loadAgent(agentId);
         agent = withRuntimeModel(agent, runtimeModel);
         AgentDTO agentConfig = withRuntimeAllowedTools(toAgentConfig(agent), runtimeAllowedToolNames);
@@ -391,6 +398,7 @@ public class JChatMindFactory {
         if (StringUtils.hasText(traceId)) {
             runtime.setTraceId(traceId);
         }
+        runtime.setTrustedRepoId(trustedRepoId);
         return runtime;
     }
 }

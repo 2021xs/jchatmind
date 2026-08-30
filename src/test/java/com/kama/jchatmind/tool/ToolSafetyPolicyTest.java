@@ -2,10 +2,13 @@ package com.kama.jchatmind.tool;
 
 import com.kama.jchatmind.agent.tools.DataBaseTools;
 import com.kama.jchatmind.agent.tools.CodeSearchTools;
+import com.kama.jchatmind.agent.tools.CodeChunkTools;
 import com.kama.jchatmind.agent.tools.KnowledgeTools;
 import com.kama.jchatmind.agent.tools.TerminateTool;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
 import com.kama.jchatmind.service.RagService;
+import com.kama.jchatmind.mapper.CodeChunkMapper;
+import com.kama.jchatmind.mapper.CodeRepositoryMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.ResultSetExtractor;
@@ -30,6 +33,7 @@ class ToolSafetyPolicyTest {
         registry.initialize(List.of(
                 new KnowledgeTools(mock(RagService.class), registry),
                 new CodeSearchTools(mock(CodeRagAnswerEvidenceService.class)),
+                new CodeChunkTools(mock(CodeChunkMapper.class), mock(CodeRepositoryMapper.class)),
                 new DataBaseTools(mock(JdbcTemplate.class)),
                 new TerminateTool()
         ));
@@ -38,6 +42,8 @@ class ToolSafetyPolicyTest {
         assertFalse(registry.isAllowedForRuntime("databaseQuery", List.of("searchProjectCode")));
 
         assertTrue(registry.canExposeToAgent("databaseQuery"));
+        assertTrue(registry.canExposeToAgent("getCodeChunk"));
+        assertFalse(registry.isAllowedForRuntime("getCodeChunk", List.of("searchProjectCode")));
         assertTrue(registry.isAllowedForRuntime("dataBaseTool", List.of("databaseQuery")));
         assertEquals("databaseQuery", registry.canonicalName("dataBaseTool"));
     }

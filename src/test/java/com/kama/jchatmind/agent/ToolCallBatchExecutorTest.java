@@ -2,13 +2,18 @@ package com.kama.jchatmind.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.agent.tools.CodeSearchTools;
+import com.kama.jchatmind.agent.tools.CodeChunkTools;
 import com.kama.jchatmind.config.ToolDuplicateDetectionProperties;
 import com.kama.jchatmind.config.ToolTimeoutProperties;
 import com.kama.jchatmind.config.ToolResultProperties;
 import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.mcp.McpToolCallException;
+import com.kama.jchatmind.mapper.CodeChunkMapper;
+import com.kama.jchatmind.mapper.CodeRepositoryMapper;
 import com.kama.jchatmind.model.dto.CodeAnswerEvidenceResult;
+import com.kama.jchatmind.model.dto.CodeChunkExactReadResult;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
+import com.kama.jchatmind.model.entity.CodeRepository;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.tool.ToolExecutionContext;
@@ -32,6 +37,7 @@ import org.springframework.ai.model.tool.DefaultToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
+import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.time.Duration;
@@ -68,7 +74,8 @@ class ToolCallBatchExecutorTest {
             .taskId("task-1")
             .stepId("step-1")
             .sessionId("session-1")
-            .runtimeToolNames(List.of("fastTool", "slowTool", "toolA", "toolB", "toolC", "searchProjectCode"))
+            .runtimeToolNames(List.of("fastTool", "slowTool", "toolA", "toolB", "toolC",
+                    "searchProjectCode", "getCodeChunk"))
             .duplicateCallState(new ToolDuplicateCallState())
             .build();
 
@@ -333,6 +340,45 @@ class ToolCallBatchExecutorTest {
         assertTrue(context.contains("chunkId: chunk-large"));
         assertTrue(context.contains("[TRUNCATED: originalChars="));
         assertFalse(context.contains(tailMarker));
+    }
+
+    @Test
+    void exactCodeRereadUsesNormalPersistentResultAndBoundedContextLifecycle() {
+        String repoId = "11111111-1111-1111-1111-111111111111";
+        String chunkId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        String tailMarker = "EXACT-CHUNK-TAIL";
+        CodeChunkMapper chunkMapper = mock(CodeChunkMapper.class);
+        CodeRepositoryMapper repositoryMapper = mock(CodeRepositoryMapper.class);
+        when(repositoryMapper.selectById(repoId)).thenReturn(
+                CodeRepository.builder().id(repoId).status("READY").build());
+        when(chunkMapper.selectByRepoIdAndChunkId(repoId, chunkId)).thenReturn(
+                CodeChunkExactReadResult.builder()
+                        .repoId(repoId).chunkId(chunkId).filePath("Exact.java")
+                        .symbolName("Exact#read").chunkType("METHOD")
+                        .startLine(1).endLine(300)
+                        .content("x".repeat(12_000) + tailMarker)
+                        .build());
+        ToolCallback exactRead = MethodToolCallbackProvider.builder()
+                .toolObjects(new CodeChunkTools(chunkMapper, repositoryMapper))
+                .build().getToolCallbacks()[0];
+
+        ToolCallBatchResult result = execute(executionContext, List.of(exactRead),
+                Map.of(CodeChunkTools.TRUSTED_REPO_ID_TOOL_CONTEXT_KEY, repoId),
+                call("call-exact", "getCodeChunk",
+                        "{\"repoId\":\"" + repoId + "\",\"chunkId\":\"" + chunkId + "\"}"));
+
+        String persistent = result.getToolResponseMessage().getResponses().get(0).responseData();
+        String context = lastContextView.toolResponseMessage().getResponses().get(0).responseData();
+        assertTrue(result.succeeded());
+        assertTrue(persistent.contains("repoId: " + repoId));
+        assertTrue(persistent.contains("chunkId: " + chunkId));
+        assertTrue(persistent.contains(tailMarker));
+        assertEquals(12_210, persistent.length());
+        assertEquals(8_000, context.length());
+        assertTrue(context.contains("[TRUNCATED: originalChars="));
+        assertFalse(context.contains(tailMarker));
+        verify(chunkMapper).selectByRepoIdAndChunkId(repoId, chunkId);
+        verify(toolExecutionService).afterToolSuccess(eq(executionContext), any(), eq(context));
     }
 
     @Test
@@ -655,11 +701,19 @@ class ToolCallBatchExecutorTest {
     private ToolCallBatchResult execute(ToolExecutionContext context,
                                         List<ToolCallback> callbacks,
                                         AssistantMessage.ToolCall... calls) {
+        return execute(context, callbacks, Map.of(), calls);
+    }
+
+    private ToolCallBatchResult execute(ToolExecutionContext context,
+                                        List<ToolCallback> callbacks,
+                                        Map<String, Object> toolContext,
+                                        AssistantMessage.ToolCall... calls) {
         Prompt prompt = Prompt.builder()
                 .messages(List.of(new UserMessage("test")))
                 .chatOptions(DefaultToolCallingChatOptions.builder()
                         .internalToolExecutionEnabled(false)
                         .toolCallbacks(callbacks)
+                        .toolContext(toolContext)
                         .build())
                 .build();
         ChatResponse response = new ChatResponse(List.of(new Generation(

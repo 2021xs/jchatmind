@@ -1,5 +1,6 @@
 package com.kama.jchatmind.mapper;
 
+import com.kama.jchatmind.model.dto.CodeChunkExactReadResult;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.model.entity.CodeChunk;
 import org.apache.ibatis.annotations.Mapper;
@@ -14,6 +15,11 @@ public interface CodeChunkMapper {
     int insertBatch(@Param("chunks") List<CodeChunk> chunks);
 
     int deleteByRepoId(String repoId);
+
+    CodeChunkExactReadResult selectByRepoIdAndChunkId(
+            @Param("repoId") String repoId,
+            @Param("chunkId") String chunkId
+    );
 
     List<CodeSearchResult> similaritySearch(
             @Param("repoId") String repoId,

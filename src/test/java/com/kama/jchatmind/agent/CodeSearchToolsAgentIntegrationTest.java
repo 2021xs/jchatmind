@@ -2,11 +2,16 @@ package com.kama.jchatmind.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.agent.tools.CodeSearchTools;
+import com.kama.jchatmind.agent.tools.CodeChunkTools;
 import com.kama.jchatmind.config.ToolCorrectionProperties;
 import com.kama.jchatmind.model.dto.CodeAnswerEvidenceResult;
+import com.kama.jchatmind.model.dto.CodeChunkExactReadResult;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.model.entity.AgentStep;
 import com.kama.jchatmind.model.entity.AgentTask;
+import com.kama.jchatmind.model.entity.CodeRepository;
+import com.kama.jchatmind.mapper.CodeChunkMapper;
+import com.kama.jchatmind.mapper.CodeRepositoryMapper;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
@@ -133,6 +138,82 @@ class CodeSearchToolsAgentIntegrationTest {
         assertEquals(nextThinkEvidence, stored.getValue().getResponses().get(0).responseData());
         verify(toolExecutionService).afterToolSuccess(any(), any(ToolExecutionRecord.class),
                 org.mockito.ArgumentMatchers.eq(nextThinkEvidence));
+    }
+
+    @Test
+    void exactChunkRereadReceivesTrustedRuntimeScopeAndUsesNormalAgentProtocol() {
+        String repoId = "11111111-1111-1111-1111-111111111111";
+        String chunkId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        CodeChunkMapper chunkMapper = mock(CodeChunkMapper.class);
+        CodeRepositoryMapper repositoryMapper = mock(CodeRepositoryMapper.class);
+        when(repositoryMapper.selectById(repoId)).thenReturn(
+                CodeRepository.builder().id(repoId).status("READY").build());
+        when(chunkMapper.selectByRepoIdAndChunkId(repoId, chunkId)).thenReturn(
+                CodeChunkExactReadResult.builder()
+                        .repoId(repoId).chunkId(chunkId).filePath("Exact.java")
+                        .symbolName("Exact#read").chunkType("METHOD")
+                        .startLine(1).endLine(10).content("MARKER_AGENT_EXACT")
+                        .build());
+        ToolCallback callback = MethodToolCallbackProvider.builder()
+                .toolObjects(new CodeChunkTools(chunkMapper, repositoryMapper))
+                .build().getToolCallbacks()[0];
+        ToolRegistry toolRegistry = mock(ToolRegistry.class);
+        when(toolRegistry.canonicalName("getCodeChunk")).thenReturn("getCodeChunk");
+        when(toolRegistry.truncateResult(anyString(), anyString()))
+                .thenAnswer(invocation -> invocation.getArgument(1));
+
+        ChatResponse toolCallResponse = response(AssistantMessage.builder().content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        "call-exact", "function", "getCodeChunk",
+                        "{\"repoId\":\"" + repoId + "\",\"chunkId\":\"" + chunkId + "\"}")))
+                .build());
+        ChatResponse finalResponse = response(AssistantMessage.builder()
+                .content("Exact source recovered.").toolCalls(List.of()).build());
+        ChatClient chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
+        when(chatClient.prompt(any(Prompt.class)).system(anyString())
+                .toolCallbacks(any(ToolCallback[].class)).call().chatClientResponse())
+                .thenReturn(new ChatClientResponse(toolCallResponse, Map.of()))
+                .thenReturn(new ChatClientResponse(finalResponse, Map.of()));
+        ChatClient.ChatClientRequestSpec requestSpec = chatClient.prompt(
+                Prompt.builder().messages(List.of(new UserMessage("fixture"))).build());
+        clearInvocations(chatClient, requestSpec);
+
+        ToolExecutionService toolExecutionService = mock(ToolExecutionService.class);
+        when(toolExecutionService.beforeToolCall(any(), any()))
+                .thenReturn(ToolExecutionRecord.builder()
+                        .toolCallId("call-exact").actualToolName("getCodeChunk")
+                        .canonicalToolName("getCodeChunk").toolCallLogId("tool-log-exact")
+                        .startedAtMillis(System.currentTimeMillis()).build());
+        ChatMessageFacadeService messageService = mock(ChatMessageFacadeService.class);
+        when(messageService.getChatMessageDTOsBySessionId(anyString())).thenReturn(List.of());
+        ConversationContextCompressor compressor = mock(ConversationContextCompressor.class);
+        when(compressor.check(anyString(), anyString(), any()))
+                .thenReturn(new ConversationContextCompressor.CompressionCheck(
+                        false, "not_needed", 0, 0, 0, 0, "TEST", 0, 0));
+
+        try (ToolCallBatchExecutorFixture fixture = new ToolCallBatchExecutorFixture(
+                toolExecutionService, toolRegistry)) {
+            JChatMind agent = new JChatMind(
+                    "agent-1", "test-model", "test-agent", "test", "system", chatClient, 20,
+                    List.of(new UserMessage("reread exact chunk")), List.of(callback), List.of(), "session-1",
+                    mock(SseService.class), toolExecutionService, messageService,
+                    mock(com.kama.jchatmind.converter.ChatMessageConverter.class), mockLogService(), compressor,
+                    "user-message-1", List.of("getCodeChunk"), new ToolCorrectionProperties(),
+                    new ToolFailureClassifier(), fixture.batchExecutor());
+            agent.setTrustedRepoId(repoId);
+            JChatMindSafeFinalTestSupport.configure(agent, requestSpec, "validated final answer");
+            agent.run();
+        }
+
+        ArgumentCaptor<ToolResponseMessage> stored = ArgumentCaptor.forClass(ToolResponseMessage.class);
+        verify(messageService).createToolProtocolBatch(
+                org.mockito.ArgumentMatchers.eq("session-1"),
+                org.mockito.ArgumentMatchers.eq("task-1"),
+                any(AssistantMessage.class), stored.capture());
+        String persistent = stored.getValue().getResponses().get(0).responseData();
+        assertTrue(persistent.contains("MARKER_AGENT_EXACT"));
+        assertTrue(persistent.contains("repoId: " + repoId));
+        verify(chunkMapper).selectByRepoIdAndChunkId(repoId, chunkId);
     }
 
     private AgentTaskLogService mockLogService() {

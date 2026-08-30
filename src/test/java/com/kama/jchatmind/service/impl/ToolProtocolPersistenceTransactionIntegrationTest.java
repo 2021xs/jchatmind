@@ -2,6 +2,7 @@ package com.kama.jchatmind.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.agent.AgentToolProtocolInspector;
+import com.kama.jchatmind.agent.tools.CodeChunkTools;
 import com.kama.jchatmind.agent.tools.CodeSearchTools;
 import com.kama.jchatmind.config.AgentObservabilityProperties;
 import com.kama.jchatmind.converter.ChatMessageConverter;
@@ -9,10 +10,14 @@ import com.kama.jchatmind.mapper.AgentStepMapper;
 import com.kama.jchatmind.mapper.AgentTaskMapper;
 import com.kama.jchatmind.mapper.ChatMessageMapper;
 import com.kama.jchatmind.mapper.ChatSessionMapper;
+import com.kama.jchatmind.mapper.CodeChunkMapper;
+import com.kama.jchatmind.mapper.CodeRepositoryMapper;
 import com.kama.jchatmind.mapper.ToolCallLogMapper;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.dto.CodeAnswerEvidenceResult;
+import com.kama.jchatmind.model.dto.CodeChunkExactReadResult;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
+import com.kama.jchatmind.model.entity.CodeRepository;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
@@ -25,6 +30,7 @@ import org.postgresql.ds.PGSimpleDataSource;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
@@ -48,6 +54,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -216,6 +223,56 @@ class ToolProtocolPersistenceTransactionIntegrationTest {
         assertThat(firstToolResponse.getContent()).isEqualTo(canonical);
         assertThat(firstToolResponse.getContent()).endsWith(tailMarker + "\n");
         assertThat(sha256(firstToolResponse.getContent())).isEqualTo(expectedFingerprint);
+        AgentToolProtocolInspector.Inspection inspection = AgentToolProtocolInspector.inspect(
+                toProtocolMessages(persisted));
+        assertThat(inspection.valid()).isTrue();
+        assertThat(inspection.orphanToolProtocolCount()).isZero();
+    }
+
+    @Test
+    void oversizedExactChunkRereadRetainsFullCanonicalBodyAndFingerprintAfterReload() throws Exception {
+        String repoId = "11111111-1111-1111-1111-111111111111";
+        String chunkId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        String tailMarker = "_EXACT_REREAD_PERSISTED_TAIL";
+        CodeChunkMapper chunkMapper = mock(CodeChunkMapper.class);
+        CodeRepositoryMapper repositoryMapper = mock(CodeRepositoryMapper.class);
+        when(repositoryMapper.selectById(repoId)).thenReturn(
+                CodeRepository.builder().id(repoId).status("READY").build());
+        when(chunkMapper.selectByRepoIdAndChunkId(repoId, chunkId)).thenReturn(
+                CodeChunkExactReadResult.builder()
+                        .repoId(repoId).chunkId(chunkId)
+                        .filePath("src/main/java/example/Exact.java")
+                        .symbolName("Exact#read").chunkType("SERVICE_METHOD")
+                        .startLine(10).endLine(400)
+                        .content("x".repeat(12_000) + tailMarker)
+                        .build());
+        String canonical = new CodeChunkTools(chunkMapper, repositoryMapper).getCodeChunk(
+                repoId, chunkId, new ToolContext(Map.of(
+                        CodeChunkTools.TRUSTED_REPO_ID_TOOL_CONTEXT_KEY, repoId)));
+        String expectedFingerprint = sha256(canonical);
+        assertThat(canonical).hasSize(12_241);
+        assertThat(expectedFingerprint)
+                .isEqualTo("5b27060f82c38d5704eb702603b34bd6e53743a99c04b9412defe0cf9ecba38a");
+
+        AssistantMessage assistant = AssistantMessage.builder().content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        "call-exact", "function", "getCodeChunk",
+                        "{\"repoId\":\"" + repoId + "\",\"chunkId\":\"" + chunkId + "\"}")))
+                .build();
+        ToolResponseMessage response = ToolResponseMessage.builder()
+                .responses(List.of(new ToolResponseMessage.ToolResponse(
+                        "call-exact", "getCodeChunk", canonical)))
+                .build();
+        messageService.createToolProtocolBatch(sessionId, taskId, assistant, response);
+
+        List<ChatMessageDTO> persisted = messageService.getChatMessageDTOsBySessionId(sessionId);
+        ChatMessageDTO exactResponse = persisted.stream()
+                .filter(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL)
+                .findFirst()
+                .orElseThrow();
+        assertThat(canonical).contains(tailMarker);
+        assertThat(exactResponse.getContent()).isEqualTo(canonical).contains(tailMarker);
+        assertThat(sha256(exactResponse.getContent())).isEqualTo(expectedFingerprint);
         AgentToolProtocolInspector.Inspection inspection = AgentToolProtocolInspector.inspect(
                 toProtocolMessages(persisted));
         assertThat(inspection.valid()).isTrue();

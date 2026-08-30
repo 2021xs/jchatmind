@@ -1,6 +1,7 @@
 package com.kama.jchatmind.tool;
 
 import com.kama.jchatmind.agent.tools.CodeSearchTools;
+import com.kama.jchatmind.agent.tools.CodeChunkTools;
 import com.kama.jchatmind.agent.tools.DataBaseTools;
 import com.kama.jchatmind.agent.tools.KnowledgeTools;
 import com.kama.jchatmind.agent.tools.TerminateTool;
@@ -190,6 +191,7 @@ public class InMemoryToolRegistry implements ToolRegistry {
         return List.of(
                 policy(KnowledgeTools.class, true, true, 6000, "KnowledgeTool"),
                 policy(CodeSearchTools.class, true, true, 7000),
+                policy(CodeChunkTools.class, true, true, 8000),
                 policy(DataBaseTools.class, true, true, 4000, "dataBaseTool"),
                 policy(TerminateTool.class, true, true, 1000)
         );

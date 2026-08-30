@@ -180,7 +180,8 @@ public class WebConsoleChatServiceImpl implements WebConsoleChatService {
         List<String> runtimeOptionalTools = runtimeOptionalToolNames(capabilities);
         try {
             taskExecutor.execute(() -> runAgent(effectiveAgentId, session.getId(), userMessageId,
-                    taskId, taskControl, runtimeContext, runId, effectiveModel, runtimeOptionalTools));
+                    taskId, taskControl, runtimeContext, sessionRepoId, runId, effectiveModel,
+                    runtimeOptionalTools));
         } catch (RuntimeException e) {
             taskControl.completeIfActive(() -> agentTaskLogService.failTask(taskId,
                     "Agent executor rejected task", 0, 0));
@@ -305,13 +306,13 @@ public class WebConsoleChatServiceImpl implements WebConsoleChatService {
 
     private void runAgent(String agentId, String sessionId, String userMessageId,
                           String taskId, AgentTaskControl taskControl,
-                          String runtimeContext, String runId, String model,
+                          String runtimeContext, String trustedRepoId, String runId, String model,
                           List<String> runtimeOptionalTools) {
         boolean runtimeStarted = false;
         try {
             taskControl.throwIfCancellationRequested();
             JChatMind agent = jChatMindFactory.create(agentId, sessionId, userMessageId,
-                    runtimeContext, runId, model, runtimeOptionalTools);
+                    runtimeContext, runId, model, runtimeOptionalTools, trustedRepoId);
             agent.setMaxLoopSteps(WEB_CONSOLE_MAX_AGENT_LOOP_STEPS);
             agent.setFinalStreamingEnabled(finalStreamingEnabled);
             taskControl.throwIfCancellationRequested();

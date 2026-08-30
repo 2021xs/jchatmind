@@ -1,10 +1,12 @@
 package com.kama.jchatmind.service.impl;
 
 import com.kama.jchatmind.agent.tools.CodeSearchTools;
+import com.kama.jchatmind.agent.tools.CodeChunkTools;
 import com.kama.jchatmind.agent.tools.DataBaseTools;
 import com.kama.jchatmind.agent.tools.KnowledgeTools;
 import com.kama.jchatmind.agent.tools.TerminateTool;
 import com.kama.jchatmind.mapper.CodeRepositoryMapper;
+import com.kama.jchatmind.mapper.CodeChunkMapper;
 import com.kama.jchatmind.mapper.KnowledgeBaseMapper;
 import com.kama.jchatmind.model.entity.CodeRepository;
 import com.kama.jchatmind.mcp.config.ExternalMcpServerType;
@@ -40,6 +42,7 @@ class WebConsoleCapabilityServiceImplTest {
         registry.initialize(List.of(
                 new KnowledgeTools(mock(RagService.class), registry),
                 new CodeSearchTools(mock(CodeRagAnswerEvidenceService.class)),
+                new CodeChunkTools(mock(CodeChunkMapper.class), mock(CodeRepositoryMapper.class)),
                 new DataBaseTools(mock(JdbcTemplate.class)),
                 new TerminateTool()
         ));
@@ -66,7 +69,8 @@ class WebConsoleCapabilityServiceImplTest {
         Map<String, WebConsoleCapabilityVO> byKey = response.getCapabilities().stream()
                 .collect(Collectors.toMap(WebConsoleCapabilityVO::getKey, Function.identity()));
         assertThat(byKey.get("code_search").isEnabled()).isTrue();
-        assertThat(byKey.get("code_search").getTools()).containsExactly("searchProjectCode");
+        assertThat(byKey.get("code_search").getTools())
+                .containsExactly("searchProjectCode", "getCodeChunk");
         assertThat(byKey.get("database_readonly").isEnabled()).isTrue();
         assertThat(byKey.get("database_readonly").getTools()).containsExactly("databaseQuery");
         assertThat(byKey.get("knowledge_rag").isEnabled()).isTrue();
@@ -92,6 +96,7 @@ class WebConsoleCapabilityServiceImplTest {
         registry.initialize(List.of(
                 new KnowledgeTools(mock(RagService.class), registry),
                 new CodeSearchTools(mock(CodeRagAnswerEvidenceService.class)),
+                new CodeChunkTools(mock(CodeChunkMapper.class), mock(CodeRepositoryMapper.class)),
                 new DataBaseTools(mock(JdbcTemplate.class)),
                 new TerminateTool()
         ));

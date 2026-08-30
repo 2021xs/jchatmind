@@ -127,10 +127,12 @@ class WebConsoleChatServiceImplTest {
         GetWebConsoleCapabilitiesResponse capabilities = capabilities("repo-1", "gpt-5.5");
         when(capabilityService.getCapabilities("repo-1", "gpt-5.5")).thenReturn(capabilities);
         when(capabilityService.runtimeCapabilityContext(capabilities)).thenReturn("capability context");
-        when(capabilityService.safeFullOptionalToolNames()).thenReturn(List.of("searchProjectCode", "databaseQuery"));
+        when(capabilityService.safeFullOptionalToolNames())
+                .thenReturn(List.of("searchProjectCode", "getCodeChunk", "databaseQuery"));
         when(jChatMindFactory.create(eq("agent-1"), eq("session-1"), eq("user-message-1"),
                 isA(String.class), isA(String.class), eq("gpt-5.5"),
-                eq(List.of("searchProjectCode", "databaseQuery")))).thenReturn(agent);
+                eq(List.of("searchProjectCode", "getCodeChunk", "databaseQuery")),
+                eq("repo-1"))).thenReturn(agent);
 
         WebConsoleChatServiceImpl service = new WebConsoleChatServiceImpl(
                 chatSessionMapper,
@@ -164,7 +166,8 @@ class WebConsoleChatServiceImplTest {
         ArgumentCaptor<String> traceIdCaptor = ArgumentCaptor.forClass(String.class);
         verify(jChatMindFactory).create(eq("agent-1"), eq("session-1"), eq("user-message-1"),
                 runtimeContextCaptor.capture(), traceIdCaptor.capture(), eq("gpt-5.5"),
-                eq(List.of("searchProjectCode", "databaseQuery")));
+                eq(List.of("searchProjectCode", "getCodeChunk", "databaseQuery")),
+                eq("repo-1"));
         org.assertj.core.api.Assertions.assertThat(runtimeContextCaptor.getValue())
                 .contains("channel: WEB_CONSOLE")
                 .contains("assistant: 代码助手")
@@ -207,14 +210,16 @@ class WebConsoleChatServiceImplTest {
         GetWebConsoleCapabilitiesResponse capabilities = capabilities("repo-1", "gpt-5.5");
         when(capabilityService.getCapabilities("repo-1", "gpt-5.5")).thenReturn(capabilities);
         when(capabilityService.runtimeCapabilityContext(capabilities)).thenReturn("capability context");
-        when(capabilityService.safeFullOptionalToolNames()).thenReturn(List.of("searchProjectCode", "databaseQuery"));
+        when(capabilityService.safeFullOptionalToolNames())
+                .thenReturn(List.of("searchProjectCode", "getCodeChunk", "databaseQuery"));
         when(lifecycleService.reserve(eq("session-stream"), eq("agent-1"), eq("gpt-5.5"),
                 eq(12), anyString(), isA(CreateChatMessageRequest.class)))
                 .thenReturn(new AgentTaskLifecycleService.ReservedTask(
                         AgentTask.builder().id("task-stream").sessionId("session-stream").build(),
                         "user-message-stream"));
         when(factory.create(eq("agent-1"), eq("session-stream"), eq("user-message-stream"),
-                anyString(), anyString(), eq("gpt-5.5"), isA(List.class))).thenReturn(agent);
+                anyString(), anyString(), eq("gpt-5.5"), isA(List.class), eq("repo-1")))
+                .thenReturn(agent);
 
         WebConsoleChatServiceImpl service = new WebConsoleChatServiceImpl(
                 chatSessionMapper, codeRepositoryMapper, lifecycleService, logService, runtimeRegistry,
@@ -261,10 +266,12 @@ class WebConsoleChatServiceImplTest {
         GetWebConsoleCapabilitiesResponse capabilities = capabilities("repo-1", "deepseek-chat");
         when(capabilityService.getCapabilities("repo-1", "deepseek-chat")).thenReturn(capabilities);
         when(capabilityService.runtimeCapabilityContext(capabilities)).thenReturn("capability context");
-        when(capabilityService.safeFullOptionalToolNames()).thenReturn(List.of("searchProjectCode", "databaseQuery"));
+        when(capabilityService.safeFullOptionalToolNames())
+                .thenReturn(List.of("searchProjectCode", "getCodeChunk", "databaseQuery"));
         when(jChatMindFactory.create(eq("agent-1"), eq("session-cn"), eq("user-message-cn"),
                 isA(String.class), isA(String.class), eq("deepseek-chat"),
-                eq(List.of("searchProjectCode", "databaseQuery")))).thenReturn(agent);
+                eq(List.of("searchProjectCode", "getCodeChunk", "databaseQuery")),
+                eq("repo-1"))).thenReturn(agent);
 
         WebConsoleChatServiceImpl service = new WebConsoleChatServiceImpl(
                 chatSessionMapper,
@@ -323,13 +330,15 @@ class WebConsoleChatServiceImplTest {
         when(capabilityService.runtimeCapabilityContext(capabilities)).thenReturn("capability context");
         when(capabilityService.safeFullOptionalToolNames()).thenReturn(List.of(
                 "searchProjectCode",
+                "getCodeChunk",
                 "databaseQuery",
                 "mcp_context7_resolve_library_id",
                 "mcp_github_mcp_server_search_code",
                 "mcp_playwright_browser_navigate"
         ));
         when(jChatMindFactory.create(eq("agent-1"), eq("session-mcp"), eq("user-message-mcp"),
-                isA(String.class), isA(String.class), eq("gpt-5.5"), isA(List.class))).thenReturn(agent);
+                isA(String.class), isA(String.class), eq("gpt-5.5"), isA(List.class), eq("repo-1")))
+                .thenReturn(agent);
 
         WebConsoleChatServiceImpl service = new WebConsoleChatServiceImpl(
                 chatSessionMapper,
@@ -353,9 +362,11 @@ class WebConsoleChatServiceImplTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<String>> runtimeToolsCaptor = ArgumentCaptor.forClass(List.class);
         verify(jChatMindFactory).create(eq("agent-1"), eq("session-mcp"), eq("user-message-mcp"),
-                isA(String.class), isA(String.class), eq("gpt-5.5"), runtimeToolsCaptor.capture());
+                isA(String.class), isA(String.class), eq("gpt-5.5"), runtimeToolsCaptor.capture(),
+                eq("repo-1"));
         org.assertj.core.api.Assertions.assertThat(runtimeToolsCaptor.getValue()).containsExactly(
                 "searchProjectCode",
+                "getCodeChunk",
                 "databaseQuery",
                 "mcp_context7_resolve_library_id",
                 "mcp_github_mcp_server_search_code",
@@ -373,7 +384,7 @@ class WebConsoleChatServiceImplTest {
                                 .key("code_search")
                                 .label("代码检索")
                                 .enabled(true)
-                                .tools(List.of("searchProjectCode"))
+                                .tools(List.of("searchProjectCode", "getCodeChunk"))
                                 .build(),
                         WebConsoleCapabilityVO.builder()
                                 .key("database_readonly")
@@ -396,7 +407,7 @@ class WebConsoleChatServiceImplTest {
                         WebConsoleCapabilityVO.builder()
                                 .key("code_search")
                                 .enabled(true)
-                                .tools(List.of("searchProjectCode"))
+                                .tools(List.of("searchProjectCode", "getCodeChunk"))
                                 .build(),
                         WebConsoleCapabilityVO.builder()
                                 .key("database_readonly")

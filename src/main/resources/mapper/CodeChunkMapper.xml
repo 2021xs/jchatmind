@@ -46,6 +46,22 @@
         DELETE FROM code_chunk WHERE repo_id = CAST(#{repoId} AS uuid)
     </delete>
 
+    <select id="selectByRepoIdAndChunkId"
+            resultType="com.kama.jchatmind.model.dto.CodeChunkExactReadResult">
+        SELECT cc.repo_id AS "repoId",
+               cc.id AS "chunkId",
+               cf.file_path AS "filePath",
+               cc.symbol_name AS "symbolName",
+               cc.chunk_type AS "chunkType",
+               cc.start_line AS "startLine",
+               cc.end_line AS "endLine",
+               cc.content AS content
+        FROM code_chunk cc
+        JOIN code_file cf ON cf.id = cc.file_id AND cf.repo_id = cc.repo_id
+        WHERE cc.repo_id = CAST(#{repoId} AS uuid)
+          AND cc.id = CAST(#{chunkId} AS uuid)
+    </select>
+
     <select id="similaritySearch" resultType="com.kama.jchatmind.model.dto.CodeSearchResult">
         <![CDATA[
         SELECT cc.id AS "chunkId",

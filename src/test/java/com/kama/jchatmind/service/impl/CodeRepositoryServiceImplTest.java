@@ -9,6 +9,7 @@ import com.kama.jchatmind.github.GithubWorkspaceManager;
 import com.kama.jchatmind.mapper.CodeChunkMapper;
 import com.kama.jchatmind.mapper.CodeFileMapper;
 import com.kama.jchatmind.mapper.CodeRepositoryMapper;
+import com.kama.jchatmind.model.dto.CodeChunkExactReadResult;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.model.dto.ImportQualitySummary;
 import com.kama.jchatmind.model.dto.ParsedCodeFile;
@@ -835,6 +836,11 @@ class CodeRepositoryServiceImplTest {
         @Override
         public List<CodeSearchResult> similaritySearch(String repoId, String vectorLiteral, int limit) {
             return List.of();
+        }
+
+        @Override
+        public CodeChunkExactReadResult selectByRepoIdAndChunkId(String repoId, String chunkId) {
+            return null;
         }
     }
 

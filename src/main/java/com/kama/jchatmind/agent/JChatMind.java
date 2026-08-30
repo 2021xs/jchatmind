@@ -1,5 +1,6 @@
 package com.kama.jchatmind.agent;
 
+import com.kama.jchatmind.agent.tools.CodeChunkTools;
 import com.kama.jchatmind.converter.ChatMessageConverter;
 import com.kama.jchatmind.config.ToolCorrectionProperties;
 import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
@@ -97,6 +98,7 @@ public class JChatMind {
     private int maxLoopSteps = MAX_STEPS;
     private String finishReason;
     private String traceId;
+    private String trustedRepoId;
     private final Map<String, Integer> toolCorrectionAttempts = new HashMap<>();
     private final ToolDuplicateCallState duplicateCallState = new ToolDuplicateCallState();
     private final TaskEvidenceState taskEvidenceState = new TaskEvidenceState();
@@ -871,9 +873,7 @@ public class JChatMind {
         ChatOptions executionOptions = DefaultToolCallingChatOptions.builder()
                 .internalToolExecutionEnabled(false)
                 .toolCallbacks(this.availableTools)
-                .toolContext(Map.of(
-                        TaskEvidenceState.TOOL_CONTEXT_KEY, taskEvidenceState,
-                        TaskEvidenceState.TASK_ID_TOOL_CONTEXT_KEY, currentTaskId))
+                .toolContext(toolContext())
                 .build();
         Prompt prompt = Prompt.builder()
                 .messages(AgentMemoryHistorySanitizer.toSafeModelMessages(this.chatMemory.get(this.chatSessionId)))
@@ -1019,6 +1019,16 @@ public class JChatMind {
         return ToolResponseMessage.builder()
                 .responses(responses)
                 .build();
+    }
+
+    private Map<String, Object> toolContext() {
+        Map<String, Object> context = new HashMap<>();
+        context.put(TaskEvidenceState.TOOL_CONTEXT_KEY, taskEvidenceState);
+        context.put(TaskEvidenceState.TASK_ID_TOOL_CONTEXT_KEY, currentTaskId);
+        if (StringUtils.hasText(trustedRepoId)) {
+            context.put(CodeChunkTools.TRUSTED_REPO_ID_TOOL_CONTEXT_KEY, trustedRepoId);
+        }
+        return Map.copyOf(context);
     }
 
     private record PreparedToolCorrection(ToolResponseMessage responseMessage,
@@ -1547,6 +1557,10 @@ public class JChatMind {
 
     public void setTraceId(String traceId) {
         this.traceId = traceId;
+    }
+
+    public void setTrustedRepoId(String trustedRepoId) {
+        this.trustedRepoId = StringUtils.hasText(trustedRepoId) ? trustedRepoId.trim() : null;
     }
 
     public void setTaskRuntimeRegistry(AgentTaskRuntimeRegistry taskRuntimeRegistry) {

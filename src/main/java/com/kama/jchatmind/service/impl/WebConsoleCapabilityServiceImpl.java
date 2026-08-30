@@ -26,6 +26,7 @@ public class WebConsoleCapabilityServiceImpl implements WebConsoleCapabilityServ
     private static final String ASSISTANT_NAME = "代码助手";
     private static final List<String> SAFE_FULL_OPTIONAL_TOOLS = List.of(
             "searchProjectCode",
+            "getCodeChunk",
             "databaseQuery"
     );
     private static final List<String> NOT_SUPPORTED = List.of(
@@ -127,15 +128,16 @@ public class WebConsoleCapabilityServiceImpl implements WebConsoleCapabilityServ
     }
 
     private WebConsoleCapabilityVO codeSearchCapability(String repoId) {
-        boolean toolAllowed = toolRegistry.canExposeToAgent("searchProjectCode");
+        boolean searchAllowed = toolRegistry.canExposeToAgent("searchProjectCode");
+        boolean exactReadAllowed = toolRegistry.canExposeToAgent("getCodeChunk");
         String safeRepoId = StringUtils.hasText(repoId) ? repoId.trim() : null;
         CodeRepository repository = isUuid(safeRepoId)
                 ? codeRepositoryMapper.selectById(safeRepoId)
                 : null;
         boolean repoReady = repository != null && "READY".equalsIgnoreCase(repository.getStatus());
-        boolean enabled = toolAllowed && repoReady;
+        boolean enabled = searchAllowed && repoReady;
         String reason = null;
-        if (!toolAllowed) {
+        if (!searchAllowed) {
             reason = "searchProjectCode 未通过本地工具策略";
         } else if (!StringUtils.hasText(safeRepoId)) {
             reason = "当前未选择代码仓库";
@@ -150,8 +152,12 @@ public class WebConsoleCapabilityServiceImpl implements WebConsoleCapabilityServ
                 .key("code_search")
                 .label("代码检索")
                 .enabled(enabled)
-                .tools(enabled ? List.of("searchProjectCode") : List.of())
-                .description("检索当前已导入代码仓库")
+                .tools(enabled
+                        ? exactReadAllowed
+                                ? List.of("searchProjectCode", "getCodeChunk")
+                                : List.of("searchProjectCode")
+                        : List.of())
+                .description("检索当前已导入代码仓库，并按稳定chunk ID精确重读")
                 .reason(reason)
                 .build();
     }
