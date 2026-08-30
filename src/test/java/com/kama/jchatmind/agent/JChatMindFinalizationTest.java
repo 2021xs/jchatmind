@@ -225,7 +225,13 @@ class JChatMindFinalizationTest {
     }
 
     private ToolCallBatchExecutor mockBatchExecutor() {
-        return mock(ToolCallBatchExecutor.class);
+        ToolCallBatchExecutor executor = mock(ToolCallBatchExecutor.class);
+        when(executor.projectForContext(any(), any(), any())).thenAnswer(invocation -> {
+            ToolCallBatchResult batch = invocation.getArgument(1);
+            ToolResponseMessage response = invocation.getArgument(2);
+            return new ToolCallBatchResult.ContextView(response, batch.getToolExecutionResult());
+        });
+        return executor;
     }
 
     private ToolCallBatchResult terminateResult() {

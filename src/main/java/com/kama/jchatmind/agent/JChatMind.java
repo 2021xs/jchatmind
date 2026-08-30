@@ -918,11 +918,14 @@ public class JChatMind {
 
         chatMessageFacadeService.createToolProtocolBatch(
                 chatSessionId, currentTaskId, assistantToolCallMessage, terminalResponseMessage);
+        ToolCallBatchResult.ContextView contextView = toolCallBatchExecutor.projectForContext(
+                executionContext, execution, terminalResponseMessage);
+        ToolResponseMessage contextResponseMessage = contextView.toolResponseMessage();
 
         if (correction != null) {
             List<Message> correctedMemory = new ArrayList<>(this.chatMemory.get(this.chatSessionId));
             correctedMemory.add(assistantToolCallMessage);
-            correctedMemory.add(terminalResponseMessage);
+            correctedMemory.add(contextResponseMessage);
             this.chatMemory.clear(this.chatSessionId);
             this.chatMemory.add(this.chatSessionId, correctedMemory);
             log.info("Tool failure fed back for self-correction: errorType={}, attempts={}",
@@ -933,11 +936,11 @@ public class JChatMind {
             throw execution.getError();
         }
 
-        taskToolTranscript.append(assistantToolCallMessage, execution.getToolResponseMessage());
+        taskToolTranscript.append(assistantToolCallMessage, contextResponseMessage);
         this.chatMemory.clear(this.chatSessionId);
-        this.chatMemory.add(this.chatSessionId, execution.getToolExecutionResult().conversationHistory());
+        this.chatMemory.add(this.chatSessionId, contextView.toolExecutionResult().conversationHistory());
 
-        ToolResponseMessage toolResponseMessage = terminalResponseMessage;
+        ToolResponseMessage toolResponseMessage = contextResponseMessage;
         String collect = toolResponseMessage.getResponses()
                 .stream()
                 .map(resp -> "Tool " + resp.name() + " result: " + truncate(resp.responseData()))

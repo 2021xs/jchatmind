@@ -58,6 +58,7 @@ class ToolCallBatchExecutorTest {
     private ToolResultProperties resultProperties;
     private ThreadPoolTaskExecutor toolExecutor;
     private ToolCallBatchExecutor batchExecutor;
+    private ToolCallBatchResult.ContextView lastContextView;
     private final ToolExecutionContext executionContext = ToolExecutionContext.builder()
             .taskId("task-1")
             .stepId("step-1")
@@ -120,6 +121,8 @@ class ToolCallBatchExecutorTest {
         assertTrue(result.succeeded());
         assertEquals("original-result",
                 result.getToolResponseMessage().getResponses().get(0).responseData());
+        assertEquals("original-result",
+                lastContextView.toolResponseMessage().getResponses().get(0).responseData());
         verify(toolExecutionService).afterToolSuccess(eq(executionContext), any(), eq("original-result"));
         verify(toolExecutionService, never()).afterToolFailure(eq(executionContext), any(), any(), any(Boolean.class));
         assertEquals("task-1", observed.get().taskId());
@@ -266,21 +269,76 @@ class ToolCallBatchExecutorTest {
     }
 
     @Test
-    void oversizedSuccessfulResultIsGuardedBeforeTraceAndToolResponse() {
+    void oversizedSuccessfulResultKeepsPersistentBodyAndBoundsContextView() {
         resultProperties.setDefaultMaxResultChars(100);
         String raw = "x".repeat(180) + "RAW-TAIL";
         ToolCallback tool = callback("fastTool", ignored -> raw);
 
-        ToolCallBatchResult result = execute(List.of(tool), call("call-1", "fastTool"));
+        AtomicReference<AgentLifecycleObservationPublisher.ToolResultObservation> observed =
+                new AtomicReference<>();
+        ToolCallBatchResult result;
+        try (AgentLifecycleObservationPublisher.Registration ignored =
+                     AgentLifecycleObservationPublisher.registerToolResult(observed::set)) {
+            result = execute(List.of(tool), call("call-1", "fastTool"));
+        }
 
         assertTrue(result.succeeded());
-        String guarded = result.getToolResponseMessage().getResponses().get(0).responseData();
+        assertEquals(raw, result.getToolResponseMessage().getResponses().get(0).responseData());
+        String guarded = lastContextView.toolResponseMessage().getResponses().get(0).responseData();
         assertEquals(100, guarded.codePointCount(0, guarded.length()));
         assertTrue(guarded.contains("[TRUNCATED: originalChars="));
         assertTrue(result.getRecords().get(0).isRuntimeResultTruncated());
         assertEquals(raw.length(), result.getRecords().get(0).getOriginalResultChars());
         assertEquals(100, result.getRecords().get(0).getStoredResultChars());
+        assertEquals(raw, observed.get().rawResult());
+        assertEquals(guarded, observed.get().contextResult());
         verify(toolExecutionService).afterToolSuccess(eq(executionContext), any(), eq(guarded));
+    }
+
+    @Test
+    void oversizedPartialSuccessKeepsCanonicalSuccessAndCompletesFailedBatch() {
+        resultProperties.setDefaultMaxResultChars(100);
+        String canonicalA = "A-" + "x".repeat(180) + "-RAW-TAIL";
+        AtomicInteger toolCInvocations = new AtomicInteger();
+
+        ToolCallBatchResult result = execute(
+                List.of(callback("toolA", ignored -> canonicalA),
+                        callback("toolB", ignored -> {
+                            throw new ToolArgumentException("toolB failed", null);
+                        }),
+                        callback("toolC", ignored -> {
+                            toolCInvocations.incrementAndGet();
+                            return "C-ok";
+                        })),
+                call("call-a", "toolA"), call("call-b", "toolB"), call("call-c", "toolC"));
+
+        assertEquals(ToolCallBatchResult.Status.FAILED, result.getStatus());
+        assertCompleteIds(result, Set.of("call-a", "call-b", "call-c"));
+        assertEquals(canonicalA, result.getToolResponseMessage().getResponses().get(0).responseData());
+        String contextA = lastContextView.toolResponseMessage().getResponses().get(0).responseData();
+        assertEquals(100, contextA.codePointCount(0, contextA.length()));
+        assertTrue(contextA.contains("[TRUNCATED: originalChars="));
+        assertEquals(ToolCallBatchResult.TerminalStatus.SUCCESS,
+                result.getTerminalStatuses().get("call-a"));
+        assertEquals(ToolCallBatchResult.TerminalStatus.ERROR,
+                result.getTerminalStatuses().get("call-b"));
+        assertEquals(ToolCallBatchResult.TerminalStatus.SKIPPED,
+                result.getTerminalStatuses().get("call-c"));
+        assertEquals(0, toolCInvocations.get());
+    }
+
+    @Test
+    void projectionFailureKeepsCanonicalResponseAndFailsClosedForModel() {
+        resultProperties.setDefaultMaxResultChars(1);
+        String canonical = "canonical-" + "x".repeat(200);
+
+        ToolCallBatchResult result = execute(
+                List.of(callback("fastTool", ignored -> canonical)), call("call-1", "fastTool"));
+
+        assertEquals(canonical, result.getToolResponseMessage().getResponses().get(0).responseData());
+        assertEquals("TOOL_RESULT_CONTEXT_UNAVAILABLE: persisted; unsafe to inject.",
+                lastContextView.toolResponseMessage().getResponses().get(0).responseData());
+        assertTrue(result.getRecords().get(0).isRuntimeResultTruncated());
     }
 
     @Test
@@ -293,6 +351,7 @@ class ToolCallBatchExecutorTest {
                 List.of(callback("fastTool", ignored -> raw)), call("call-1", "fastTool"));
 
         assertEquals(raw, result.getToolResponseMessage().getResponses().get(0).responseData());
+        assertEquals(raw, lastContextView.toolResponseMessage().getResponses().get(0).responseData());
         assertTrue(!result.getRecords().get(0).isRuntimeResultTruncated());
         assertEquals(160, result.getRecords().get(0).getMaxResultChars());
     }
@@ -315,7 +374,9 @@ class ToolCallBatchExecutorTest {
         assertTrue(result.succeeded());
         assertEquals(3, result.getToolResponseMessage().getResponses().size());
         assertEquals("A-ok", result.getToolResponseMessage().getResponses().get(0).responseData());
-        assertTrue(result.getToolResponseMessage().getResponses().get(1).responseData().contains("[TRUNCATED:"));
+        assertEquals("b".repeat(200), result.getToolResponseMessage().getResponses().get(1).responseData());
+        assertTrue(lastContextView.toolResponseMessage().getResponses().get(1).responseData()
+                .contains("[TRUNCATED:"));
         assertEquals("C-ok", result.getToolResponseMessage().getResponses().get(2).responseData());
         assertCompleteIds(result, Set.of("call-a", "call-b", "call-c"));
         assertEquals(ToolCallBatchResult.TerminalStatus.SUCCESS,
@@ -563,7 +624,10 @@ class ToolCallBatchExecutorTest {
                 .build();
         ChatResponse response = new ChatResponse(List.of(new Generation(
                 AssistantMessage.builder().content("").toolCalls(List.of(calls)).build())));
-        return batchExecutor.execute(prompt, response, ToolCallingManager.builder().build(), context);
+        ToolCallBatchResult result = batchExecutor.execute(
+                prompt, response, ToolCallingManager.builder().build(), context);
+        lastContextView = batchExecutor.projectForContext(context, result, result.getToolResponseMessage());
+        return result;
     }
 
     private AssistantMessage.ToolCall call(String id, String name) {

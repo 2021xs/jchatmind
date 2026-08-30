@@ -34,4 +34,11 @@ public class ToolCallBatchResult {
     public boolean succeeded() {
         return status == Status.SUCCESS;
     }
+
+    /**
+     * Ephemeral result used only after the persistent protocol batch has committed.
+     */
+    record ContextView(ToolResponseMessage toolResponseMessage,
+                       ToolExecutionResult toolExecutionResult) {
+    }
 }

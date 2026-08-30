@@ -51,6 +51,8 @@ import java.util.concurrent.TimeoutException;
 @Component
 public class ToolCallBatchExecutor {
     private static final String UNKNOWN_TOOL_SCHEMA = "{\"type\":\"object\"}";
+    private static final String CONTEXT_PROJECTION_FAILURE =
+            "TOOL_RESULT_CONTEXT_UNAVAILABLE: persisted; unsafe to inject.";
 
     private final ToolExecutionService toolExecutionService;
     private final AsyncTaskExecutor toolExecutor;
@@ -97,7 +99,6 @@ public class ToolCallBatchExecutor {
                     new ToolExecutionException(e.getMessage(), e));
         }
 
-        toolExecutionResult = guardToolExecutionResult(toolExecutionResult, records);
         ToolResponseMessage toolResponseMessage = (ToolResponseMessage) toolExecutionResult
                 .conversationHistory()
                 .get(toolExecutionResult.conversationHistory().size() - 1);
@@ -107,7 +108,6 @@ public class ToolCallBatchExecutor {
         } catch (RuntimeException e) {
             return failed(requestedCalls, records, terminalResponses, e);
         }
-        recordUnfinishedToolResponses(executionContext, records, toolResponseMessage);
         return ToolCallBatchResult.builder()
                 .status(ToolCallBatchResult.Status.SUCCESS)
                 .records(records)
@@ -117,39 +117,89 @@ public class ToolCallBatchExecutor {
                 .build();
     }
 
-    private ToolExecutionResult guardToolExecutionResult(ToolExecutionResult result,
-                                                         List<ToolExecutionRecord> records) {
+    /**
+     * Builds the short-lived model view after the caller has atomically persisted
+     * {@code persistentResponseMessage}. The persistent response is never mutated.
+     */
+    ToolCallBatchResult.ContextView projectForContext(
+            ToolExecutionContext executionContext,
+            ToolCallBatchResult batchResult,
+            ToolResponseMessage persistentResponseMessage) {
+        if (batchResult == null || persistentResponseMessage == null) {
+            throw new IllegalArgumentException("Batch result and persistent response are required");
+        }
+
+        Map<String, ToolExecutionRecord> recordsByCallId = recordsByCallId(batchResult.getRecords());
+        List<ToolResponseMessage.ToolResponse> contextResponses = new ArrayList<>();
+        for (ToolResponseMessage.ToolResponse persistentResponse : persistentResponseMessage.getResponses()) {
+            ToolExecutionRecord record = recordsByCallId.get(persistentResponse.id());
+            ToolResultGuard.GuardedToolResult guarded = contextProjection(record, persistentResponse);
+            applyResultMetrics(record, guarded);
+            publishProjectedToolResult(executionContext, batchResult, record, persistentResponse, guarded);
+            contextResponses.add(new ToolResponseMessage.ToolResponse(
+                    persistentResponse.id(), persistentResponse.name(), guarded.value()));
+        }
+
+        ToolResponseMessage contextResponseMessage = ToolResponseMessage.builder()
+                .responses(contextResponses)
+                .metadata(persistentResponseMessage.getMetadata())
+                .build();
+        recordUnfinishedToolResponses(executionContext, batchResult.getRecords(),
+                batchResult.getTerminalStatuses(), contextResponseMessage);
+        return new ToolCallBatchResult.ContextView(
+                contextResponseMessage,
+                replaceLastToolResponse(batchResult.getToolExecutionResult(), contextResponseMessage));
+    }
+
+    private ToolResultGuard.GuardedToolResult contextProjection(
+            ToolExecutionRecord record,
+            ToolResponseMessage.ToolResponse persistentResponse) {
+        String actualToolName = record == null ? persistentResponse.name() : record.getActualToolName();
+        String canonicalToolName = record == null
+                ? toolRegistry.canonicalName(persistentResponse.name())
+                : record.getCanonicalToolName();
+        try {
+            return toolResultGuard.guard(
+                    actualToolName, canonicalToolName, persistentResponse.responseData());
+        } catch (RuntimeException error) {
+            int originalChars = codePointCount(persistentResponse.responseData());
+            int fallbackChars = codePointCount(CONTEXT_PROJECTION_FAILURE);
+            log.warn("Tool result context projection failed closed: toolCallId={}, toolName={}, error={}",
+                    persistentResponse.id(), canonicalToolName, error.getMessage());
+            return new ToolResultGuard.GuardedToolResult(
+                    CONTEXT_PROJECTION_FAILURE, originalChars, fallbackChars, 0, true);
+        }
+    }
+
+    private ToolExecutionResult replaceLastToolResponse(
+            ToolExecutionResult result,
+            ToolResponseMessage contextResponseMessage) {
+        if (result == null) {
+            return null;
+        }
         List<Message> history = new ArrayList<>(result.conversationHistory());
         int lastIndex = history.size() - 1;
-        if (lastIndex < 0 || !(history.get(lastIndex) instanceof ToolResponseMessage responseMessage)) {
-            return result;
+        if (lastIndex < 0 || !(history.get(lastIndex) instanceof ToolResponseMessage)) {
+            throw new IllegalStateException("Tool execution result has no terminal ToolResponseMessage");
         }
-
-        List<ToolResponseMessage.ToolResponse> guardedResponses = new ArrayList<>();
-        List<ToolResponseMessage.ToolResponse> responses = responseMessage.getResponses();
-        for (int i = 0; i < responses.size(); i++) {
-            ToolResponseMessage.ToolResponse response = responses.get(i);
-            ToolExecutionRecord record = i < records.size() ? records.get(i) : null;
-            String actualToolName = record == null ? response.name() : record.getActualToolName();
-            String canonicalToolName = record == null
-                    ? toolRegistry.canonicalName(response.name())
-                    : record.getCanonicalToolName();
-            ToolResultGuard.GuardedToolResult guarded = toolResultGuard.guard(
-                    actualToolName, canonicalToolName, response.responseData());
-            applyResultMetrics(record, guarded);
-            guardedResponses.add(new ToolResponseMessage.ToolResponse(
-                    response.id(), response.name(), guarded.value()));
-        }
-
-        ToolResponseMessage guardedMessage = ToolResponseMessage.builder()
-                .responses(guardedResponses)
-                .metadata(responseMessage.getMetadata())
-                .build();
-        history.set(lastIndex, guardedMessage);
+        history.set(lastIndex, contextResponseMessage);
         return ToolExecutionResult.builder()
                 .conversationHistory(history)
                 .returnDirect(result.returnDirect())
                 .build();
+    }
+
+    private Map<String, ToolExecutionRecord> recordsByCallId(List<ToolExecutionRecord> records) {
+        Map<String, ToolExecutionRecord> indexed = new LinkedHashMap<>();
+        if (records == null) {
+            return indexed;
+        }
+        for (ToolExecutionRecord record : records) {
+            if (record != null && record.getToolCallId() != null) {
+                indexed.put(record.getToolCallId(), record);
+            }
+        }
+        return indexed;
     }
 
     private ToolCallBatchResult failed(List<AssistantMessage.ToolCall> requestedCalls,
@@ -381,30 +431,37 @@ public class ToolCallBatchExecutor {
 
     private void recordUnfinishedToolResponses(ToolExecutionContext executionContext,
                                                List<ToolExecutionRecord> records,
+                                               Map<String, ToolCallBatchResult.TerminalStatus> terminalStatuses,
                                                ToolResponseMessage toolResponseMessage) {
-        List<ToolResponseMessage.ToolResponse> responses = toolResponseMessage.getResponses();
-        for (int i = 0; i < responses.size() && i < records.size(); i++) {
-            ToolExecutionRecord record = records.get(i);
+        Map<String, ToolResponseMessage.ToolResponse> responsesById = new LinkedHashMap<>();
+        for (ToolResponseMessage.ToolResponse response : toolResponseMessage.getResponses()) {
+            responsesById.put(response.id(), response);
+        }
+        for (ToolExecutionRecord record : records) {
             if (record.isTerminalRecorded()) {
+                continue;
+            }
+            ToolCallBatchResult.TerminalStatus status = terminalStatuses == null
+                    ? null : terminalStatuses.get(record.getToolCallId());
+            if (status != ToolCallBatchResult.TerminalStatus.SUCCESS
+                    && status != ToolCallBatchResult.TerminalStatus.REJECTED) {
+                continue;
+            }
+            ToolResponseMessage.ToolResponse response = responsesById.get(record.getToolCallId());
+            if (response == null) {
+                toolExecutionService.afterToolFailure(
+                        executionContext,
+                        record,
+                        new IllegalStateException("Tool response missing for call " + record.getToolCallId()),
+                        false
+                );
+                record.setTerminalRecorded(true);
                 continue;
             }
             toolExecutionService.afterToolSuccess(
                     executionContext,
                     record,
-                    responses.get(i).responseData()
-            );
-            record.setTerminalRecorded(true);
-        }
-        for (int i = responses.size(); i < records.size(); i++) {
-            ToolExecutionRecord record = records.get(i);
-            if (record.isTerminalRecorded()) {
-                continue;
-            }
-            toolExecutionService.afterToolFailure(
-                    executionContext,
-                    record,
-                    new IllegalStateException("Tool response missing for call index " + i),
-                    false
+                    response.responseData()
             );
             record.setTerminalRecorded(true);
         }
@@ -505,13 +562,7 @@ public class ToolCallBatchExecutor {
                     }
                     final String[] acceptedResult = new String[1];
                     Runnable success = () -> {
-                        ToolResultGuard.GuardedToolResult guarded = toolResultGuard.guard(
-                                record.getActualToolName(), record.getCanonicalToolName(), rawResult);
-                        applyResultMetrics(record, guarded);
-                        acceptedResult[0] = guarded.value();
-                        publishToolResult(executionContext, record, rawResult, guarded, "SUCCESS");
-                        toolExecutionService.afterToolSuccess(executionContext, record, acceptedResult[0]);
-                        record.setTerminalRecorded(true);
+                        acceptedResult[0] = rawResult;
                     };
                     boolean accepted = cancellationControl == null
                             ? runSuccess(success)
@@ -606,14 +657,10 @@ public class ToolCallBatchExecutor {
                     + "hardStop=" + duplicateCheck.hardStop() + "\n"
                     + "message=This tool was called repeatedly with the same arguments. "
                     + "Use the existing result or change the tool or arguments.";
-            ToolResultGuard.GuardedToolResult guarded = toolResultGuard.guard(
-                    record.getActualToolName(), record.getCanonicalToolName(), feedback);
-            applyResultMetrics(record, guarded);
-            publishToolResult(executionContext, record, feedback, guarded, "REJECTED");
             log.warn("Duplicate tool call rejected: taskId={}, toolName={}, consecutiveCount={}, hardStop={}",
                     executionContext.getTaskId(), record.getCanonicalToolName(),
                     duplicateCheck.consecutiveCount(), duplicateCheck.hardStop());
-            return guarded.value();
+            return feedback;
         }
 
         private String rejectCodeSearchWithoutNovelty(ToolExecutionRecord record,
@@ -624,16 +671,10 @@ public class ToolCallBatchExecutor {
                     + "message=Code search stopped because the previous two searches produced no new evidence. "
                     + "Use the evidence already collected and proceed to Final unless another non-code-search "
                     + "tool is genuinely required by the user's request.";
-            ToolResultGuard.GuardedToolResult guarded = toolResultGuard.guard(
-                    record.getActualToolName(), record.getCanonicalToolName(), feedback);
-            applyResultMetrics(record, guarded);
-            publishToolResult(executionContext, record, feedback, guarded, "GUARDED");
-            toolExecutionService.afterToolSuccess(executionContext, record, guarded.value());
-            record.setTerminalRecorded(true);
             log.warn("Code search no-novelty guard rejected retrieval: taskId={}, toolName={}, searchCallCount={}",
                     executionContext.getTaskId(), record.getCanonicalToolName(),
                     taskEvidenceState.snapshot().searchCallCount());
-            return guarded.value();
+            return feedback;
         }
 
         private RuntimeException propagate(Throwable error) {
@@ -656,17 +697,39 @@ public class ToolCallBatchExecutor {
         record.setRuntimeResultTruncated(guarded.truncated());
     }
 
-    private void publishToolResult(ToolExecutionContext context,
-                                   ToolExecutionRecord record,
-                                   String rawResult,
-                                   ToolResultGuard.GuardedToolResult guarded,
-                                   String status) {
+    private void publishProjectedToolResult(
+            ToolExecutionContext context,
+            ToolCallBatchResult batchResult,
+            ToolExecutionRecord record,
+            ToolResponseMessage.ToolResponse persistentResponse,
+            ToolResultGuard.GuardedToolResult guarded) {
+        if (context == null || record == null) {
+            return;
+        }
+        ToolCallBatchResult.TerminalStatus terminalStatus = batchResult.getTerminalStatuses() == null
+                ? null : batchResult.getTerminalStatuses().get(persistentResponse.id());
+        if (terminalStatus != ToolCallBatchResult.TerminalStatus.SUCCESS
+                && terminalStatus != ToolCallBatchResult.TerminalStatus.REJECTED) {
+            return;
+        }
         AgentLifecycleObservationPublisher.publishToolResult(
                 new AgentLifecycleObservationPublisher.ToolResultObservation(
                         context.getTaskId(), context.getSessionId(), record.getToolCallId(),
                         record.getCanonicalToolName(), record.getActualToolName(),
-                        rawResult, guarded.value(), guarded.originalChars(), guarded.storedChars(),
-                        guarded.truncated(), status));
+                        persistentResponse.responseData(), guarded.value(), guarded.originalChars(),
+                        guarded.storedChars(), guarded.truncated(),
+                        observationStatus(persistentResponse.responseData(), terminalStatus)));
+    }
+
+    private String observationStatus(
+            String persistentResult,
+            ToolCallBatchResult.TerminalStatus terminalStatus) {
+        return persistentResult != null && persistentResult.startsWith("CODE_SEARCH_NO_NOVELTY_GUARD:")
+                ? "GUARDED" : terminalStatus.name();
+    }
+
+    private int codePointCount(String value) {
+        return value == null ? 0 : value.codePointCount(0, value.length());
     }
 
     private record TerminalResponse(ToolCallBatchResult.TerminalStatus status,

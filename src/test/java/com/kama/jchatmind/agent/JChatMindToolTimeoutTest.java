@@ -81,6 +81,8 @@ class JChatMindToolTimeoutTest {
                 "Tool 'slowTool' exceeded runtime timeout of 50 ms; interrupt/cancel requested=true, Agent Task will stop",
                 null);
         ToolCallBatchExecutor batchExecutor = mock(ToolCallBatchExecutor.class);
+        when(batchExecutor.projectForContext(any(), any(), any())).thenAnswer(invocation ->
+                new ToolCallBatchResult.ContextView(invocation.getArgument(2), null));
         when(batchExecutor.execute(any(), any(), any(), any()))
                 .thenReturn(ToolCallBatchResult.builder()
                         .status(ToolCallBatchResult.Status.FAILED)

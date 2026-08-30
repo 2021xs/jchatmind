@@ -37,9 +37,12 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import javax.sql.DataSource;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
 
@@ -174,6 +177,29 @@ class ToolProtocolPersistenceTransactionIntegrationTest {
     }
 
     @Test
+    void oversizedExecutorCanonicalResultRetainsExactFingerprintAfterReload() throws Exception {
+        String canonical = "executor-canonical-" + "x".repeat(12_000) + "-RAW-TAIL";
+        String expectedFingerprint = sha256(canonical);
+        assertThat(expectedFingerprint)
+                .isEqualTo("0db61d1613916ddbadc23f392dfff057a8d4ab815cd59718d0754f93c7afc72b");
+
+        messageService.createToolProtocolBatch(
+                sessionId, taskId, assistantBatch(), responseBatch(canonical, "B-ok"));
+
+        List<ChatMessageDTO> persisted = messageService.getChatMessageDTOsBySessionId(sessionId);
+        ChatMessageDTO firstToolResponse = persisted.stream()
+                .filter(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL)
+                .findFirst()
+                .orElseThrow();
+        assertThat(firstToolResponse.getContent()).isEqualTo(canonical);
+        assertThat(sha256(firstToolResponse.getContent())).isEqualTo(expectedFingerprint);
+        AgentToolProtocolInspector.Inspection inspection = AgentToolProtocolInspector.inspect(
+                toProtocolMessages(persisted));
+        assertThat(inspection.valid()).isTrue();
+        assertThat(inspection.orphanToolProtocolCount()).isZero();
+    }
+
+    @Test
     void cancellationRetainsMultipleCommittedBatchesAndKeepsCancelledAuditState() {
         messageService.createToolProtocolBatch(
                 sessionId, taskId, assistantBatch("1"), responseBatch("1", "A1-ok", "B1-ok"));
@@ -244,6 +270,12 @@ class ToolProtocolPersistenceTransactionIntegrationTest {
     private String status(String table, String id) {
         return jdbc.queryForObject("SELECT status FROM " + table + " WHERE id = CAST(? AS uuid)",
                 String.class, id);
+    }
+
+    private String sha256(String value) throws Exception {
+        byte[] digest = MessageDigest.getInstance("SHA-256")
+                .digest(value.getBytes(StandardCharsets.UTF_8));
+        return HexFormat.of().formatHex(digest);
     }
 
     @Configuration

@@ -1,6 +1,7 @@
 package com.kama.jchatmind.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.config.ToolDuplicateDetectionProperties;
 import com.kama.jchatmind.config.ToolCorrectionProperties;
 import com.kama.jchatmind.config.ToolResultProperties;
@@ -36,6 +37,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -48,7 +50,9 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -56,7 +60,7 @@ import static org.mockito.Mockito.when;
 class JChatMindToolResultGuardTest {
 
     @Test
-    void guardedResultIsPersistedAndSentToNextThinkPrompt() {
+    void executorCanonicalResultIsPersistedBeforeBoundedModelViewIsBuilt() {
         String rawResult = "evidence-" + "x".repeat(300) + "-RAW-TAIL";
         int maxResultChars = 100;
         ToolCallback largeTool = callback("largeTool", rawResult);
@@ -122,12 +126,16 @@ class JChatMindToolResultGuardTest {
                 .thenReturn(new ConversationContextCompressor.CompressionCheck(
                         false, "not_needed", 0, 0, 0, 0, "TEST", 0, 0));
 
-        try {
+        AtomicReference<AgentLifecycleObservationPublisher.FinalProjectionObservation> finalProjection =
+                new AtomicReference<>();
+        ToolResultGuard resultGuard = spy(new ToolResultGuard(resultProperties));
+        try (AgentLifecycleObservationPublisher.Registration ignored =
+                     AgentLifecycleObservationPublisher.registerFinalProjection(finalProjection::set)) {
             ToolCallBatchExecutor batchExecutor = new ToolCallBatchExecutor(
                     toolExecutionService,
                     toolExecutor,
                     new ToolTimeoutProperties(),
-                    new ToolResultGuard(resultProperties),
+                    resultGuard,
                     new ToolDuplicateCallDetector(new ObjectMapper(), new ToolDuplicateDetectionProperties()),
                     toolRegistry);
             JChatMind agent = new JChatMind(
@@ -153,17 +161,40 @@ class JChatMindToolResultGuardTest {
                 .orElseThrow();
         String promptResult = nextThinkToolResponse.getResponses().get(0).responseData();
 
+        ArgumentCaptor<AssistantMessage> persistedAssistant = ArgumentCaptor.forClass(AssistantMessage.class);
         ArgumentCaptor<ToolResponseMessage> persistedResponse = ArgumentCaptor.forClass(ToolResponseMessage.class);
         verify(messageService).createToolProtocolBatch(
-                eq("session-1"), eq("task-1"), any(AssistantMessage.class), persistedResponse.capture());
+                eq("session-1"), eq("task-1"), persistedAssistant.capture(), persistedResponse.capture());
         String storedToolResult = persistedResponse.getValue().getResponses().get(0).responseData();
 
         assertEquals(maxResultChars, promptResult.codePointCount(0, promptResult.length()));
         assertTrue(promptResult.contains("[TRUNCATED: originalChars="));
         assertFalse(promptResult.contains("RAW-TAIL"));
         assertNotEquals(rawResult, promptResult);
-        assertEquals(promptResult, storedToolResult);
+        assertEquals(rawResult, storedToolResult);
+        assertEquals(promptResult, finalProjection.get().executionTranscript().stream()
+                .filter(ToolResponseMessage.class::isInstance)
+                .map(ToolResponseMessage.class::cast)
+                .findFirst()
+                .orElseThrow()
+                .getResponses().get(0).responseData());
+        String transcriptResult = finalProjection.get().currentTaskToolTranscript().stream()
+                .filter(ToolResponseMessage.class::isInstance)
+                .map(ToolResponseMessage.class::cast)
+                .findFirst()
+                .orElseThrow()
+                .getResponses().get(0).responseData();
+        assertEquals(promptResult, transcriptResult);
+        assertEquals(0, ProtocolAwareMessageWindowChatMemory.inspectProtocol(List.of(
+                persistedAssistant.getValue(), persistedResponse.getValue())).protocolValidationFailureCount());
         verify(toolExecutionService).afterToolSuccess(any(), any(ToolExecutionRecord.class), eq(promptResult));
+        org.mockito.InOrder persistenceBeforeProjection = inOrder(
+                messageService, resultGuard, toolExecutionService);
+        persistenceBeforeProjection.verify(messageService).createToolProtocolBatch(
+                eq("session-1"), eq("task-1"), any(AssistantMessage.class), any(ToolResponseMessage.class));
+        persistenceBeforeProjection.verify(resultGuard).guard("largeTool", "largeTool", rawResult);
+        persistenceBeforeProjection.verify(toolExecutionService)
+                .afterToolSuccess(any(), any(ToolExecutionRecord.class), eq(promptResult));
     }
 
     private ChatResponse response(AssistantMessage message) {

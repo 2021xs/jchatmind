@@ -795,6 +795,11 @@ class JChatMindFinalStreamingTest {
             }).when(messageService).createToolProtocolBatch(
                     anyString(), anyString(), any(AssistantMessage.class), any(ToolResponseMessage.class));
             when(messageService.getChatMessageDTOsBySessionId(anyString())).thenReturn(List.of());
+            when(batchExecutor.projectForContext(any(), any(), any())).thenAnswer(invocation -> {
+                ToolCallBatchResult batch = invocation.getArgument(1);
+                ToolResponseMessage response = invocation.getArgument(2);
+                return new ToolCallBatchResult.ContextView(response, batch.getToolExecutionResult());
+            });
             when(finalCompletionService.complete(any())).thenAnswer(invocation -> {
                 FinalCompletionService.FinalCompletionCommand command = invocation.getArgument(0);
                 finalCompletionCommands.add(command);

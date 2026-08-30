@@ -103,6 +103,8 @@ class JChatMindToolCorrectionTest {
         when(toolExecutionService.beforeToolCall(any(), any())).thenReturn(record);
 
         ToolCallBatchExecutor batchExecutor = mock(ToolCallBatchExecutor.class);
+        when(batchExecutor.projectForContext(any(), any(), any())).thenAnswer(invocation ->
+                new ToolCallBatchResult.ContextView(invocation.getArgument(2), null));
         when(batchExecutor.execute(any(Prompt.class), any(ChatResponse.class), any(), any()))
                 .thenReturn(ToolCallBatchResult.builder()
                         .status(ToolCallBatchResult.Status.FAILED)
@@ -209,6 +211,8 @@ class JChatMindToolCorrectionTest {
         when(toolExecutionService.beforeToolCall(any(), any())).thenReturn(record);
 
         ToolCallBatchExecutor batchExecutor = mock(ToolCallBatchExecutor.class);
+        when(batchExecutor.projectForContext(any(), any(), any())).thenAnswer(invocation ->
+                new ToolCallBatchResult.ContextView(invocation.getArgument(2), null));
         when(batchExecutor.execute(any(Prompt.class), any(ChatResponse.class), any(), any()))
                 .thenReturn(ToolCallBatchResult.builder()
                         .status(ToolCallBatchResult.Status.FAILED)
