@@ -4,10 +4,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.config.ContextCompressionProperties;
+import com.kama.jchatmind.mapper.AgentTaskMapper;
 import com.kama.jchatmind.mapper.ChatSessionMapper;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.dto.ChatSessionDTO;
+import com.kama.jchatmind.model.entity.AgentTask;
 import com.kama.jchatmind.model.entity.ChatSession;
+import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ConversationContextCompressor;
 import com.kama.jchatmind.service.ConversationSummaryClient;
 import com.kama.jchatmind.service.TokenCounter;
@@ -20,7 +23,9 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -29,23 +34,97 @@ import java.util.stream.Collectors;
 @Service
 public class ConversationContextCompressorImpl implements ConversationContextCompressor {
     private static final int MAX_MESSAGE_CHARS_IN_SUMMARY_PROMPT = 2000;
+    private static final String TASK_AWARE_SUMMARY_HEADER = "Conversation Context";
+    private static final List<String> TASK_AWARE_SUMMARY_SECTIONS = List.of(
+            "- User Goals / Requests",
+            "- Confirmed Final Conclusions",
+            "- Important Constraints / Exact Values",
+            "- Decisions / Preferences Relevant to Future Turns",
+            "- Open Conversation-level Follow-ups");
 
     private final ContextCompressionProperties properties;
     private final ConversationSummaryClient conversationSummaryClient;
     private final ChatSessionMapper chatSessionMapper;
+    private final AgentTaskMapper agentTaskMapper;
     private final ObjectMapper objectMapper;
     private final TokenCounter tokenCounter;
 
     public ConversationContextCompressorImpl(ContextCompressionProperties properties,
                                              ConversationSummaryClient conversationSummaryClient,
                                              ChatSessionMapper chatSessionMapper,
+                                             AgentTaskMapper agentTaskMapper,
                                              ObjectMapper objectMapper,
                                              TokenCounter tokenCounter) {
         this.properties = properties;
         this.conversationSummaryClient = conversationSummaryClient;
         this.chatSessionMapper = chatSessionMapper;
+        this.agentTaskMapper = agentTaskMapper;
         this.objectMapper = objectMapper;
         this.tokenCounter = tokenCounter;
+    }
+
+    @Override
+    public CompletedConversationProjection projectCompletedConversation(String sessionId,
+                                                                        String model,
+                                                                        String currentUserMessageId,
+                                                                        List<ChatMessageDTO> allMessages) {
+        List<ChatMessageDTO> sortedMessages = sortedMessages(allMessages);
+        Map<String, ChatMessageDTO> messagesById = sortedMessages.stream()
+                .filter(message -> StringUtils.hasText(message.getId()))
+                .collect(Collectors.toMap(ChatMessageDTO::getId, message -> message,
+                        (first, ignored) -> first, LinkedHashMap::new));
+        Map<String, Integer> messageOrder = new LinkedHashMap<>();
+        for (int index = 0; index < sortedMessages.size(); index++) {
+            if (StringUtils.hasText(sortedMessages.get(index).getId())) {
+                messageOrder.putIfAbsent(sortedMessages.get(index).getId(), index);
+            }
+        }
+
+        ChatMessageDTO currentUser = currentUserMessage(messagesById, currentUserMessageId);
+        List<AgentTask> tasks = agentTaskMapper.selectBySessionId(sessionId);
+        List<CompletedConversationPair> eligiblePairs = eligibleCompletedPairs(
+                tasks == null ? List.of() : tasks, sortedMessages, messagesById, messageOrder);
+        int unlinkedLegacyFinalCount = unlinkedLegacyFinalCount(sortedMessages);
+        ChatSessionDTO.MetaData metadata = loadMetadata(sessionId);
+        String existingSummary = metadata == null ? null : metadata.getContextSummary();
+        String existingBoundary = metadata == null ? null : metadata.getContextSummaryLastMessageId();
+        CompletedConversationPair boundaryPair = eligiblePairs.stream()
+                .filter(pair -> pair.finalMessage().getId().equals(existingBoundary))
+                .findFirst()
+                .orElse(null);
+        boolean cacheUsable = isTaskAwareSummary(existingSummary) && boundaryPair != null;
+
+        if (unlinkedLegacyFinalCount > 0) {
+            log.info("Task-aware completed conversation ignored unlinked legacy finals: sessionId={}, count={}",
+                    sessionId, unlinkedLegacyFinalCount);
+        }
+
+        if (!cacheUsable && (StringUtils.hasText(existingSummary) || StringUtils.hasText(existingBoundary))) {
+            log.info("Ignoring untrusted completed-conversation summary cache: sessionId={}, boundaryMessageId={}",
+                    sessionId, existingBoundary);
+            clearSummaryMetadata(sessionId, metadata);
+        }
+
+        if (eligiblePairs.isEmpty()) {
+            return new CompletedConversationProjection(null, currentUser == null ? List.of() : List.of(currentUser),
+                    null, false, unlinkedLegacyFinalCount);
+        }
+
+        if (!cacheUsable) {
+            return rebuildCompletedConversation(sessionId, model, metadata, eligiblePairs, currentUser,
+                    unlinkedLegacyFinalCount, null);
+        }
+
+        List<CompletedConversationPair> uncoveredPairs = eligiblePairs.stream()
+                .filter(pair -> pair.finalOrder() > boundaryPair.finalOrder())
+                .toList();
+        List<ChatMessageDTO> uncoveredMessages = completedMessages(uncoveredPairs, currentUser);
+        if (completedProjectionNeedsRefresh(model, existingSummary, uncoveredMessages)) {
+            return rebuildCompletedConversation(sessionId, model, metadata, eligiblePairs, currentUser,
+                    unlinkedLegacyFinalCount, existingSummary);
+        }
+        return new CompletedConversationProjection(existingSummary, uncoveredMessages,
+                boundaryPair.finalMessage().getId(), false, unlinkedLegacyFinalCount);
     }
 
     @Override
@@ -145,6 +224,214 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                     ? state.effectiveTail()
                     : recentMessages;
             return new CompressedContext(state.effectiveSummary(), fallbackMessages, false);
+        }
+    }
+
+    private ChatMessageDTO currentUserMessage(Map<String, ChatMessageDTO> messagesById,
+                                              String currentUserMessageId) {
+        if (!StringUtils.hasText(currentUserMessageId)) {
+            return null;
+        }
+        ChatMessageDTO currentUser = messagesById.get(currentUserMessageId);
+        if (currentUser == null || currentUser.getRole() != ChatMessageDTO.RoleType.USER) {
+            throw new IllegalStateException(
+                    "Current Agent task user message is missing or is not a User message: messageId="
+                            + currentUserMessageId);
+        }
+        return currentUser;
+    }
+
+    private List<CompletedConversationPair> eligibleCompletedPairs(
+            List<AgentTask> tasks,
+            List<ChatMessageDTO> sortedMessages,
+            Map<String, ChatMessageDTO> messagesById,
+            Map<String, Integer> messageOrder) {
+        Map<String, List<ChatMessageDTO>> finalMessagesByTaskId = sortedMessages.stream()
+                .filter(this::isTaskLinkedFinal)
+                .collect(Collectors.groupingBy(
+                        message -> message.getMetadata().getTaskId(),
+                        LinkedHashMap::new,
+                        Collectors.toList()));
+        List<CompletedConversationPair> pairs = new ArrayList<>();
+        for (AgentTask task : tasks) {
+            if (task == null || !AgentTaskLogService.STATUS_SUCCESS.equals(task.getStatus())
+                    || !StringUtils.hasText(task.getId()) || !StringUtils.hasText(task.getUserMessageId())) {
+                continue;
+            }
+            ChatMessageDTO user = messagesById.get(task.getUserMessageId());
+            List<ChatMessageDTO> finals = finalMessagesByTaskId.getOrDefault(task.getId(), List.of());
+            if (user == null || user.getRole() != ChatMessageDTO.RoleType.USER || finals.size() != 1) {
+                log.warn("Ignoring completed task without a unique durable User/Final pair: taskId={}, userMessageId={}, finalCount={}",
+                        task.getId(), task.getUserMessageId(), finals.size());
+                continue;
+            }
+            ChatMessageDTO finalMessage = finals.get(0);
+            Integer userOrder = messageOrder.get(user.getId());
+            Integer finalOrder = messageOrder.get(finalMessage.getId());
+            if (userOrder == null || finalOrder == null || userOrder >= finalOrder) {
+                log.warn("Ignoring completed task with invalid durable User/Final order: taskId={}", task.getId());
+                continue;
+            }
+            pairs.add(new CompletedConversationPair(task.getId(), user, finalMessage, finalOrder));
+        }
+        pairs.sort(Comparator.comparingInt(CompletedConversationPair::finalOrder));
+        return List.copyOf(pairs);
+    }
+
+    private boolean isTaskLinkedFinal(ChatMessageDTO message) {
+        return message != null
+                && message.getRole() == ChatMessageDTO.RoleType.ASSISTANT
+                && StringUtils.hasText(message.getContent())
+                && message.getMetadata() != null
+                && StringUtils.hasText(message.getMetadata().getTaskId())
+                && (message.getMetadata().getToolCalls() == null
+                || message.getMetadata().getToolCalls().isEmpty());
+    }
+
+    private int unlinkedLegacyFinalCount(List<ChatMessageDTO> messages) {
+        return (int) messages.stream()
+                .filter(Objects::nonNull)
+                .filter(message -> message.getRole() == ChatMessageDTO.RoleType.ASSISTANT)
+                .filter(message -> StringUtils.hasText(message.getContent()))
+                .filter(message -> message.getMetadata() == null
+                        || !StringUtils.hasText(message.getMetadata().getTaskId()))
+                .filter(message -> message.getMetadata() == null
+                        || message.getMetadata().getToolCalls() == null
+                        || message.getMetadata().getToolCalls().isEmpty())
+                .count();
+    }
+
+    private CompletedConversationProjection rebuildCompletedConversation(
+            String sessionId,
+            String model,
+            ChatSessionDTO.MetaData metadata,
+            List<CompletedConversationPair> eligiblePairs,
+            ChatMessageDTO currentUser,
+            int unlinkedLegacyFinalCount,
+            String safeFallbackSummary) {
+        List<ChatMessageDTO> eligibleMessages = completedMessages(eligiblePairs, null);
+        String prompt = buildCompletedConversationSummaryPrompt(eligiblePairs);
+        try {
+            String summary = conversationSummaryClient.summarize(model, prompt);
+            String normalizedSummary = summary == null ? null : summary.strip();
+            if (!isTaskAwareSummary(normalizedSummary)) {
+                throw new IllegalStateException("Completed conversation summary has invalid structure");
+            }
+            if (normalizedSummary.length() > properties.getMaxSummaryChars()) {
+                throw new IllegalStateException("Completed conversation summary exceeds maxSummaryChars");
+            }
+            int inputTokens = totalContentTokens(model, eligibleMessages).tokens();
+            int outputTokens = tokenCounter.countText(model, normalizedSummary).tokens();
+            if (outputTokens >= inputTokens) {
+                throw new IllegalStateException("Completed conversation summary did not reduce tokens");
+            }
+            String boundaryMessageId = eligiblePairs.get(eligiblePairs.size() - 1).finalMessage().getId();
+            saveMetadata(sessionId, metadata, normalizedSummary, boundaryMessageId);
+            return new CompletedConversationProjection(normalizedSummary,
+                    currentUser == null ? List.of() : List.of(currentUser),
+                    boundaryMessageId, true, unlinkedLegacyFinalCount);
+        } catch (Exception error) {
+            log.warn("Task-aware completed conversation summary failed closed: sessionId={}, error={}",
+                    sessionId, error.getMessage(), error);
+            if (StringUtils.hasText(safeFallbackSummary)) {
+                CompletedConversationPair fallbackBoundary = eligiblePairs.stream()
+                        .filter(pair -> pair.finalMessage().getId().equals(
+                                metadata == null ? null : metadata.getContextSummaryLastMessageId()))
+                        .findFirst()
+                        .orElse(null);
+                if (fallbackBoundary != null && isTaskAwareSummary(safeFallbackSummary)) {
+                    List<CompletedConversationPair> uncovered = eligiblePairs.stream()
+                            .filter(pair -> pair.finalOrder() > fallbackBoundary.finalOrder())
+                            .toList();
+                    return new CompletedConversationProjection(safeFallbackSummary,
+                            completedMessages(uncovered, currentUser),
+                            fallbackBoundary.finalMessage().getId(), false, unlinkedLegacyFinalCount);
+                }
+            }
+            clearSummaryMetadata(sessionId, metadata);
+            return new CompletedConversationProjection(null,
+                    completedMessages(eligiblePairs, currentUser), null, false, unlinkedLegacyFinalCount);
+        }
+    }
+
+    private List<ChatMessageDTO> completedMessages(List<CompletedConversationPair> pairs,
+                                                   ChatMessageDTO currentUser) {
+        List<ChatMessageDTO> messages = new ArrayList<>(pairs.size() * 2 + (currentUser == null ? 0 : 1));
+        for (CompletedConversationPair pair : pairs) {
+            messages.add(pair.userMessage());
+            messages.add(pair.finalMessage());
+        }
+        if (currentUser != null) {
+            messages.add(currentUser);
+        }
+        return List.copyOf(messages);
+    }
+
+    private boolean completedProjectionNeedsRefresh(String model,
+                                                    String summary,
+                                                    List<ChatMessageDTO> uncoveredMessages) {
+        if (uncoveredMessages.isEmpty()) {
+            return false;
+        }
+        List<ChatMessageDTO> effective = new ArrayList<>();
+        effective.add(summaryMessage(summary));
+        effective.addAll(uncoveredMessages);
+        int tokenLimit = properties.thresholdFor(model).getMaxContextTokens();
+        return totalContentTokens(model, effective).tokens() >= tokenLimit
+                || uncoveredMessages.size() > properties.getMaxHistoryMessages();
+    }
+
+    private String buildCompletedConversationSummaryPrompt(List<CompletedConversationPair> pairs) {
+        String completedConversation = pairs.stream()
+                .map(pair -> "Completed Task " + pair.taskId() + "\n"
+                        + "User Question:\n" + nullToEmpty(pair.userMessage().getContent()) + "\n\n"
+                        + "Final Answer:\n" + nullToEmpty(pair.finalMessage().getContent()))
+                .collect(Collectors.joining("\n\n---\n\n"));
+        return "你是一个 Java 后端 Agent 的跨任务会话摘要器。\n"
+                + "输入只包含已经成功完成并具有可靠User/Final关联的会话。\n"
+                + "不要添加工具调用、工具结果、内部执行步骤或未确认事实。\n"
+                + "必须严格使用以下结构并保留所有五个section标题：\n\n"
+                + TASK_AWARE_SUMMARY_HEADER + "\n\n"
+                + String.join("\n", TASK_AWARE_SUMMARY_SECTIONS) + "\n\n"
+                + "在各section标题下使用简洁的缩进条目；没有内容时写 none。\n"
+                + "保留对未来轮次仍重要的精确数值、约束、决策和未解决事项。\n"
+                + "控制在 " + properties.getMaxSummaryChars() + " 字符以内。\n\n"
+                + "Eligible completed conversations:\n"
+                + completedConversation;
+    }
+
+    private boolean isTaskAwareSummary(String summary) {
+        if (!StringUtils.hasText(summary) || !summary.startsWith(TASK_AWARE_SUMMARY_HEADER)) {
+            return false;
+        }
+        int previousIndex = -1;
+        for (String section : TASK_AWARE_SUMMARY_SECTIONS) {
+            int index = summary.indexOf(section);
+            if (index <= previousIndex) {
+                return false;
+            }
+            previousIndex = index;
+        }
+        return true;
+    }
+
+    private void clearSummaryMetadata(String sessionId, ChatSessionDTO.MetaData metadata) {
+        ChatSessionDTO.MetaData updated = metadata == null ? new ChatSessionDTO.MetaData() : metadata;
+        if (!StringUtils.hasText(updated.getContextSummary())
+                && !StringUtils.hasText(updated.getContextSummaryLastMessageId())) {
+            return;
+        }
+        updated.setContextSummary(null);
+        updated.setContextSummaryLastMessageId(null);
+        updated.setContextSummaryUpdatedAt(null);
+        try {
+            ChatSession chatSession = ChatSession.builder()
+                    .id(sessionId)
+                    .metadata(objectMapper.writeValueAsString(updated))
+                    .build();
+            chatSessionMapper.updateById(chatSession);
+        } catch (JsonProcessingException error) {
+            throw new IllegalStateException("Unable to clear untrusted completed-conversation summary", error);
         }
     }
 
@@ -490,5 +777,11 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
     }
 
     private record MaxToolResultTokenCount(int tokens, String source) {
+    }
+
+    private record CompletedConversationPair(String taskId,
+                                             ChatMessageDTO userMessage,
+                                             ChatMessageDTO finalMessage,
+                                             int finalOrder) {
     }
 }

@@ -3,6 +3,7 @@ package com.kama.jchatmind.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.config.ContextCompressionProperties;
 import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
+import com.kama.jchatmind.mapper.AgentTaskMapper;
 import com.kama.jchatmind.mapper.ChatSessionMapper;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.dto.ChatSessionDTO;
@@ -42,6 +43,9 @@ class ConversationContextCompressorTest {
     @Mock
     private ChatSessionMapper chatSessionMapper;
 
+    @Mock
+    private AgentTaskMapper agentTaskMapper;
+
     private ObjectMapper objectMapper;
     private ContextCompressionProperties properties;
     private FakeSummaryClient summaryClient;
@@ -62,7 +66,8 @@ class ConversationContextCompressorTest {
         properties.setCharsPerToken(3);
 
         summaryClient = new FakeSummaryClient();
-        compressor = new ConversationContextCompressorImpl(properties, summaryClient, chatSessionMapper, objectMapper,
+        compressor = new ConversationContextCompressorImpl(properties, summaryClient, chatSessionMapper,
+                agentTaskMapper, objectMapper,
                 new EstimatedTokenCounter(properties));
     }
 

@@ -219,6 +219,30 @@
         LIMIT #{limit}
     </select>
 
+    <select id="selectBySessionId" resultMap="BaseResultMap">
+        SELECT id,
+               session_id,
+               agent_id,
+               user_message_id,
+               status,
+               goal,
+               finish_reason,
+               model_name,
+               max_steps,
+               actual_steps,
+               tool_call_count,
+               latency_ms,
+               trace_id,
+               heartbeat_at,
+               started_at,
+               finished_at,
+               updated_at,
+               error_message
+        FROM agent_task
+        WHERE session_id = CAST(#{sessionId} AS uuid)
+        ORDER BY started_at ASC, id ASC
+    </select>
+
     <delete id="deleteBySessionId">
         DELETE FROM agent_task WHERE session_id = CAST(#{sessionId} AS uuid)
     </delete>

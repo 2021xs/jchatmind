@@ -30,5 +30,7 @@ public interface AgentTaskMapper {
     List<AgentTask> selectRecentBySessionId(@Param("sessionId") String sessionId,
                                             @Param("limit") int limit);
 
+    List<AgentTask> selectBySessionId(@Param("sessionId") String sessionId);
+
     int deleteBySessionId(@Param("sessionId") String sessionId);
 }

@@ -92,8 +92,9 @@ class JChatMindFactoryMcpToolIntegrationTest {
         ChatMessageFacadeService chatMessageFacadeService = mock(ChatMessageFacadeService.class);
         when(chatMessageFacadeService.getChatMessageDTOsBySessionId("session-1")).thenReturn(List.of());
         ConversationContextCompressor compressor = mock(ConversationContextCompressor.class);
-        when(compressor.compressIfNeeded("session-1", "deepseek-chat", List.of()))
-                .thenReturn(new ConversationContextCompressor.CompressedContext("", List.of(), false));
+        when(compressor.projectCompletedConversation("session-1", "deepseek-chat", "message-1", List.of()))
+                .thenReturn(new ConversationContextCompressor.CompletedConversationProjection(
+                        "", List.of(), null, false, 0));
 
         JChatMindFactory factory = new JChatMindFactory(
                 new ChatClientRegistry(Map.of("deepseek-chat", mock(ChatClient.class, RETURNS_DEEP_STUBS))),
@@ -166,8 +167,9 @@ class JChatMindFactoryMcpToolIntegrationTest {
         ChatMessageFacadeService chatMessages = mock(ChatMessageFacadeService.class);
         when(chatMessages.getChatMessageDTOsBySessionId("session-1")).thenReturn(List.of());
         ConversationContextCompressor compressor = mock(ConversationContextCompressor.class);
-        when(compressor.compressIfNeeded("session-1", "deepseek-chat", List.of()))
-                .thenReturn(new ConversationContextCompressor.CompressedContext("", List.of(), false));
+        when(compressor.projectCompletedConversation("session-1", "deepseek-chat", "message-1", List.of()))
+                .thenReturn(new ConversationContextCompressor.CompletedConversationProjection(
+                        "", List.of(), null, false, 0));
 
         JChatMindFactory factory = new JChatMindFactory(
                 new ChatClientRegistry(Map.of("deepseek-chat", mock(ChatClient.class, RETURNS_DEEP_STUBS))),

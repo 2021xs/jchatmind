@@ -175,12 +175,13 @@ public class JChatMindFactory {
                 .build();
     }
 
-    private List<Message> loadMemory(String chatSessionId, String model) {
+    private List<Message> loadMemory(String chatSessionId, String model, String currentUserMessageId) {
         List<ChatMessageDTO> allMessages = chatMessageFacadeService.getChatMessageDTOsBySessionId(chatSessionId);
-        ConversationContextCompressor.CompressedContext compressedContext =
-                conversationContextCompressor.compressIfNeeded(chatSessionId, model, allMessages);
+        ConversationContextCompressor.CompletedConversationProjection projection =
+                conversationContextCompressor.projectCompletedConversation(
+                        chatSessionId, model, currentUserMessageId, allMessages);
         return AgentMemoryHistorySanitizer.toSafeReplayMessages(
-                compressedContext.summary(), compressedContext.recentMessages());
+                projection.summary(), projection.messages());
     }
 
     private AgentDTO toAgentConfig(Agent agent) {
@@ -374,7 +375,7 @@ public class JChatMindFactory {
         Agent agent = loadAgent(agentId);
         agent = withRuntimeModel(agent, runtimeModel);
         AgentDTO agentConfig = withRuntimeAllowedTools(toAgentConfig(agent), runtimeAllowedToolNames);
-        List<Message> memory = loadMemory(chatSessionId, agent.getModel());
+        List<Message> memory = loadMemory(chatSessionId, agent.getModel(), userMessageId);
         if (StringUtils.hasText(runtimeSystemContext)) {
             memory = new ArrayList<>(memory);
             memory.add(0, new SystemMessage(runtimeSystemContext));

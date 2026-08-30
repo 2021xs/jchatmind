@@ -14,6 +14,11 @@ public interface ConversationContextCompressor {
 
     CompressedContext compressIfNeeded(String sessionId, String model, List<ChatMessageDTO> allMessages);
 
+    CompletedConversationProjection projectCompletedConversation(String sessionId,
+                                                                  String model,
+                                                                  String currentUserMessageId,
+                                                                  List<ChatMessageDTO> allMessages);
+
     static String summaryMessageContent(String summary) {
         return SUMMARY_PREFIX + summary + SUMMARY_SUFFIX;
     }
@@ -49,5 +54,12 @@ public interface ConversationContextCompressor {
     }
 
     record CompressedContext(String summary, List<ChatMessageDTO> recentMessages, boolean compressed) {
+    }
+
+    record CompletedConversationProjection(String summary,
+                                           List<ChatMessageDTO> messages,
+                                           String coverageBoundaryMessageId,
+                                           boolean freshRebuild,
+                                           int unlinkedLegacyFinalCount) {
     }
 }

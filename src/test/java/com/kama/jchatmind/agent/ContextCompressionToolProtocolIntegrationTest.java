@@ -2,6 +2,7 @@ package com.kama.jchatmind.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.config.ContextCompressionProperties;
+import com.kama.jchatmind.mapper.AgentTaskMapper;
 import com.kama.jchatmind.mapper.ChatSessionMapper;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.service.ConversationContextCompressor;
@@ -41,6 +42,7 @@ class ContextCompressionToolProtocolIntegrationTest {
                 properties,
                 (model, prompt) -> "summary",
                 sessionMapper,
+                mock(AgentTaskMapper.class),
                 new ObjectMapper().findAndRegisterModules(),
                 new EstimatedTokenCounter(properties));
 
