@@ -12,5 +12,4 @@ public class DatabaseToolProperties {
     private int queryTimeoutSeconds = 5;
     private int fetchSize = 50;
     private int maxCellChars = 500;
-    private int maxResultLength = 4000;
 }

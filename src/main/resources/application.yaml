@@ -142,7 +142,6 @@ jchatmind:
       query-timeout-seconds: ${AGENT_DB_TOOL_QUERY_TIMEOUT_SECONDS:5}
       fetch-size: ${AGENT_DB_TOOL_FETCH_SIZE:50}
       max-cell-chars: ${AGENT_DB_TOOL_MAX_CELL_CHARS:500}
-      max-result-length: ${AGENT_DB_TOOL_MAX_RESULT_LENGTH:4000}
     observability:
       stale-running-threshold-minutes: 10
       recovery-enabled: true

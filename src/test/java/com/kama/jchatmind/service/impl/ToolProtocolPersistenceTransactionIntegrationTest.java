@@ -4,7 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.agent.AgentToolProtocolInspector;
 import com.kama.jchatmind.agent.tools.CodeChunkTools;
 import com.kama.jchatmind.agent.tools.CodeSearchTools;
+import com.kama.jchatmind.agent.tools.DataBaseTools;
+import com.kama.jchatmind.agent.tools.SqlSafetyValidator;
 import com.kama.jchatmind.config.AgentObservabilityProperties;
+import com.kama.jchatmind.config.DatabaseToolProperties;
 import com.kama.jchatmind.converter.ChatMessageConverter;
 import com.kama.jchatmind.mapper.AgentStepMapper;
 import com.kama.jchatmind.mapper.AgentTaskMapper;
@@ -277,6 +280,70 @@ class ToolProtocolPersistenceTransactionIntegrationTest {
                 toProtocolMessages(persisted));
         assertThat(inspection.valid()).isTrue();
         assertThat(inspection.orphanToolProtocolCount()).isZero();
+    }
+
+    @Test
+    void oversizedDatabaseCanonicalResultRetainsPartialContractAndFingerprintAfterReload() throws Exception {
+        String tailMarker = "_DB_CANONICAL_TAIL";
+        jdbc.execute("""
+                CREATE TABLE IF NOT EXISTS database_tool_result_fixture (
+                    row_no integer PRIMARY KEY,
+                    payload text NOT NULL
+                )
+                """);
+        jdbc.execute("TRUNCATE TABLE database_tool_result_fixture");
+        jdbc.update("""
+                INSERT INTO database_tool_result_fixture (row_no, payload)
+                SELECT value,
+                       repeat('x', 100) || CASE WHEN value = 50 THEN ? ELSE '' END
+                FROM generate_series(1, 51) value
+                """, tailMarker);
+
+        DataBaseTools databaseTools = new DataBaseTools(
+                jdbc, new SqlSafetyValidator(), new DatabaseToolProperties());
+        String canonical = databaseTools.query("""
+                SELECT row_no, payload
+                FROM database_tool_result_fixture
+                ORDER BY row_no
+                """);
+        String expectedFingerprint = sha256(canonical);
+        assertThat(canonical).hasSize(5_558);
+        assertThat(expectedFingerprint)
+                .isEqualTo("a42e93e492d3f6b6fdb7faa1880129149e15ca301f8e83bf86dc36e2bed54475");
+        assertThat(canonical)
+                .hasSizeGreaterThan(4_000)
+                .contains("status: PARTIAL")
+                .contains("completeness: PARTIAL")
+                .contains("rowsReturned: 50")
+                .contains("rowLimit: 50")
+                .contains("hasMore: true")
+                .contains(tailMarker)
+                .doesNotContain("51 |")
+                .doesNotContain("...[truncated]");
+
+        AssistantMessage assistant = AssistantMessage.builder().content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        "call-db", "function", "databaseQuery",
+                        "{\"sql\":\"SELECT row_no, payload FROM database_tool_result_fixture ORDER BY row_no\"}")))
+                .build();
+        ToolResponseMessage response = ToolResponseMessage.builder()
+                .responses(List.of(new ToolResponseMessage.ToolResponse(
+                        "call-db", "databaseQuery", canonical)))
+                .build();
+        messageService.createToolProtocolBatch(sessionId, taskId, assistant, response);
+
+        List<ChatMessageDTO> persisted = messageService.getChatMessageDTOsBySessionId(sessionId);
+        ChatMessageDTO databaseResponse = persisted.stream()
+                .filter(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL)
+                .findFirst()
+                .orElseThrow();
+        assertThat(databaseResponse.getContent()).isEqualTo(canonical).contains(tailMarker);
+        assertThat(sha256(databaseResponse.getContent())).isEqualTo(expectedFingerprint);
+        AgentToolProtocolInspector.Inspection inspection = AgentToolProtocolInspector.inspect(
+                toProtocolMessages(persisted));
+        assertThat(inspection.valid()).isTrue();
+        assertThat(inspection.orphanToolProtocolCount()).isZero();
+        assertThat(inspection.protocolValidationFailureCount()).isZero();
     }
 
     @Test

@@ -68,6 +68,18 @@ class SqlSafetyValidatorTest {
     }
 
     @Test
+    void databaseProbeLimitPreservesSmallExplicitLimitsAndCapsLargerOnes() {
+        assertEquals("SELECT * FROM users LIMIT 10",
+                validator.validate("SELECT * FROM users LIMIT 10", 51).executableSql());
+        assertEquals("SELECT * FROM users LIMIT 50",
+                validator.validate("SELECT * FROM users LIMIT 50", 51).executableSql());
+        assertEquals("SELECT * FROM users LIMIT 51",
+                validator.validate("SELECT * FROM users LIMIT 100", 51).executableSql());
+        assertEquals("SELECT * FROM users LIMIT 51",
+                validator.validate("SELECT * FROM users", 51).executableSql());
+    }
+
+    @Test
     void selectIntoOutfileShouldBeRejected() {
         assertRejected("SELECT * INTO OUTFILE '/tmp/users.csv' FROM users");
         assertRejected("SELECT * INTO DUMPFILE '/tmp/users.bin' FROM users");

@@ -63,8 +63,9 @@ class DatabaseToolDataSourceConfigTest {
     void dataBaseToolsUsesQualifiedReadOnlyJdbcTemplate() {
         JdbcTemplate defaultJdbcTemplate = mock(JdbcTemplate.class);
         JdbcTemplate readOnlyJdbcTemplate = mock(JdbcTemplate.class);
-        when(readOnlyJdbcTemplate.query(eq("SELECT 1 LIMIT 50"), any(ResultSetExtractor.class)))
-                .thenReturn(List.of("one", "---", "1"));
+        when(readOnlyJdbcTemplate.query(eq("SELECT 1 LIMIT 51"), any(ResultSetExtractor.class)))
+                .thenReturn(List.of("status: SUCCESS", "completeness: COMPLETE", "rowsReturned: 1",
+                        "rowLimit: 50", "hasMore: false", "", "columns:", "one", "", "rows:", "1"));
 
         new ApplicationContextRunner()
                 .withBean("jdbcTemplate", JdbcTemplate.class, () -> defaultJdbcTemplate)
@@ -79,9 +80,9 @@ class DatabaseToolDataSourceConfigTest {
 
                     assertThat(result).contains("Query result:");
                     verify(readOnlyJdbcTemplate).setQueryTimeout(5);
-                    verify(readOnlyJdbcTemplate).setMaxRows(50);
+                    verify(readOnlyJdbcTemplate).setMaxRows(51);
                     verify(readOnlyJdbcTemplate).setFetchSize(50);
-                    verify(readOnlyJdbcTemplate).query(eq("SELECT 1 LIMIT 50"), any(ResultSetExtractor.class));
+                    verify(readOnlyJdbcTemplate).query(eq("SELECT 1 LIMIT 51"), any(ResultSetExtractor.class));
                     verify(defaultJdbcTemplate, never()).query(any(String.class), any(ResultSetExtractor.class));
                 });
     }

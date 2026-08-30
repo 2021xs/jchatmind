@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -60,15 +61,26 @@ import static org.mockito.Mockito.when;
 class JChatMindToolResultGuardTest {
 
     @Test
-    void executorCanonicalResultIsPersistedBeforeBoundedModelViewIsBuilt() {
-        String rawResult = "evidence-" + "x".repeat(300) + "-RAW-TAIL";
+    void oversizedDatabaseCanonicalResultIsPersistedBeforeBoundedModelViewIsBuilt() {
+        String rawResult = """
+                Query result:
+                status: PARTIAL
+                completeness: PARTIAL
+                rowsReturned: 50
+                rowLimit: 50
+                hasMore: true
+
+                rows:
+                """ + String.join("\n", IntStream.rangeClosed(1, 50)
+                .mapToObj(index -> "%d | %s".formatted(index, "x".repeat(100)))
+                .toList()) + "\nDB-CANONICAL-TAIL";
         int maxResultChars = 100;
-        ToolCallback largeTool = callback("largeTool", rawResult);
+        ToolCallback largeTool = callback("databaseQuery", rawResult);
 
         ChatResponse toolCallResponse = response(AssistantMessage.builder()
                 .content("")
                 .toolCalls(List.of(new AssistantMessage.ToolCall(
-                        "call-1", "function", "largeTool", "{}")))
+                        "call-1", "function", "databaseQuery", "{}")))
                 .build());
         ChatResponse finalResponse = response(AssistantMessage.builder()
                 .content("done")
@@ -101,13 +113,13 @@ class JChatMindToolResultGuardTest {
         when(toolExecutionService.beforeToolCall(any(), any()))
                 .thenReturn(ToolExecutionRecord.builder()
                         .toolCallId("call-1")
-                        .actualToolName("largeTool")
-                        .canonicalToolName("largeTool")
+                        .actualToolName("databaseQuery")
+                        .canonicalToolName("databaseQuery")
                         .toolCallLogId("tool-log-1")
                         .startedAtMillis(System.currentTimeMillis())
                         .build());
         ToolRegistry toolRegistry = mock(ToolRegistry.class);
-        when(toolRegistry.canonicalName("largeTool")).thenReturn("largeTool");
+        when(toolRegistry.canonicalName("databaseQuery")).thenReturn("databaseQuery");
 
         ToolResultProperties resultProperties = new ToolResultProperties();
         resultProperties.setDefaultMaxResultChars(maxResultChars);
@@ -143,7 +155,7 @@ class JChatMindToolResultGuardTest {
                     List.of(new UserMessage("find evidence")), List.of(largeTool), List.of(), "session-1",
                     mock(SseService.class), toolExecutionService, messageService,
                     mock(ChatMessageConverter.class), logService, compressor, "user-message-1",
-                    List.of("largeTool"), new ToolCorrectionProperties(), new ToolFailureClassifier(), batchExecutor);
+                    List.of("databaseQuery"), new ToolCorrectionProperties(), new ToolFailureClassifier(), batchExecutor);
             JChatMindSafeFinalTestSupport.configure(agent, requestSpec, "validated final answer");
 
             agent.run();
@@ -169,7 +181,7 @@ class JChatMindToolResultGuardTest {
 
         assertEquals(maxResultChars, promptResult.codePointCount(0, promptResult.length()));
         assertTrue(promptResult.contains("[TRUNCATED: originalChars="));
-        assertFalse(promptResult.contains("RAW-TAIL"));
+        assertFalse(promptResult.contains("DB-CANONICAL-TAIL"));
         assertNotEquals(rawResult, promptResult);
         assertEquals(rawResult, storedToolResult);
         assertEquals(promptResult, finalProjection.get().executionTranscript().stream()
@@ -192,7 +204,7 @@ class JChatMindToolResultGuardTest {
                 messageService, resultGuard, toolExecutionService);
         persistenceBeforeProjection.verify(messageService).createToolProtocolBatch(
                 eq("session-1"), eq("task-1"), any(AssistantMessage.class), any(ToolResponseMessage.class));
-        persistenceBeforeProjection.verify(resultGuard).guard("largeTool", "largeTool", rawResult);
+        persistenceBeforeProjection.verify(resultGuard).guard("databaseQuery", "databaseQuery", rawResult);
         persistenceBeforeProjection.verify(toolExecutionService)
                 .afterToolSuccess(any(), any(ToolExecutionRecord.class), eq(promptResult));
     }

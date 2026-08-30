@@ -28,7 +28,7 @@ public class DataBaseTools implements Tool {
         this.properties = properties;
         log.info("DataBaseTools initialized with databaseToolJdbcTemplate; configure it with a read-only database account");
         this.jdbcTemplate.setQueryTimeout(properties.getQueryTimeoutSeconds());
-        this.jdbcTemplate.setMaxRows(properties.getMaxRows());
+        this.jdbcTemplate.setMaxRows(probeLimit());
         this.jdbcTemplate.setFetchSize(properties.getFetchSize());
     }
 
@@ -49,13 +49,14 @@ public class DataBaseTools implements Tool {
                     To inspect tables, query information_schema.tables or information_schema.columns with table_schema='public'.
                     Use this tool only when the user explicitly asks about database schema, fields, records, or SQL query results,
                     or when code evidence cannot explain persistence behavior. For code execution flow analysis, prefer searchProjectCode.
+                    If hasMore=true, the result is partial; narrow or aggregate the query when complete coverage is required.
                     Dangerous SQL is rejected by parser policy.
                     """
     )
     public String query(String sql) {
         SqlSafetyValidator.SqlValidationResult validation;
         try {
-            validation = sqlSafetyValidator.validate(sql, properties.getMaxRows());
+            validation = sqlSafetyValidator.validate(sql, probeLimit());
         } catch (IllegalArgumentException e) {
             log.warn("Rejected unsafe SQL by parser policy: {}", e.getMessage());
             return "[REJECTED_BY_POLICY] rejected=true reason=" + e.getMessage();
@@ -63,8 +64,7 @@ public class DataBaseTools implements Tool {
 
         try {
             List<String> rows = jdbcTemplate.query(validation.executableSql(), (ResultSet rs) -> formatRows(rs));
-            String result = "Query result:\n" + String.join("\n", rows);
-            return truncateFormattedResult(result);
+            return "Query result:\n" + String.join("\n", rows);
         } catch (Exception e) {
             log.error("Database query execution failed: {}", e.getMessage(), e);
             throw new IllegalStateException("Database query execution failed: " + e.getMessage(), e);
@@ -75,47 +75,62 @@ public class DataBaseTools implements Tool {
         List<String> resultRows = new ArrayList<>();
         ResultSetMetaData metaData = rs.getMetaData();
         int columnCount = metaData.getColumnCount();
-        if (columnCount == 0) {
-            resultRows.add("(no columns)");
-            return resultRows;
-        }
 
         List<String> columnNames = new ArrayList<>();
         for (int i = 1; i <= columnCount; i++) {
             columnNames.add(metaData.getColumnName(i));
         }
-        resultRows.add(String.join(" | ", columnNames));
-        resultRows.add("-".repeat(Math.max(3, resultRows.get(0).length())));
 
-        int rowCount = 0;
-        while (rs.next() && rowCount < properties.getMaxRows()) {
+        List<String> dataRows = new ArrayList<>();
+        int probeLimit = probeLimit();
+        while (dataRows.size() < probeLimit && rs.next()) {
             List<String> values = new ArrayList<>();
             for (int i = 1; i <= columnCount; i++) {
                 Object value = rs.getObject(i);
                 values.add(value == null ? "NULL" : truncateCell(String.valueOf(value)));
             }
-            resultRows.add(String.join(" | ", values));
-            rowCount++;
+            dataRows.add(String.join(" | ", values));
         }
-        if (rowCount == 0) {
-            resultRows.add("(no rows)");
+
+        boolean hasMore = dataRows.size() > properties.getMaxRows();
+        if (hasMore) {
+            dataRows = new ArrayList<>(dataRows.subList(0, properties.getMaxRows()));
         }
+
+        resultRows.add("status: " + (hasMore ? "PARTIAL" : "SUCCESS"));
+        resultRows.add("completeness: " + (hasMore ? "PARTIAL" : "COMPLETE"));
+        resultRows.add("rowsReturned: " + dataRows.size());
+        resultRows.add("rowLimit: " + properties.getMaxRows());
+        resultRows.add("hasMore: " + hasMore);
+        if (hasMore) {
+            resultRows.add("");
+            resultRows.add("message:");
+            resultRows.add("More rows exist. The rows below are a bounded partial result.");
+            resultRows.add("Do not treat them as the complete query result.");
+        }
+        resultRows.add("");
+        resultRows.add("columns:");
+        resultRows.add(columnNames.isEmpty() ? "(no columns)" : String.join(" | ", columnNames));
+        resultRows.add("");
+        resultRows.add("rows:");
+        resultRows.addAll(dataRows.isEmpty() ? List.of("(no rows)") : dataRows);
         return resultRows;
     }
 
-    private String truncateFormattedResult(String value) {
-        if (value == null || value.length() <= properties.getMaxResultLength()) {
-            return value;
+    private int probeLimit() {
+        int rowLimit = properties.getMaxRows();
+        if (rowLimit <= 0 || rowLimit == Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("maxRows must be between 1 and " + (Integer.MAX_VALUE - 1));
         }
-        int keep = Math.max(0, properties.getMaxResultLength() - 32);
-        return value.substring(0, keep) + "\n...[truncated]";
+        return rowLimit + 1;
     }
 
     private String truncateCell(String value) {
         if (value == null || value.length() <= properties.getMaxCellChars()) {
             return value;
         }
-        int keep = Math.max(0, properties.getMaxCellChars() - 16);
-        return value.substring(0, keep) + "...[truncated]";
+        String marker = "...[TRUNCATED_CELL]";
+        int keep = Math.max(0, properties.getMaxCellChars() - marker.length());
+        return value.substring(0, keep) + marker;
     }
 }

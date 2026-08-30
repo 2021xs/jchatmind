@@ -51,8 +51,9 @@ class ToolSafetyPolicyTest {
     @Test
     void databaseToolShouldAllowSelectWithParserLimit() {
         JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-        when(jdbcTemplate.query(eq("SELECT 1 LIMIT 50"), any(ResultSetExtractor.class)))
-                .thenReturn(List.of("one", "---", "1"));
+        when(jdbcTemplate.query(eq("SELECT 1 LIMIT 51"), any(ResultSetExtractor.class)))
+                .thenReturn(List.of("status: SUCCESS", "completeness: COMPLETE", "rowsReturned: 1",
+                        "rowLimit: 50", "hasMore: false", "", "columns:", "one", "", "rows:", "1"));
 
         DataBaseTools tool = new DataBaseTools(jdbcTemplate);
 
@@ -60,9 +61,9 @@ class ToolSafetyPolicyTest {
 
         assertTrue(selectResult.contains("Query result:"));
         verify(jdbcTemplate).setQueryTimeout(5);
-        verify(jdbcTemplate).setMaxRows(50);
+        verify(jdbcTemplate).setMaxRows(51);
         verify(jdbcTemplate).setFetchSize(50);
-        verify(jdbcTemplate).query(eq("SELECT 1 LIMIT 50"), any(ResultSetExtractor.class));
+        verify(jdbcTemplate).query(eq("SELECT 1 LIMIT 51"), any(ResultSetExtractor.class));
     }
 
     @Test
