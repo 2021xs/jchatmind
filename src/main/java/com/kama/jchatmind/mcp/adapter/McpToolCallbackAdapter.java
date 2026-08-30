@@ -2,7 +2,6 @@ package com.kama.jchatmind.mcp.adapter;
 
 import com.kama.jchatmind.mcp.McpToolCallException;
 import com.kama.jchatmind.mcp.audit.McpToolAuditLogger;
-import com.kama.jchatmind.mcp.config.McpClientProperties;
 import com.kama.jchatmind.mcp.registry.ExternalMcpToolRegistration;
 import com.kama.jchatmind.mcp.registry.ExternalMcpToolRegistry;
 import com.kama.jchatmind.tool.ToolFailureException;
@@ -20,16 +19,13 @@ public class McpToolCallbackAdapter {
     private final ExternalMcpToolRegistry toolRegistry;
     private final ExternalMcpToolInvoker toolInvoker;
     private final McpToolAuditLogger auditLogger;
-    private final McpClientProperties properties;
 
     public McpToolCallbackAdapter(ExternalMcpToolRegistry toolRegistry,
                                   ExternalMcpToolInvoker toolInvoker,
-                                  McpToolAuditLogger auditLogger,
-                                  McpClientProperties properties) {
+                                  McpToolAuditLogger auditLogger) {
         this.toolRegistry = toolRegistry;
         this.toolInvoker = toolInvoker;
         this.auditLogger = auditLogger;
-        this.properties = properties;
     }
 
     public List<ToolCallback> toolCallbacks() {
@@ -88,10 +84,9 @@ public class McpToolCallbackAdapter {
             auditLogger.start(traceId, registration, toolInput);
             try {
                 String result = toolInvoker.invoke(registration, toolInput);
-                TruncatedValue truncated = truncate(result, properties.getMaxResultLength());
-                auditLogger.success(traceId, registration, truncated.value(),
-                        System.currentTimeMillis() - started, truncated.truncated());
-                return truncated.value();
+                auditLogger.success(traceId, registration, result,
+                        System.currentTimeMillis() - started, false);
+                return result;
             } catch (ToolFailureException e) {
                 String safeFailure = e.getErrorType() + ": External MCP tool request was rejected before invocation.";
                 auditLogger.failure(traceId, registration, safeFailure,
@@ -113,18 +108,4 @@ public class McpToolCallbackAdapter {
         }
     }
 
-    private TruncatedValue truncate(String value, int maxLength) {
-        if (value == null) {
-            return new TruncatedValue(null, false);
-        }
-        int effectiveMaxLength = maxLength <= 0 ? 6000 : maxLength;
-        if (value.length() <= effectiveMaxLength) {
-            return new TruncatedValue(value, false);
-        }
-        int keep = Math.max(0, effectiveMaxLength - 32);
-        return new TruncatedValue(value.substring(0, keep) + "\n...[truncated]", true);
-    }
-
-    private record TruncatedValue(String value, boolean truncated) {
-    }
 }

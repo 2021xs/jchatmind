@@ -106,7 +106,7 @@ class JChatMindMultiToolCodeQuestionManualIntegrationTest {
                     new McpExternalToolPolicy());
             RecordingMcpAuditLogger mcpAuditLogger = new RecordingMcpAuditLogger();
             McpToolCallbackAdapter mcpAdapter = new McpToolCallbackAdapter(
-                    externalMcpToolRegistry, springAiAdapter, mcpAuditLogger, mcpProperties);
+                    externalMcpToolRegistry, springAiAdapter, mcpAuditLogger);
 
             List<Tool> runtimeTools = runtimeLocalTools();
             List<ToolCallback> callbacks = new ArrayList<>(localToolCallbacks(runtimeTools));

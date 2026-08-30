@@ -231,6 +231,35 @@ class ToolExecutionServiceImplTest {
     }
 
     @Test
+    void mcpToolCallLogSummaryRemainsBoundedForProjectedModelView() {
+        ToolExecutionServiceImpl service = new ToolExecutionServiceImpl(
+                toolRegistry,
+                agentTaskLogService,
+                agentEventPublisher,
+                new ToolFailureClassifier(),
+                emptyProvider(),
+                emptyProvider()
+        );
+        String toolName = "mcp_docs_readonly_search_docs";
+        ToolExecutionRecord record = ToolExecutionRecord.builder()
+                .toolCallId("call-mcp")
+                .toolCallLogId("log-mcp")
+                .canonicalToolName(toolName)
+                .actualToolName(toolName)
+                .startedAtMillis(System.currentTimeMillis())
+                .build();
+        String modelView = "x".repeat(7_980) + "\n...[TRUNCATED]";
+        String auditSummary = "x".repeat(5_980) + "\n...[truncated]";
+        when(toolRegistry.truncateResult(toolName, modelView)).thenReturn(auditSummary);
+
+        service.afterToolSuccess(context(List.of(toolName)), record, modelView);
+
+        verify(agentTaskLogService).finishToolCall(
+                eq("log-mcp"), eq(auditSummary), anyLong(), eq(true));
+        assertTrue(auditSummary.length() < modelView.length());
+    }
+
+    @Test
     void fakeMcpPrefixedToolWithoutRegistryRegistrationIsRejectedAsUnknownTool() {
         ToolExecutionServiceImpl service = new ToolExecutionServiceImpl(
                 toolRegistry,

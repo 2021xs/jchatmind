@@ -88,7 +88,7 @@ class JChatMindMcpRealAgentConversationManualIntegrationTest {
                     new McpExternalToolPolicy());
             RecordingAuditLogger auditLogger = new RecordingAuditLogger();
             McpToolCallbackAdapter mcpAdapter = new McpToolCallbackAdapter(
-                    registry, springAiAdapter, auditLogger, properties);
+                    registry, springAiAdapter, auditLogger);
             List<ToolCallback> toolCallbacks = mcpAdapter.toolCallbacks();
             List<String> runtimeToolNames = mcpAdapter.exposedToolNames();
 

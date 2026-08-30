@@ -147,7 +147,7 @@ class JChatMindFactoryMcpToolIntegrationTest {
                 ignored -> { throw new IllegalStateException("credential=secret-token command=/private/path"); },
                 new McpExternalToolPolicy());
         McpToolCallbackAdapter mcpAdapter = new McpToolCallbackAdapter(
-                externalRegistry, (tool, argumentsJson) -> "should-not-run", noopAudit(), properties);
+                externalRegistry, (tool, argumentsJson) -> "should-not-run", noopAudit());
 
         Agent agentEntity = Agent.builder().id("agent-1").name("test-agent").description("test")
                 .systemPrompt("system").model("deepseek-chat").allowedTools("[]").allowedKbs("[]")
@@ -260,7 +260,7 @@ class JChatMindFactoryMcpToolIntegrationTest {
                         .inputSchema("{\"type\":\"object\"}")
                         .build()),
                 new McpExternalToolPolicy());
-        return new McpToolCallbackAdapter(registry, (tool, argumentsJson) -> "ok", noopAudit(), properties);
+        return new McpToolCallbackAdapter(registry, (tool, argumentsJson) -> "ok", noopAudit());
     }
 
     private ExternalMcpServerProperties server() {

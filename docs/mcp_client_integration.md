@@ -100,7 +100,7 @@ Agent 构建时，`JChatMindFactory` 会合并两类工具：
 - policy 通过。
 - tool name 必须存在于当前 Agent runtime tool list。
 
-外部 MCP tool 调用会写 audit，并按 `max-result-length` 截断。外部调用异常会以 `MCP_TOOL_CALL_FAILED` typed failure 进入统一 Tool Runtime；不会伪装成普通成功结果，也不会让 callback 异常直接泄漏给用户。
+外部 MCP tool callback 会把经过远端 provider / transport contract 的完整结果交给统一 Tool Runtime：先持久化 canonical ToolResponse，再由全局 model-view guard 控制 Agent Context。MCP audit 与 `tool_call_log` summary 仍独立保持 bounded。`max-result-length` 继续用于下方受控 resource / prompt access，不再截断 Agent tool callback。外部调用异常会以 `MCP_TOOL_CALL_FAILED` typed failure 进入统一 Tool Runtime；不会伪装成普通成功结果，也不会让 callback 异常直接泄漏给用户。
 
 ## Resources
 

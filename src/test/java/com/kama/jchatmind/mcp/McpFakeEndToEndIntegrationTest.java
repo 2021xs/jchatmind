@@ -79,7 +79,7 @@ import static org.mockito.Mockito.when;
 class McpFakeEndToEndIntegrationTest {
 
     @Test
-    void fakeExternalMcpToolPassesDiscoveryPolicyCallbackPreflightInvokeTruncationAndAudit() {
+    void fakeExternalMcpToolPassesDiscoveryPolicyCallbackPreflightCanonicalResultAndAudit() {
         McpClientProperties properties = new McpClientProperties();
         properties.setMaxResultLength(48);
         properties.setAuditEnabled(true);
@@ -92,11 +92,11 @@ class McpFakeEndToEndIntegrationTest {
                 ),
                 new McpExternalToolPolicy());
         RecordingAuditLogger auditLogger = new RecordingAuditLogger();
+        String canonical = "real-read-only-result: " + "x".repeat(100) + "_MCP_CANONICAL_TAIL";
         McpToolCallbackAdapter adapter = new McpToolCallbackAdapter(
                 externalRegistry,
-                (tool, argumentsJson) -> "real-read-only-result: " + "x".repeat(100),
-                auditLogger,
-                properties);
+                (tool, argumentsJson) -> canonical,
+                auditLogger);
 
         List<ToolCallback> callbacks = adapter.toolCallbacks();
         List<String> runtimeNames = adapter.exposedToolNames();
@@ -131,9 +131,10 @@ class McpFakeEndToEndIntegrationTest {
         executionService.afterToolSuccess(context, record, result);
 
         assertEquals("mcp_docs_readonly_search_docs", record.getCanonicalToolName());
-        assertTrue(result.length() <= 48);
-        assertTrue(result.endsWith("...[truncated]"));
-        assertEquals(List.of("start:search_docs", "success:search_docs:true"), auditLogger.events);
+        assertEquals(canonical, result);
+        assertTrue(result.length() > properties.getMaxResultLength());
+        assertTrue(result.endsWith("_MCP_CANONICAL_TAIL"));
+        assertEquals(List.of("start:search_docs", "success:search_docs:false"), auditLogger.events);
         verify(logService).finishToolCall(eq("log-1"), eq(result), anyLong(), eq(false));
     }
 
@@ -153,8 +154,7 @@ class McpFakeEndToEndIntegrationTest {
                 (tool, argumentsJson) -> {
                     throw new IllegalStateException("credential=secret-token command=/private/path");
                 },
-                auditLogger,
-                properties);
+                auditLogger);
         List<ToolCallback> callbacks = adapter.toolCallbacks();
         List<String> runtimeNames = adapter.exposedToolNames();
 
@@ -187,6 +187,8 @@ class McpFakeEndToEndIntegrationTest {
 
     @Test
     void fakeAgentConversationRunsExternalMcpToolThroughJChatMindRuntime() {
+        String tailMarker = "_MCP_CANONICAL_TAIL";
+        String canonical = "x".repeat(9_000) + tailMarker;
         McpClientProperties properties = new McpClientProperties();
         properties.setMaxResultLength(80);
         properties.setAuditEnabled(true);
@@ -198,9 +200,8 @@ class McpFakeEndToEndIntegrationTest {
         RecordingAuditLogger auditLogger = new RecordingAuditLogger();
         McpToolCallbackAdapter adapter = new McpToolCallbackAdapter(
                 externalRegistry,
-                (tool, argumentsJson) -> "external docs answer",
-                auditLogger,
-                properties);
+                (tool, argumentsJson) -> canonical,
+                auditLogger);
         List<ToolCallback> callbacks = adapter.toolCallbacks();
         List<String> runtimeNames = adapter.exposedToolNames();
 
@@ -280,23 +281,29 @@ class McpFakeEndToEndIntegrationTest {
 
             agent.run();
 
-        verify(logService, atLeastOnce()).finishToolCall(eq("tool-log-1"), eq("external docs answer"),
-                anyLong(), eq(false));
-        verify(finalCompletionService).complete(any());
-        verify(logService, never()).finishTask(anyString(), anyString(), anyInt(), anyInt());
-        verify(logService, never()).failTask(anyString(), anyString(), anyInt(), anyInt());
-        ArgumentCaptor<AssistantMessage> assistantCaptor = ArgumentCaptor.forClass(AssistantMessage.class);
-        ArgumentCaptor<ToolResponseMessage> responseCaptor = ArgumentCaptor.forClass(ToolResponseMessage.class);
-        verify(chatMessageFacadeService).createToolProtocolBatch(
-                eq("session-1"), eq("task-1"), assistantCaptor.capture(), responseCaptor.capture());
-        assertEquals(1, assistantCaptor.getValue().getToolCalls().size());
-        assertEquals(1, responseCaptor.getValue().getResponses().size());
-        AssistantMessage.ToolCall requestedCall = assistantCaptor.getValue().getToolCalls().get(0);
-        ToolResponseMessage.ToolResponse terminalResponse = responseCaptor.getValue().getResponses().get(0);
-        assertEquals(requestedCall.id(), terminalResponse.id());
-        assertEquals(runtimeNames.get(0), requestedCall.name());
-        assertEquals(requestedCall.name(), terminalResponse.name());
-        assertEquals("external docs answer", terminalResponse.responseData());
+            ArgumentCaptor<String> modelViewCaptor = ArgumentCaptor.forClass(String.class);
+            verify(logService, atLeastOnce()).finishToolCall(
+                    eq("tool-log-1"), modelViewCaptor.capture(), anyLong(), eq(true));
+            String modelView = modelViewCaptor.getValue();
+            assertEquals(8_000, modelView.length());
+            assertTrue(modelView.contains("[TRUNCATED: originalChars="));
+            assertTrue(!modelView.contains(tailMarker));
+            verify(finalCompletionService).complete(any());
+            verify(logService, never()).finishTask(anyString(), anyString(), anyInt(), anyInt());
+            verify(logService, never()).failTask(anyString(), anyString(), anyInt(), anyInt());
+            ArgumentCaptor<AssistantMessage> assistantCaptor = ArgumentCaptor.forClass(AssistantMessage.class);
+            ArgumentCaptor<ToolResponseMessage> responseCaptor = ArgumentCaptor.forClass(ToolResponseMessage.class);
+            verify(chatMessageFacadeService).createToolProtocolBatch(
+                    eq("session-1"), eq("task-1"), assistantCaptor.capture(), responseCaptor.capture());
+            assertEquals(1, assistantCaptor.getValue().getToolCalls().size());
+            assertEquals(1, responseCaptor.getValue().getResponses().size());
+            AssistantMessage.ToolCall requestedCall = assistantCaptor.getValue().getToolCalls().get(0);
+            ToolResponseMessage.ToolResponse terminalResponse = responseCaptor.getValue().getResponses().get(0);
+            assertEquals(requestedCall.id(), terminalResponse.id());
+            assertEquals(runtimeNames.get(0), requestedCall.name());
+            assertEquals(requestedCall.name(), terminalResponse.name());
+            assertEquals(canonical, terminalResponse.responseData());
+            assertTrue(terminalResponse.responseData().endsWith(tailMarker));
             assertEquals(List.of("start:search_docs", "success:search_docs:false"), auditLogger.events);
         }
     }
@@ -317,8 +324,7 @@ class McpFakeEndToEndIntegrationTest {
                 (tool, argumentsJson) -> {
                     throw new IllegalStateException("credential=secret-token command=/private/path");
                 },
-                auditLogger,
-                properties);
+                auditLogger);
         List<ToolCallback> callbacks = adapter.toolCallbacks();
         List<String> runtimeNames = adapter.exposedToolNames();
 

@@ -115,6 +115,14 @@ class JChatMindToolResultGuardTest {
                 "knowledgeQuery", canonical, "KNOWLEDGE-SMALL-TAIL", 8_000, false);
     }
 
+    @Test
+    void normalMcpCanonicalResultRemainsExactInPersistentAndModelViews() {
+        String canonical = "MCP-SMALL-CANONICAL-TAIL";
+
+        assertToolResultLifecycle(
+                "mcp_docs_readonly_search_docs", canonical, canonical, 8_000, false);
+    }
+
     private void assertToolResultLifecycle(String toolName, String rawResult, String tailMarker,
                                            int maxResultChars, boolean expectBoundedView) {
         ToolCallback largeTool = callback(toolName, rawResult);

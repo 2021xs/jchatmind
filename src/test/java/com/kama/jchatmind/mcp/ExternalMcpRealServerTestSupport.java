@@ -113,7 +113,7 @@ final class ExternalMcpRealServerTestSupport {
                     new McpExternalToolPolicy());
             McpToolAuditLogger auditLogger = new RecordingAuditLogger();
             McpToolCallbackAdapter callbackAdapter = new McpToolCallbackAdapter(
-                    registry, springAiAdapter, auditLogger, properties);
+                    registry, springAiAdapter, auditLogger);
 
             String exposedName = exposedName(testCase.serverName(), testCase.toolName());
             String deniedExposedName = deniedToolName == null ? null : exposedName(testCase.serverName(), deniedToolName);
@@ -162,7 +162,6 @@ final class ExternalMcpRealServerTestSupport {
 
             assertNotNull(result);
             assertFalse(result.isBlank(), "real MCP tool returned an empty result");
-            assertTrue(result.length() <= testCase.maxResultLength(), "result did not pass max-result-length guard");
             verify(logService).finishToolCall(eq("log-real"), eq(result), anyLong(), anyBoolean());
 
             if (deniedToolName != null) {

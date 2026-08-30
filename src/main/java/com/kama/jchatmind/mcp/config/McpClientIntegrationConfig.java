@@ -139,9 +139,8 @@ public class McpClientIntegrationConfig {
     @Bean
     public McpToolCallbackAdapter mcpToolCallbackAdapter(ExternalMcpToolRegistry toolRegistry,
                                                          ExternalMcpToolInvoker toolInvoker,
-                                                         McpToolAuditLogger auditLogger,
-                                                         McpClientProperties properties) {
-        return new McpToolCallbackAdapter(toolRegistry, toolInvoker, auditLogger, properties);
+                                                         McpToolAuditLogger auditLogger) {
+        return new McpToolCallbackAdapter(toolRegistry, toolInvoker, auditLogger);
     }
 
     @Bean

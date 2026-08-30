@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class McpToolCallbackAdapterTest {
 
     @Test
-    void callbackTruncatesExternalMcpResultAndWritesAudit() {
+    void callbackReturnsCompleteExternalMcpResultAndWritesAudit() {
         McpClientProperties properties = new McpClientProperties();
         properties.setMaxResultLength(40);
         properties.setAuditEnabled(true);
@@ -42,19 +42,20 @@ class McpToolCallbackAdapterTest {
                         .build()),
                 new McpExternalToolPolicy());
 
+        String canonical = "x".repeat(100) + "_MCP_CANONICAL_TAIL";
         McpToolCallbackAdapter adapter = new McpToolCallbackAdapter(
                 registry,
-                (tool, argumentsJson) -> "x".repeat(100),
-                auditLogger,
-                properties);
+                (tool, argumentsJson) -> canonical,
+                auditLogger);
 
         List<ToolCallback> callbacks = adapter.toolCallbacks();
         String result = callbacks.get(0).call("{\"query\":\"java\"}");
 
         assertEquals(1, callbacks.size());
-        assertTrue(result.length() <= 40);
-        assertTrue(result.endsWith("...[truncated]"));
-        assertEquals(List.of("start", "success:true"), auditLogger.events);
+        assertEquals(canonical, result);
+        assertTrue(result.length() > properties.getMaxResultLength());
+        assertTrue(result.endsWith("_MCP_CANONICAL_TAIL"));
+        assertEquals(List.of("start", "success:false"), auditLogger.events);
     }
 
     @Test
@@ -78,8 +79,7 @@ class McpToolCallbackAdapterTest {
                 (tool, argumentsJson) -> {
                     throw new IllegalStateException("server unavailable");
                 },
-                auditLogger,
-                properties);
+                auditLogger);
 
         McpToolCallException failure = assertThrows(McpToolCallException.class,
                 () -> adapter.toolCallbacks().get(0).call("{\"query\":\"java\"}"));

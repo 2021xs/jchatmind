@@ -17,6 +17,17 @@ import com.kama.jchatmind.mapper.ChatSessionMapper;
 import com.kama.jchatmind.mapper.CodeChunkMapper;
 import com.kama.jchatmind.mapper.CodeRepositoryMapper;
 import com.kama.jchatmind.mapper.ToolCallLogMapper;
+import com.kama.jchatmind.mcp.adapter.McpToolCallbackAdapter;
+import com.kama.jchatmind.mcp.audit.McpToolAuditLogger;
+import com.kama.jchatmind.mcp.config.ExternalMcpServerProperties;
+import com.kama.jchatmind.mcp.config.ExternalMcpServerType;
+import com.kama.jchatmind.mcp.config.ExternalMcpToolProperties;
+import com.kama.jchatmind.mcp.config.McpClientProperties;
+import com.kama.jchatmind.mcp.registry.ExternalMcpDiscoveredTool;
+import com.kama.jchatmind.mcp.registry.ExternalMcpServerRegistry;
+import com.kama.jchatmind.mcp.registry.ExternalMcpToolRegistry;
+import com.kama.jchatmind.mcp.safety.McpExternalToolPolicy;
+import com.kama.jchatmind.mcp.safety.McpToolRiskLevel;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.dto.CodeAnswerEvidenceResult;
 import com.kama.jchatmind.model.dto.CodeChunkExactReadResult;
@@ -392,6 +403,70 @@ class ToolProtocolPersistenceTransactionIntegrationTest {
                 .orElseThrow();
         assertThat(knowledgeResponse.getContent()).isEqualTo(canonical).endsWith(tailMarker);
         assertThat(sha256(knowledgeResponse.getContent())).isEqualTo(expectedFingerprint);
+        AgentToolProtocolInspector.Inspection inspection = AgentToolProtocolInspector.inspect(
+                toProtocolMessages(persisted));
+        assertThat(inspection.valid()).isTrue();
+        assertThat(inspection.orphanToolProtocolCount()).isZero();
+        assertThat(inspection.protocolValidationFailureCount()).isZero();
+    }
+
+    @Test
+    void oversizedMcpCanonicalResultRetainsTailAndFingerprintAfterReload() throws Exception {
+        String tailMarker = "_MCP_CANONICAL_TAIL";
+        String remoteResult = "x".repeat(9_000) + tailMarker;
+        ExternalMcpToolProperties allowedTool = new ExternalMcpToolProperties();
+        allowedTool.setName("search_docs");
+        allowedTool.setRiskLevel(McpToolRiskLevel.READ_ONLY);
+        allowedTool.setAutoInvokeAllowed(true);
+        ExternalMcpServerProperties server = new ExternalMcpServerProperties();
+        server.setName("docs-readonly");
+        server.setType(ExternalMcpServerType.DOCS);
+        server.setTransport("stdio");
+        server.setCommand("mock-docs-server");
+        server.setEnabled(true);
+        server.setAllowedTools(List.of(allowedTool));
+        McpClientProperties properties = new McpClientProperties();
+        properties.setMaxResultLength(6_000);
+        properties.setServers(List.of(server));
+        ExternalMcpToolRegistry registry = new ExternalMcpToolRegistry(
+                new ExternalMcpServerRegistry(properties),
+                ignored -> List.of(ExternalMcpDiscoveredTool.builder()
+                        .name("search_docs")
+                        .description("Search docs")
+                        .inputSchema("{\"type\":\"object\"}")
+                        .build()),
+                new McpExternalToolPolicy());
+        McpToolCallbackAdapter adapter = new McpToolCallbackAdapter(
+                registry, (tool, argumentsJson) -> remoteResult, mock(McpToolAuditLogger.class));
+        String toolName = adapter.exposedToolNames().get(0);
+        String canonical = adapter.toolCallbacks().get(0).call("{\"query\":\"large\"}");
+        String expectedFingerprint = sha256(canonical);
+        assertThat(canonical).hasSize(9_019);
+        assertThat(expectedFingerprint)
+                .isEqualTo("9ac43f9d51040aa3be38b4dadaacdf7eeedd6189852b25115e8b228a99b8b800");
+        assertThat(canonical)
+                .isEqualTo(remoteResult)
+                .hasSizeGreaterThan(properties.getMaxResultLength())
+                .endsWith(tailMarker)
+                .doesNotContain("...[truncated]");
+
+        AssistantMessage assistant = AssistantMessage.builder().content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        "call-mcp", "function", toolName, "{\"query\":\"large\"}")))
+                .build();
+        ToolResponseMessage response = ToolResponseMessage.builder()
+                .responses(List.of(new ToolResponseMessage.ToolResponse(
+                        "call-mcp", toolName, canonical)))
+                .build();
+        messageService.createToolProtocolBatch(sessionId, taskId, assistant, response);
+
+        List<ChatMessageDTO> persisted = messageService.getChatMessageDTOsBySessionId(sessionId);
+        ChatMessageDTO mcpResponse = persisted.stream()
+                .filter(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL)
+                .findFirst()
+                .orElseThrow();
+        assertThat(mcpResponse.getContent()).isEqualTo(canonical).endsWith(tailMarker);
+        assertThat(sha256(mcpResponse.getContent())).isEqualTo(expectedFingerprint);
         AgentToolProtocolInspector.Inspection inspection = AgentToolProtocolInspector.inspect(
                 toProtocolMessages(persisted));
         assertThat(inspection.valid()).isTrue();
