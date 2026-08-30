@@ -37,6 +37,7 @@ import com.kama.jchatmind.tool.ToolExecutionRecord;
 import com.kama.jchatmind.tool.ToolFailureClassifier;
 import com.kama.jchatmind.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -284,10 +285,18 @@ class McpFakeEndToEndIntegrationTest {
         verify(finalCompletionService).complete(any());
         verify(logService, never()).finishTask(anyString(), anyString(), anyInt(), anyInt());
         verify(logService, never()).failTask(anyString(), anyString(), anyInt(), anyInt());
-        verify(chatMessageFacadeService, atLeastOnce()).createChatMessage(
-                org.mockito.ArgumentMatchers.<ChatMessageDTO>argThat(
-                        message -> message.getRole() == ChatMessageDTO.RoleType.TOOL
-                                && "external docs answer".equals(message.getContent())));
+        ArgumentCaptor<AssistantMessage> assistantCaptor = ArgumentCaptor.forClass(AssistantMessage.class);
+        ArgumentCaptor<ToolResponseMessage> responseCaptor = ArgumentCaptor.forClass(ToolResponseMessage.class);
+        verify(chatMessageFacadeService).createToolProtocolBatch(
+                eq("session-1"), eq("task-1"), assistantCaptor.capture(), responseCaptor.capture());
+        assertEquals(1, assistantCaptor.getValue().getToolCalls().size());
+        assertEquals(1, responseCaptor.getValue().getResponses().size());
+        AssistantMessage.ToolCall requestedCall = assistantCaptor.getValue().getToolCalls().get(0);
+        ToolResponseMessage.ToolResponse terminalResponse = responseCaptor.getValue().getResponses().get(0);
+        assertEquals(requestedCall.id(), terminalResponse.id());
+        assertEquals(runtimeNames.get(0), requestedCall.name());
+        assertEquals(requestedCall.name(), terminalResponse.name());
+        assertEquals("external docs answer", terminalResponse.responseData());
             assertEquals(List.of("start:search_docs", "success:search_docs:false"), auditLogger.events);
         }
     }
