@@ -1,11 +1,9 @@
 package com.kama.jchatmind.agent.tools;
 
 import com.kama.jchatmind.agent.TaskEvidenceState;
-import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.model.dto.CodeAnswerEvidenceResult;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
-import com.kama.jchatmind.tool.ToolRegistry;
 import org.springframework.stereotype.Component;
 import org.springframework.ai.chat.model.ToolContext;
 import lombok.extern.slf4j.Slf4j;
@@ -16,16 +14,10 @@ import java.util.List;
 @Slf4j
 public class CodeSearchTools implements Tool {
     private final CodeRagAnswerEvidenceService answerEvidenceService;
-    private final ToolRegistry toolRegistry;
-    private final CodeRagProperties codeRagProperties;
     private final CodeSearchEvidenceFormatter evidenceFormatter = new CodeSearchEvidenceFormatter();
 
-    public CodeSearchTools(CodeRagAnswerEvidenceService answerEvidenceService,
-                           ToolRegistry toolRegistry,
-                           CodeRagProperties codeRagProperties) {
+    public CodeSearchTools(CodeRagAnswerEvidenceService answerEvidenceService) {
         this.answerEvidenceService = answerEvidenceService;
-        this.toolRegistry = toolRegistry;
-        this.codeRagProperties = codeRagProperties;
     }
 
     @Override
@@ -35,7 +27,7 @@ public class CodeSearchTools implements Tool {
 
     @org.springframework.ai.tool.annotation.Tool(
             name = "searchProjectCode",
-            description = "Search imported Java/Spring Boot backend code by repoId and natural language query. Returns selected code evidence, file paths, line ranges, symbols, API paths and scores."
+            description = "Search imported Java/Spring Boot backend code by repoId and natural language query. Returns selected code evidence with stable repoId/chunkId locators, file paths, line ranges, symbols, API paths and scores."
     )
     public String searchProjectCode(String repoId, String query, ToolContext toolContext) {
         CodeAnswerEvidenceResult evidenceResult = answerEvidenceService.retrieve(repoId, query);
@@ -62,7 +54,7 @@ public class CodeSearchTools implements Tool {
                     observation.guardActive());
             result = observation.toToolFeedback() + "\n\n" + result;
         }
-        return toolRegistry.truncateResult(getName(), result);
+        return result;
     }
 
     public String searchProjectCode(String repoId, String query) {
@@ -71,7 +63,7 @@ public class CodeSearchTools implements Tool {
         if (results == null || results.isEmpty()) {
             return "No related code evidence found. This tool provides semantic retrieval over imported code, not an exact static call graph.";
         }
-        return toolRegistry.truncateResult(getName(), evidenceFormatter.format(results));
+        return evidenceFormatter.format(results);
     }
 
     private TaskEvidenceState.SearchObservation observeEvidence(ToolContext toolContext,

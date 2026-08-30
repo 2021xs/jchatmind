@@ -1,11 +1,15 @@
 package com.kama.jchatmind.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kama.jchatmind.agent.tools.CodeSearchTools;
 import com.kama.jchatmind.config.ToolDuplicateDetectionProperties;
 import com.kama.jchatmind.config.ToolTimeoutProperties;
 import com.kama.jchatmind.config.ToolResultProperties;
 import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.mcp.McpToolCallException;
+import com.kama.jchatmind.model.dto.CodeAnswerEvidenceResult;
+import com.kama.jchatmind.model.dto.CodeSearchResult;
+import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.tool.ToolExecutionContext;
 import com.kama.jchatmind.tool.ToolExecutionRecord;
@@ -41,6 +45,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -63,7 +68,7 @@ class ToolCallBatchExecutorTest {
             .taskId("task-1")
             .stepId("step-1")
             .sessionId("session-1")
-            .runtimeToolNames(List.of("fastTool", "slowTool", "toolA", "toolB", "toolC"))
+            .runtimeToolNames(List.of("fastTool", "slowTool", "toolA", "toolB", "toolC", "searchProjectCode"))
             .duplicateCallState(new ToolDuplicateCallState())
             .build();
 
@@ -293,6 +298,41 @@ class ToolCallBatchExecutorTest {
         assertEquals(raw, observed.get().rawResult());
         assertEquals(guarded, observed.get().contextResult());
         verify(toolExecutionService).afterToolSuccess(eq(executionContext), any(), eq(guarded));
+    }
+
+    @Test
+    void oversizedCodeResultKeepsFullFormattedCanonicalAndBoundsContextView() {
+        String tailMarker = "CODE-CANONICAL-TAIL";
+        CodeRagAnswerEvidenceService evidenceService = mock(CodeRagAnswerEvidenceService.class);
+        when(evidenceService.retrieve("repo-1", "large query")).thenReturn(CodeAnswerEvidenceResult.builder()
+                .selectedEvidence(List.of(CodeSearchResult.builder()
+                        .repoId("repo-1")
+                        .chunkId("chunk-large")
+                        .filePath("LargeService.java")
+                        .symbolName("LargeService#run")
+                        .chunkType("SERVICE_METHOD")
+                        .startLine(1)
+                        .endLine(500)
+                        .contentPreview("x".repeat(12_000) + tailMarker)
+                        .build()))
+                .build());
+        String canonical = new CodeSearchTools(evidenceService)
+                .searchProjectCode("repo-1", "large query");
+
+        ToolCallBatchResult result = execute(
+                List.of(callback("searchProjectCode", ignored -> canonical)),
+                call("call-code", "searchProjectCode", "{\"repoId\":\"repo-1\",\"query\":\"large query\"}"));
+
+        String persistent = result.getToolResponseMessage().getResponses().get(0).responseData();
+        String context = lastContextView.toolResponseMessage().getResponses().get(0).responseData();
+        assertTrue(persistent.length() > 7_000);
+        assertEquals(canonical, persistent);
+        assertTrue(persistent.endsWith(tailMarker + "\n"));
+        assertEquals(8_000, context.length());
+        assertTrue(context.contains("repoId: repo-1"));
+        assertTrue(context.contains("chunkId: chunk-large"));
+        assertTrue(context.contains("[TRUNCATED: originalChars="));
+        assertFalse(context.contains(tailMarker));
     }
 
     @Test

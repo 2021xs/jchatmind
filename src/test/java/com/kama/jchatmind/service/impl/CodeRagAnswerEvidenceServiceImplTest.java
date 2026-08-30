@@ -61,6 +61,21 @@ class CodeRagAnswerEvidenceServiceImplTest {
     }
 
     @Test
+    void selectorOrderKeepsTrueRepoAndChunkIdentityForSameFileCandidates() {
+        CodeSearchResult first = result("chunk-a", "Same.java", "SERVICE_METHOD");
+        CodeSearchResult second = result("chunk-b", "Same.java", "SERVICE_METHOD");
+        mockSearch(first, second);
+        when(evidenceSelector.select(eq("query"), any()))
+                .thenReturn(selection(List.of("chunk-b", "chunk-a"), false));
+
+        var selected = service.retrieve("repo", "query").getSelectedEvidence();
+
+        assertEquals(List.of(second, first), selected);
+        assertEquals(List.of("repo", "repo"), selected.stream().map(CodeSearchResult::getRepoId).toList());
+        assertEquals(List.of("chunk-b", "chunk-a"), selected.stream().map(CodeSearchResult::getChunkId).toList());
+    }
+
+    @Test
     void retrieveFallsBackWhenSelectorReportsDisabledFallback() {
         CodeSearchResult raw1 = result("raw-1", "Controller.java", "CONTROLLER_API");
         CodeSearchResult raw2 = result("raw-2", "Service.java", "SERVICE_METHOD");

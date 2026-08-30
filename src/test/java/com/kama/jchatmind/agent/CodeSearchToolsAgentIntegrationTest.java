@@ -2,14 +2,11 @@ package com.kama.jchatmind.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.agent.tools.CodeSearchTools;
-import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.config.ToolCorrectionProperties;
-import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.dto.CodeAnswerEvidenceResult;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.model.entity.AgentStep;
 import com.kama.jchatmind.model.entity.AgentTask;
-import com.kama.jchatmind.model.response.CreateChatMessageResponse;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
@@ -44,7 +41,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -58,6 +54,7 @@ class CodeSearchToolsAgentIntegrationTest {
         CodeAnswerEvidenceResult answerEvidence = CodeAnswerEvidenceResult.builder()
                 .selectedEvidence(List.of(CodeSearchResult.builder()
                         .chunkId("internal-uuid")
+                        .repoId("repo-1")
                         .filePath("src/main/java/example/OrderService.java")
                         .symbolName("OrderService#create")
                         .chunkType("SERVICE_METHOD")
@@ -78,7 +75,7 @@ class CodeSearchToolsAgentIntegrationTest {
         when(toolRegistry.canonicalName("searchProjectCode")).thenReturn("searchProjectCode");
         when(toolRegistry.truncateResult(anyString(), anyString()))
                 .thenAnswer(invocation -> invocation.getArgument(1));
-        CodeSearchTools codeSearchTools = new CodeSearchTools(evidenceService, toolRegistry, new CodeRagProperties());
+        CodeSearchTools codeSearchTools = new CodeSearchTools(evidenceService);
         ToolCallback callback = MethodToolCallbackProvider.builder()
                 .toolObjects(codeSearchTools).build().getToolCallbacks()[0];
 
@@ -105,8 +102,6 @@ class CodeSearchToolsAgentIntegrationTest {
                         .canonicalToolName("searchProjectCode").toolCallLogId("tool-log-1")
                         .startedAtMillis(System.currentTimeMillis()).build());
         ChatMessageFacadeService messageService = mock(ChatMessageFacadeService.class);
-        when(messageService.createChatMessage(any(ChatMessageDTO.class)))
-                .thenReturn(CreateChatMessageResponse.builder().chatMessageId("message-1").build());
         when(messageService.getChatMessageDTOsBySessionId(anyString())).thenReturn(List.of());
         ConversationContextCompressor compressor = mock(ConversationContextCompressor.class);
         when(compressor.check(anyString(), anyString(), any()))
@@ -130,13 +125,12 @@ class CodeSearchToolsAgentIntegrationTest {
         String nextThinkEvidence = toolResult(prompts.getAllValues().get(1).getInstructions());
         assertCompactPresentation(nextThinkEvidence);
 
-        ArgumentCaptor<ChatMessageDTO> stored = ArgumentCaptor.forClass(ChatMessageDTO.class);
-        verify(messageService, atLeastOnce()).createChatMessage(stored.capture());
-        ChatMessageDTO toolMessage = stored.getAllValues().stream()
-                .filter(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL)
-                .findFirst().orElseThrow();
-        assertEquals(nextThinkEvidence, toolMessage.getContent());
-        assertEquals(nextThinkEvidence, toolMessage.getMetadata().getToolResponse().responseData());
+        ArgumentCaptor<ToolResponseMessage> stored = ArgumentCaptor.forClass(ToolResponseMessage.class);
+        verify(messageService).createToolProtocolBatch(
+                org.mockito.ArgumentMatchers.eq("session-1"),
+                org.mockito.ArgumentMatchers.eq("task-1"),
+                any(AssistantMessage.class), stored.capture());
+        assertEquals(nextThinkEvidence, stored.getValue().getResponses().get(0).responseData());
         verify(toolExecutionService).afterToolSuccess(any(), any(ToolExecutionRecord.class),
                 org.mockito.ArgumentMatchers.eq(nextThinkEvidence));
     }
@@ -160,6 +154,8 @@ class CodeSearchToolsAgentIntegrationTest {
 
     private void assertCompactPresentation(String result) {
         assertTrue(result.contains("Selected code evidence:"));
+        assertTrue(result.contains("repoId: repo-1"));
+        assertTrue(result.contains("chunkId: internal-uuid"));
         assertTrue(result.contains("file: src/main/java/example/OrderService.java"));
         assertTrue(result.contains("symbol: OrderService#create"));
         assertTrue(result.contains("snippet:"));
@@ -170,7 +166,6 @@ class CodeSearchToolsAgentIntegrationTest {
         assertFalse(result.contains("selectorLatencyMs"));
         assertFalse(result.contains("metadata:"));
         assertFalse(result.contains("score:"));
-        assertFalse(result.contains("internal-uuid"));
     }
 
     private ChatResponse response(AssistantMessage message) {

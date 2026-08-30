@@ -4,7 +4,6 @@ import com.kama.jchatmind.agent.tools.CodeSearchTools;
 import com.kama.jchatmind.agent.tools.DataBaseTools;
 import com.kama.jchatmind.agent.tools.KnowledgeTools;
 import com.kama.jchatmind.agent.tools.TerminateTool;
-import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
 import com.kama.jchatmind.service.RagService;
 import com.kama.jchatmind.tool.InMemoryToolRegistry;
@@ -24,7 +23,7 @@ class McpLocalToolRegistryIsolationTest {
         InMemoryToolRegistry registry = new InMemoryToolRegistry();
         registry.initialize(List.of(
                 new KnowledgeTools(mock(RagService.class), registry),
-                new CodeSearchTools(mock(CodeRagAnswerEvidenceService.class), registry, new CodeRagProperties()),
+                new CodeSearchTools(mock(CodeRagAnswerEvidenceService.class)),
                 new DataBaseTools(mock(JdbcTemplate.class)),
                 new TerminateTool()
         ));

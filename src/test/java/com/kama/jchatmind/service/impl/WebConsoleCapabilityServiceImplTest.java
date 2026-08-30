@@ -4,7 +4,6 @@ import com.kama.jchatmind.agent.tools.CodeSearchTools;
 import com.kama.jchatmind.agent.tools.DataBaseTools;
 import com.kama.jchatmind.agent.tools.KnowledgeTools;
 import com.kama.jchatmind.agent.tools.TerminateTool;
-import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.mapper.CodeRepositoryMapper;
 import com.kama.jchatmind.mapper.KnowledgeBaseMapper;
 import com.kama.jchatmind.model.entity.CodeRepository;
@@ -40,7 +39,7 @@ class WebConsoleCapabilityServiceImplTest {
         InMemoryToolRegistry registry = new InMemoryToolRegistry();
         registry.initialize(List.of(
                 new KnowledgeTools(mock(RagService.class), registry),
-                new CodeSearchTools(mock(CodeRagAnswerEvidenceService.class), registry, new CodeRagProperties()),
+                new CodeSearchTools(mock(CodeRagAnswerEvidenceService.class)),
                 new DataBaseTools(mock(JdbcTemplate.class)),
                 new TerminateTool()
         ));
@@ -92,7 +91,7 @@ class WebConsoleCapabilityServiceImplTest {
         InMemoryToolRegistry registry = new InMemoryToolRegistry();
         registry.initialize(List.of(
                 new KnowledgeTools(mock(RagService.class), registry),
-                new CodeSearchTools(mock(CodeRagAnswerEvidenceService.class), registry, new CodeRagProperties()),
+                new CodeSearchTools(mock(CodeRagAnswerEvidenceService.class)),
                 new DataBaseTools(mock(JdbcTemplate.class)),
                 new TerminateTool()
         ));

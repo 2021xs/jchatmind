@@ -1,11 +1,9 @@
 package com.kama.jchatmind.agent.tools;
 
-import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.model.dto.CodeAnswerEvidenceResult;
 import com.kama.jchatmind.model.dto.CodeRagExecutionResult;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
-import com.kama.jchatmind.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -14,17 +12,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class CodeSearchToolsTest {
 
     @Test
-    void separatesAgentPresentationFromDiagnosticsAndStillUsesToolLimit() {
+    void separatesAgentPresentationFromDiagnosticsAndExposesStableLocator() {
         CodeSearchResult selected = CodeSearchResult.builder()
                 .chunkId("real-chunk-uuid")
+                .repoId("repo-1")
                 .filePath("Service.java")
                 .symbolName("Service#run")
                 .chunkType("SERVICE_METHOD")
@@ -45,23 +42,19 @@ class CodeSearchToolsTest {
                 .answerType("CODE_LOCATION")
                 .build();
         CodeRagAnswerEvidenceService service = mock(CodeRagAnswerEvidenceService.class);
-        ToolRegistry registry = mock(ToolRegistry.class);
         when(service.retrieve("repo-1", "query")).thenReturn(diagnostics);
-        when(registry.truncateResult(eq("searchProjectCode"), org.mockito.ArgumentMatchers.anyString()))
-                .thenAnswer(invocation -> invocation.getArgument(1));
 
-        String result = new CodeSearchTools(service, registry, new CodeRagProperties())
+        String result = new CodeSearchTools(service)
                 .searchProjectCode("repo-1", "query");
 
+        assertTrue(result.contains("repoId: repo-1"));
+        assertTrue(result.contains("chunkId: real-chunk-uuid"));
         assertTrue(result.contains("file: Service.java"));
         assertFalse(result.contains("selectorLatencyMs"));
         assertFalse(result.contains("selectorJsonParseOk"));
         assertFalse(result.contains("rawCandidateCount"));
         assertFalse(result.contains("score:"));
         assertFalse(result.contains("metadata:"));
-        assertFalse(result.contains("real-chunk-uuid"));
-        verify(registry).truncateResult(eq("searchProjectCode"), eq(result));
-
         assertEquals(20, diagnostics.getRawCount());
         assertEquals(20, diagnostics.getCandidateCount());
         assertTrue(diagnostics.isFallback());
@@ -72,6 +65,33 @@ class CodeSearchToolsTest {
         assertEquals("real-chunk-uuid", selected.getChunkId());
         assertEquals(0.88, selected.getScore());
         assertTrue(selected.getMetadata().contains("symbols"));
+    }
+
+    @Test
+    void returnsFormattedEvidenceBeyondLegacyCodeLocalLimitWithoutTailLoss() {
+        String tailMarker = "CODE-CANONICAL-TAIL";
+        CodeSearchResult selected = CodeSearchResult.builder()
+                .repoId("repo-1")
+                .chunkId("chunk-large")
+                .filePath("LargeService.java")
+                .symbolName("LargeService#run")
+                .chunkType("SERVICE_METHOD")
+                .startLine(1)
+                .endLine(500)
+                .contentPreview("x".repeat(7_100) + tailMarker)
+                .build();
+        CodeRagAnswerEvidenceService service = mock(CodeRagAnswerEvidenceService.class);
+        when(service.retrieve("repo-1", "large query")).thenReturn(CodeAnswerEvidenceResult.builder()
+                .selectedEvidence(List.of(selected))
+                .build());
+
+        String result = new CodeSearchTools(service).searchProjectCode("repo-1", "large query");
+
+        assertTrue(result.length() > 7_000);
+        assertTrue(result.endsWith(tailMarker + "\n"));
+        assertTrue(result.contains("repoId: repo-1"));
+        assertTrue(result.contains("chunkId: chunk-large"));
+        assertFalse(result.contains("...[truncated]"));
     }
 
     @Test

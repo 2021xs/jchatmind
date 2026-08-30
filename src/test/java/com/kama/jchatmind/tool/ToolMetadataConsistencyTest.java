@@ -5,7 +5,6 @@ import com.kama.jchatmind.agent.tools.DataBaseTools;
 import com.kama.jchatmind.agent.tools.KnowledgeTools;
 import com.kama.jchatmind.agent.tools.TerminateTool;
 import com.kama.jchatmind.agent.tools.Tool;
-import com.kama.jchatmind.config.CodeRagProperties;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
 import com.kama.jchatmind.service.RagService;
 import org.junit.jupiter.api.Test;
@@ -25,7 +24,7 @@ class ToolMetadataConsistencyTest {
         InMemoryToolRegistry registry = new InMemoryToolRegistry();
         List<Tool> tools = List.of(
                 new KnowledgeTools(mock(RagService.class), registry),
-                new CodeSearchTools(mock(CodeRagAnswerEvidenceService.class), registry, new CodeRagProperties()),
+                new CodeSearchTools(mock(CodeRagAnswerEvidenceService.class)),
                 new DataBaseTools(mock(JdbcTemplate.class)),
                 new TerminateTool()
         );

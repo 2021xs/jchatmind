@@ -2,6 +2,7 @@ package com.kama.jchatmind.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.agent.AgentToolProtocolInspector;
+import com.kama.jchatmind.agent.tools.CodeSearchTools;
 import com.kama.jchatmind.config.AgentObservabilityProperties;
 import com.kama.jchatmind.converter.ChatMessageConverter;
 import com.kama.jchatmind.mapper.AgentStepMapper;
@@ -10,8 +11,11 @@ import com.kama.jchatmind.mapper.ChatMessageMapper;
 import com.kama.jchatmind.mapper.ChatSessionMapper;
 import com.kama.jchatmind.mapper.ToolCallLogMapper;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
+import com.kama.jchatmind.model.dto.CodeAnswerEvidenceResult;
+import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
+import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -49,6 +53,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 @Testcontainers(disabledWithoutDocker = true)
 @SpringJUnitConfig(ToolProtocolPersistenceTransactionIntegrationTest.Config.class)
@@ -177,11 +182,28 @@ class ToolProtocolPersistenceTransactionIntegrationTest {
     }
 
     @Test
-    void oversizedExecutorCanonicalResultRetainsExactFingerprintAfterReload() throws Exception {
-        String canonical = "executor-canonical-" + "x".repeat(12_000) + "-RAW-TAIL";
+    void oversizedCodeCanonicalResultRetainsExactFingerprintAfterReload() throws Exception {
+        String tailMarker = "-CODE-CANONICAL-TAIL";
+        CodeRagAnswerEvidenceService evidenceService = mock(CodeRagAnswerEvidenceService.class);
+        when(evidenceService.retrieve("repo-1", "large query")).thenReturn(CodeAnswerEvidenceResult.builder()
+                .selectedEvidence(List.of(CodeSearchResult.builder()
+                        .repoId("repo-1")
+                        .chunkId("chunk-large")
+                        .filePath("LargeService.java")
+                        .symbolName("LargeService#run")
+                        .chunkType("SERVICE_METHOD")
+                        .startLine(1)
+                        .endLine(500)
+                        .contentPreview("x".repeat(12_000) + tailMarker)
+                        .build()))
+                .build());
+        String canonical = new CodeSearchTools(evidenceService)
+                .searchProjectCode("repo-1", "large query");
         String expectedFingerprint = sha256(canonical);
         assertThat(expectedFingerprint)
-                .isEqualTo("0db61d1613916ddbadc23f392dfff057a8d4ab815cd59718d0754f93c7afc72b");
+                .isEqualTo("af305f51ba23fe83f2b71e6d25da80440e62dbd8e063808fc3ba070e9b59c0ef");
+        assertThat(canonical).hasSizeGreaterThan(7_000).endsWith(tailMarker + "\n");
+        assertThat(canonical).contains("repoId: repo-1", "chunkId: chunk-large");
 
         messageService.createToolProtocolBatch(
                 sessionId, taskId, assistantBatch(), responseBatch(canonical, "B-ok"));
@@ -192,6 +214,7 @@ class ToolProtocolPersistenceTransactionIntegrationTest {
                 .findFirst()
                 .orElseThrow();
         assertThat(firstToolResponse.getContent()).isEqualTo(canonical);
+        assertThat(firstToolResponse.getContent()).endsWith(tailMarker + "\n");
         assertThat(sha256(firstToolResponse.getContent())).isEqualTo(expectedFingerprint);
         AgentToolProtocolInspector.Inspection inspection = AgentToolProtocolInspector.inspect(
                 toProtocolMessages(persisted));

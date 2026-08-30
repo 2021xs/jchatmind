@@ -19,7 +19,10 @@ final class CodeSearchEvidenceFormatter {
     }
 
     private void appendEvidence(StringBuilder out, int index, CodeSearchResult evidence) {
+        requireStableLocator(evidence);
         out.append('\n').append('[').append(index).append("]\n");
+        appendField(out, "repoId", evidence.getRepoId());
+        appendField(out, "chunkId", evidence.getChunkId());
         appendField(out, "file", evidence.getFilePath());
         appendField(out, "symbol", evidence.getSymbolName());
         appendField(out, "type", evidence.getChunkType());
@@ -27,6 +30,14 @@ final class CodeSearchEvidenceFormatter {
         appendField(out, "api", api(evidence));
         if (StringUtils.hasText(evidence.getContentPreview())) {
             out.append("\nsnippet:\n").append(evidence.getContentPreview()).append('\n');
+        }
+    }
+
+    private void requireStableLocator(CodeSearchResult evidence) {
+        if (evidence == null
+                || !StringUtils.hasText(evidence.getRepoId())
+                || !StringUtils.hasText(evidence.getChunkId())) {
+            throw new IllegalArgumentException("Selected code evidence is missing repoId or chunkId");
         }
     }
 
