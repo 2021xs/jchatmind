@@ -28,22 +28,20 @@ class CurrentTaskWorkingSummaryTest {
 
     private static final String MODEL = "deepseek-chat";
     private static final String SUMMARY_V1 = """
-            Current Task Working Summary
+            Current Task Continuation State
 
-            - Original Goal
+            - Goal
               - Diagnose order 123 without losing the original question.
-            - Confirmed Facts
+            - Known
               - Search confirmed the handler location.
-            - Exact Constraints / Values
+            - Constraints
               - status=206, rowLimit=50, hasMore=true.
-            - Important Relationships / Decisions
-              - Narrow the SQL before concluding.
-            - Stable References
+            - Refs
               - repoId: repo-1
               - chunkId: chunk-1
-            - Unresolved Questions
+            - Open
               - Verify the exact database row.
-            - Next Planning Needs
+            - Next
               - Call getCodeChunk and run a narrower query.
             """;
     private static final String SUMMARY_V2 = SUMMARY_V1.replace(
@@ -57,7 +55,7 @@ class CurrentTaskWorkingSummaryTest {
     @BeforeEach
     void setUp() {
         properties = new ContextCompressionProperties();
-        properties.setMaxContextTokens(180);
+        properties.setMaxContextTokens(400);
         properties.setMaxSingleToolResultTokens(120);
         properties.setMaxHistoryMessages(50);
         properties.setMaxSummaryChars(1200);
@@ -163,22 +161,44 @@ class CurrentTaskWorkingSummaryTest {
                 .id("current-user").role(ChatMessageDTO.RoleType.USER)
                 .content("Original current user question").build();
         ConversationContextCompressor.CompressionCheck retryCheck = compressor.checkCurrentTask(
-                MODEL, currentUser, null, List.of(currentUser), protocol, result.state());
+                MODEL, currentUser, null, List.of(currentUser), protocol, List.of(), result.state());
         assertThat(retryCheck.needed()).isFalse();
         assertThat(retryCheck.reason()).isEqualTo("previous_failure");
 
         ConversationContextCompressor.CurrentTaskCompression retry = compressor.compressCurrentTaskIfNeeded(
-                "session-1", MODEL, currentUser, null, List.of(currentUser), protocol, result.state());
+                "session-1", MODEL, currentUser, null, List.of(currentUser), protocol, List.of(), result.state());
         assertThat(retry.compressed()).isFalse();
         assertThat(retry.state()).isEqualTo(result.state());
         assertThat(summaryClient.callCount).isEqualTo(2);
     }
 
     @Test
-    void overLengthSummaryGetsOneCorrectiveRetryAndThenAdvancesCoverage() {
+    void stateOverLegacyCharLimitIsAcceptedWhenFullRequestFits() {
+        properties.setMaxContextTokens(2_000);
         List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
-                longBody("repoId: repo-1\nchunkId: chunk-1\nEXACT=42"));
-        summaryClient.queuedResponses.add(SUMMARY_V1 + "x".repeat(properties.getMaxSummaryChars()));
+                "repoId: repo-1\nchunkId: chunk-1\n" + "raw-evidence ".repeat(800));
+        String overLegacyLimit = stateWithKnown("K".repeat(1_300));
+        assertThat(overLegacyLimit.length()).isGreaterThan(properties.getMaxSummaryChars());
+        summaryClient.nextSummary = overLegacyLimit;
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
+
+        assertThat(result.compressed()).isTrue();
+        assertThat(result.correctiveRetryCount()).isZero();
+        assertThat(result.state().coveredThroughLogicalGroup()).isEqualTo(1);
+        assertThat(result.state().summary()).isEqualTo(overLegacyLimit.strip());
+        assertThat(summaryClient.callCount).isEqualTo(1);
+    }
+
+    @Test
+    void validPrimaryOverBudgetGetsOneStateOnlyCorrectiveAndFits() {
+        properties.setMaxContextTokens(300);
+        String rawMarker = "RAW_TOOL_BODY_MUST_NOT_REENTER_CORRECTIVE";
+        List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
+                rawMarker + "\n" + "detail ".repeat(600));
+        String primary = stateWithKnown("P".repeat(900));
+        summaryClient.queuedResponses.add(primary);
         summaryClient.queuedResponses.add(SUMMARY_V1);
 
         ConversationContextCompressor.CurrentTaskCompression result = compress(
@@ -186,14 +206,49 @@ class CurrentTaskWorkingSummaryTest {
 
         assertThat(result.compressed()).isTrue();
         assertThat(result.correctiveRetryCount()).isEqualTo(1);
+        assertThat(result.state().summary()).isEqualTo(SUMMARY_V1.strip());
         assertThat(result.state().coveredThroughLogicalGroup()).isEqualTo(1);
-        assertThat(result.state().compressionSuppressed()).isFalse();
-        assertThat(result.uncoveredProtocolMessages()).isEmpty();
         assertThat(summaryClient.callCount).isEqualTo(2);
         assertThat(summaryClient.lastPrompt)
-                .contains("plain text only", "must not exceed 1200 characters",
-                        "Do not translate, rename, omit, or add headings",
-                        "repoId: repo-1", "chunkId: chunk-1");
+                .contains("Proposed Continuation State to compact", primary.strip(),
+                        "Available estimated state token budget", "Original current user question")
+                .doesNotContain(rawMarker);
+    }
+
+    @Test
+    void budgetCorrectiveStillOverBudgetFailsClosedWithoutThirdCall() {
+        properties.setMaxContextTokens(350);
+        List<ChatMessageDTO> protocol = group("g1", "knowledgeQuery",
+                "raw-marker\n" + "detail ".repeat(600));
+        summaryClient.queuedResponses.add(stateWithKnown("P".repeat(900)));
+        summaryClient.queuedResponses.add(stateWithKnown("C".repeat(700)));
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
+
+        assertThat(result.compressed()).isFalse();
+        assertThat(result.correctiveRetryCount()).isEqualTo(1);
+        assertThat(result.state().coveredThroughLogicalGroup()).isZero();
+        assertThat(result.uncoveredProtocolMessages()).containsExactlyElementsOf(protocol);
+        assertThat(summaryClient.callCount).isEqualTo(2);
+    }
+
+    @Test
+    void structureCorrectiveConsumesOnlyRetryAndCannotTriggerThirdBudgetCall() {
+        properties.setMaxContextTokens(300);
+        List<ChatMessageDTO> protocol = group("g1", "databaseQuery",
+                "raw-db-body\n" + "detail ".repeat(600));
+        summaryClient.queuedResponses.add("invalid primary");
+        summaryClient.queuedResponses.add(stateWithKnown("C".repeat(700)));
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
+
+        assertThat(result.compressed()).isFalse();
+        assertThat(result.correctiveRetryCount()).isEqualTo(1);
+        assertThat(summaryClient.callCount).isEqualTo(2);
+        assertThat(result.state().coveredThroughLogicalGroup()).isZero();
+        assertThat(result.uncoveredProtocolMessages()).containsExactlyElementsOf(protocol);
     }
 
     @Test
@@ -253,15 +308,109 @@ class CurrentTaskWorkingSummaryTest {
         assertThat(summaryClient.lastPrompt).contains("SUCCESS", "ERROR timeout", "SKIPPED batch aborted");
     }
 
+    @Test
+    void pressureAssimilatesOlderGroupsAndRetainsRecentRawTailWhenBudgetAllows() {
+        properties.setMaxContextTokens(5_000);
+        List<ChatMessageDTO> protocol = new ArrayList<>();
+        protocol.addAll(group("g1", "searchProjectCode", "old-one\n" + "detail ".repeat(180)));
+        protocol.addAll(group("g2", "databaseQuery", "old-two\n" + "detail ".repeat(180)));
+        List<ChatMessageDTO> recent = group("g3", "knowledgeQuery", "RECENT_RAW\n" + "detail ".repeat(30));
+        protocol.addAll(recent);
+        summaryClient.nextSummary = SUMMARY_V1;
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
+
+        assertThat(result.compressed()).isTrue();
+        assertThat(result.state().coveredThroughLogicalGroup()).isEqualTo(2);
+        assertThat(result.uncoveredProtocolMessages()).containsExactlyElementsOf(recent);
+        assertThat(summaryClient.lastPrompt).contains("old-one", "old-two").doesNotContain("RECENT_RAW");
+    }
+
+    @Test
+    void cumulativeContextPressureSelectsMaximumEligiblePrefixBeforeCorrectiveCompaction() {
+        properties.setMaxContextTokens(700);
+        List<ChatMessageDTO> protocol = new ArrayList<>();
+        protocol.addAll(group("g1", "searchProjectCode", "OLD_RAW\n" + "detail ".repeat(180)));
+        protocol.addAll(group("g2", "knowledgeQuery", "RECENT_RAW\n" + "detail ".repeat(180)));
+        summaryClient.nextSummary = SUMMARY_V1;
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
+
+        assertThat(result.compressed()).isTrue();
+        assertThat(result.state().coveredThroughLogicalGroup()).isEqualTo(2);
+        assertThat(result.uncoveredProtocolMessages()).isEmpty();
+        assertThat(summaryClient.lastPrompt).contains("OLD_RAW", "RECENT_RAW");
+    }
+
+    @Test
+    void singleOverBudgetGroupCanBeAssimilated() {
+        properties.setMaxContextTokens(300);
+        List<ChatMessageDTO> protocol = group("g1", "mcp.snapshot",
+                "ONLY_GROUP\n" + "detail ".repeat(600));
+        summaryClient.nextSummary = SUMMARY_V1;
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
+
+        assertThat(result.compressed()).isTrue();
+        assertThat(result.state().coveredThroughLogicalGroup()).isEqualTo(1);
+        assertThat(result.uncoveredProtocolMessages()).isEmpty();
+    }
+
+    @Test
+    void incompleteLocatorUsesSingleStructureCorrectiveAndKeepsPair() {
+        List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
+                longBody("repoId: repo-1\nchunkId: chunk-1"));
+        summaryClient.queuedResponses.add(stateWithRefs("repoId: repo-1"));
+        summaryClient.queuedResponses.add(SUMMARY_V1);
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
+
+        assertThat(result.compressed()).isTrue();
+        assertThat(result.correctiveRetryCount()).isEqualTo(1);
+        assertThat(result.state().summary()).contains("repoId: repo-1", "chunkId: chunk-1");
+        assertThat(summaryClient.callCount).isEqualTo(2);
+    }
+
+    @Test
+    void fixedPlanningMaterialParticipatesInPressureAndDynamicBudget() {
+        properties.setMaxContextTokens(350);
+        List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
+                "raw-fixed-marker\n" + "detail ".repeat(600));
+        summaryClient.queuedResponses.add(stateWithKnown("P".repeat(900)));
+        summaryClient.queuedResponses.add(SUMMARY_V1);
+        List<ChatMessageDTO> fixed = List.of(ChatMessageDTO.builder()
+                .role(ChatMessageDTO.RoleType.SYSTEM)
+                .content("FIXED_PLANNING\n" + "instruction ".repeat(20))
+                .build());
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty(), fixed);
+
+        assertThat(result.compressed()).isTrue();
+        assertThat(summaryClient.lastPrompt).contains("Available estimated state token budget");
+        assertThat(summaryClient.callCount).isEqualTo(2);
+    }
+
     private ConversationContextCompressor.CurrentTaskCompression compress(
             List<ChatMessageDTO> protocol,
             ConversationContextCompressor.CurrentTaskWorkingState state) {
+        return compress(protocol, state, List.of());
+    }
+
+    private ConversationContextCompressor.CurrentTaskCompression compress(
+            List<ChatMessageDTO> protocol,
+            ConversationContextCompressor.CurrentTaskWorkingState state,
+            List<ChatMessageDTO> fixedPlanningMessages) {
         ChatMessageDTO currentUser = ChatMessageDTO.builder()
                 .id("current-user").role(ChatMessageDTO.RoleType.USER)
                 .content("Original current user question").build();
         return compressor.compressCurrentTaskIfNeeded(
                 "session-1", MODEL, currentUser, "Conversation Context\ncompleted summary",
-                List.of(currentUser), protocol, state);
+                List.of(currentUser), protocol, fixedPlanningMessages, state);
     }
 
     private List<ChatMessageDTO> group(String id, String toolName, String body) {
@@ -290,9 +439,18 @@ class CurrentTaskWorkingSummaryTest {
         return marker + "\n" + "detail ".repeat(180);
     }
 
+    private String stateWithKnown(String known) {
+        return SUMMARY_V1.replace("Search confirmed the handler location.", known);
+    }
+
+    private String stateWithRefs(String refs) {
+        return SUMMARY_V1.replace("repoId: repo-1\n  - chunkId: chunk-1", refs);
+    }
+
     private static final class RecordingSummaryClient implements ConversationSummaryClient {
         private String nextSummary = SUMMARY_V1;
         private final List<String> queuedResponses = new ArrayList<>();
+        private final List<String> prompts = new ArrayList<>();
         private String lastPrompt;
         private int callCount;
 
@@ -300,6 +458,7 @@ class CurrentTaskWorkingSummaryTest {
         public String summarize(String model, String prompt) {
             callCount++;
             lastPrompt = prompt;
+            prompts.add(prompt);
             return queuedResponses.isEmpty() ? nextSummary : queuedResponses.remove(0);
         }
     }

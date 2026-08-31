@@ -25,6 +25,7 @@ public interface ConversationContextCompressor {
                                       String conversationSummary,
                                       List<ChatMessageDTO> completedConversationMessages,
                                       List<ChatMessageDTO> currentTaskProtocolMessages,
+                                      List<ChatMessageDTO> fixedPlanningMessages,
                                       CurrentTaskWorkingState state);
 
     CurrentTaskCompression compressCurrentTaskIfNeeded(String sessionId,
@@ -33,6 +34,7 @@ public interface ConversationContextCompressor {
                                                         String conversationSummary,
                                                         List<ChatMessageDTO> completedConversationMessages,
                                                         List<ChatMessageDTO> currentTaskProtocolMessages,
+                                                        List<ChatMessageDTO> fixedPlanningMessages,
                                                         CurrentTaskWorkingState state);
 
     void assertPlanningContextWithinBudget(String model, List<Message> messages);
@@ -42,7 +44,7 @@ public interface ConversationContextCompressor {
     }
 
     static String currentTaskSummaryMessageContent(String summary) {
-        return "[Current task working summary]\n" + summary
+        return "[Current task continuation state]\n" + summary
                 + "\n\nNote: This is lossy runtime working state. Preserve the raw current user question as authoritative.";
     }
 

@@ -46,17 +46,16 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
             "- Important Constraints / Exact Values",
             "- Decisions / Preferences Relevant to Future Turns",
             "- Open Conversation-level Follow-ups");
-    private static final String CURRENT_TASK_SUMMARY_HEADER = "Current Task Working Summary";
+    private static final String CURRENT_TASK_SUMMARY_HEADER = "Current Task Continuation State";
     private static final List<String> CURRENT_TASK_SUMMARY_SECTIONS = List.of(
-            "- Original Goal",
-            "- Confirmed Facts",
-            "- Exact Constraints / Values",
-            "- Important Relationships / Decisions",
-            "- Stable References",
-            "- Unresolved Questions",
-            "- Next Planning Needs");
-    private static final Pattern STABLE_REF_PATTERN = Pattern.compile(
-            "(?s).*repoId\\s*[:=]\\s*\\S+.*chunkId\\s*[:=]\\s*\\S+.*");
+            "- Goal",
+            "- Known",
+            "- Constraints",
+            "- Refs",
+            "- Open",
+            "- Next");
+    private static final Pattern REPO_ID_ASSIGNMENT = Pattern.compile("repoId\\s*[:=]\\s*\\S+");
+    private static final Pattern CHUNK_ID_ASSIGNMENT = Pattern.compile("chunkId\\s*[:=]\\s*\\S+");
 
     private final ContextCompressionProperties properties;
     private final ConversationSummaryClient conversationSummaryClient;
@@ -149,12 +148,13 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                                              String conversationSummary,
                                              List<ChatMessageDTO> completedConversationMessages,
                                              List<ChatMessageDTO> currentTaskProtocolMessages,
+                                             List<ChatMessageDTO> fixedPlanningMessages,
                                              CurrentTaskWorkingState state) {
         CurrentTaskWorkingState safeState = state == null ? CurrentTaskWorkingState.empty() : state;
         CurrentTaskInputs inputs = currentTaskInputs(originalUser, conversationSummary,
                 completedConversationMessages, currentTaskProtocolMessages, safeState);
         ContextCompressionProperties.TokenThreshold threshold = properties.thresholdFor(model);
-        TokenCount effective = totalContentTokens(model, inputs.effectiveMessages());
+        TokenCount effective = planningContentTokens(model, fixedPlanningMessages, inputs.effectiveMessages());
         MaxToolResultTokenCount maxTool = maxSingleToolResultTokens(model, inputs.effectiveMessages());
         boolean overContext = effective.tokens() >= threshold.getMaxContextTokens();
         boolean overSingleResult = maxTool.tokens() >= threshold.getMaxSingleToolResultTokens();
@@ -181,50 +181,104 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                                                                String conversationSummary,
                                                                List<ChatMessageDTO> completedConversationMessages,
                                                                List<ChatMessageDTO> currentTaskProtocolMessages,
+                                                               List<ChatMessageDTO> fixedPlanningMessages,
                                                                CurrentTaskWorkingState state) {
         CurrentTaskWorkingState safeState = state == null ? CurrentTaskWorkingState.empty() : state;
         CurrentTaskInputs inputs = currentTaskInputs(originalUser, conversationSummary,
                 completedConversationMessages, currentTaskProtocolMessages, safeState);
         CompressionCheck check = checkCurrentTask(model, originalUser, conversationSummary,
-                completedConversationMessages, currentTaskProtocolMessages, safeState);
+                completedConversationMessages, currentTaskProtocolMessages, fixedPlanningMessages, safeState);
         if (!check.needed()) {
             return new CurrentTaskCompression(safeState, inputs.uncoveredProtocolMessages(), check, false, 0);
         }
 
+        AssimilationSelection selection = selectAssimilation(model, originalUser, conversationSummary,
+                completedConversationMessages, fixedPlanningMessages, inputs,
+                check.effectiveContextTokens() >= check.maxContextTokens());
         String prompt = buildCurrentTaskSummaryPrompt(originalUser, safeState.summary(),
-                inputs.uncoveredProtocolMessages());
+                selection.selectedProtocolMessages());
         long start = System.currentTimeMillis();
         int correctiveRetryCount = 0;
+        String attemptId = sessionId + ":" + (safeState.compressionCount() + 1);
         try {
             String generated = conversationSummaryClient.summarize(model, prompt);
-            String summary = generated == null ? null : generated.strip();
+            String primaryState = generated == null ? null : generated.strip();
+            String summary = primaryState;
+            boolean budgetCorrectiveInvoked = false;
+            CandidateMeasurement primaryMeasurement;
             try {
-                validateCurrentTaskSummary(model, summary, safeState.summary(),
-                        inputs.uncoveredProtocolMessages());
+                validateCurrentTaskStateStructure(summary);
+                validateCurrentTaskStateReduction(model, summary, safeState.summary(),
+                        selection.selectedProtocolMessages());
             } catch (RepairableCurrentTaskSummaryException repairable) {
                 correctiveRetryCount = 1;
-                String correctivePrompt = buildCurrentTaskCorrectivePrompt(summary, repairable.getMessage());
-                log.info("Current task summary corrective retry: sessionId={}, reason={}, candidateChars={}",
-                        sessionId, repairable.getMessage(), length(summary));
+                String correctivePrompt = buildCurrentTaskStructureCorrectivePrompt(
+                        originalUser, summary, repairable.getMessage(), selection.availableStateTokens());
+                log.info("Current task state corrective retry: attemptId={}, type=structure, reason={}, candidateChars={}",
+                        attemptId, repairable.getMessage(), length(summary));
                 String corrected = conversationSummaryClient.summarize(model, correctivePrompt);
                 summary = corrected == null ? null : corrected.strip();
-                validateCurrentTaskSummary(model, summary, safeState.summary(),
-                        inputs.uncoveredProtocolMessages());
+                validateCurrentTaskStateStructure(summary);
+                validateCurrentTaskStateReduction(model, summary, safeState.summary(),
+                        selection.selectedProtocolMessages());
+            }
+            primaryMeasurement = measureCandidate(model, originalUser, conversationSummary,
+                    completedConversationMessages, fixedPlanningMessages, summary,
+                    selection.retainedProtocolMessages());
+            if (primaryMeasurement.fullCandidateTokens() > check.maxContextTokens()) {
+                if (correctiveRetryCount > 0) {
+                    throw new IllegalStateException("Corrected current task state leaves Planning request over budget: tokens="
+                            + primaryMeasurement.fullCandidateTokens() + ", maxContextTokens="
+                            + check.maxContextTokens());
+                }
+                correctiveRetryCount = 1;
+                budgetCorrectiveInvoked = true;
+                String correctivePrompt = buildCurrentTaskBudgetCorrectivePrompt(
+                        originalUser, summary, selection.availableStateTokens());
+                log.info("Current task state corrective retry: attemptId={}, type=budget, availableStateTokens={}, primaryStateTokens={}, primaryCandidateTokens={}",
+                        attemptId, selection.availableStateTokens(), primaryMeasurement.stateTokens(),
+                        primaryMeasurement.fullCandidateTokens());
+                String corrected = conversationSummaryClient.summarize(model, correctivePrompt);
+                String correctedState = corrected == null ? null : corrected.strip();
+                validateCurrentTaskStateStructure(correctedState);
+                int correctedTokens = currentTaskStateBodyTokens(model, correctedState);
+                if (correctedTokens >= primaryMeasurement.stateTokens()) {
+                    throw new IllegalStateException("Budget-corrected current task state did not reduce state tokens");
+                }
+                validateCurrentTaskStateReduction(model, correctedState, safeState.summary(),
+                        selection.selectedProtocolMessages());
+                summary = correctedState;
+            }
+            CandidateMeasurement finalMeasurement = measureCandidate(model, originalUser, conversationSummary,
+                    completedConversationMessages, fixedPlanningMessages, summary,
+                    selection.retainedProtocolMessages());
+            if (finalMeasurement.fullCandidateTokens() > check.maxContextTokens()) {
+                throw new IllegalStateException("Current task continuation state leaves Planning request over budget: tokens="
+                        + finalMeasurement.fullCandidateTokens() + ", maxContextTokens="
+                        + check.maxContextTokens());
             }
             CurrentTaskWorkingState updated = new CurrentTaskWorkingState(
                     summary,
-                    inputs.allGroups().size(),
+                    safeState.coveredThroughLogicalGroup() + selection.selectedGroupCount(),
                     safeState.summaryDepth() + 1,
                     safeState.compressionCount() + 1,
                     false);
+            logCurrentTaskBudgetAttempt(attemptId, model, originalUser, conversationSummary,
+                    completedConversationMessages, fixedPlanningMessages, safeState.summary(), selection,
+                    primaryState, primaryMeasurement, budgetCorrectiveInvoked, summary, finalMeasurement, true);
             publishCurrentTaskCompression(sessionId, model, check, prompt, safeState.summary(), summary,
                     System.currentTimeMillis() - start, true, null);
-            return new CurrentTaskCompression(updated, List.of(), check, true, correctiveRetryCount);
+            return new CurrentTaskCompression(updated, selection.retainedProtocolMessages(), check, true,
+                    correctiveRetryCount);
         } catch (Exception error) {
+            log.warn("Current task budget attempt rejected: attemptId={}, candidateBeforeTokens={}, selectedGroups={}, selectedRawTokens={}, retainedRawTokens={}, availableStateTokens={}, error={}",
+                    attemptId, check.effectiveContextTokens(), selection.selectedGroupCount(),
+                    selection.selectedRawTokens(), selection.retainedRawTokens(),
+                    selection.availableStateTokens(), error.getMessage());
             publishCurrentTaskCompression(sessionId, model, check, prompt, safeState.summary(), null,
                     System.currentTimeMillis() - start, false,
                     error.getClass().getSimpleName() + ": " + error.getMessage());
-            log.warn("Current task working summary failed closed: sessionId={}, coveredGroups={}, error={}",
+            log.warn("Current task continuation state failed closed: sessionId={}, coveredGroups={}, error={}",
                     sessionId, safeState.coveredThroughLogicalGroup(), error.getMessage(), error);
             CurrentTaskWorkingState suppressed = new CurrentTaskWorkingState(
                     safeState.summary(),
@@ -556,53 +610,196 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         List<LogicalMessageGroup> uncoveredGroups = groups.subList(
                 safeState.coveredThroughLogicalGroup(), groups.size());
 
-        List<ChatMessageDTO> effective = new ArrayList<>();
-        if (StringUtils.hasText(conversationSummary)) {
-            effective.add(summaryMessage(conversationSummary));
-        }
-        if (completedConversationMessages != null) {
-            effective.addAll(completedConversationMessages);
-        }
+        List<ChatMessageDTO> effective = new ArrayList<>(baseCurrentTaskContext(
+                originalUser, conversationSummary, completedConversationMessages));
         if (StringUtils.hasText(safeState.summary())) {
             effective.add(currentTaskSummaryMessage(safeState.summary()));
         }
         effective.addAll(uncovered);
-        return new CurrentTaskInputs(List.copyOf(groups), List.copyOf(uncoveredGroups), uncovered,
+        return new CurrentTaskInputs(protocol, List.copyOf(groups), List.copyOf(uncoveredGroups), uncovered,
                 List.copyOf(effective));
+    }
+
+    private AssimilationSelection selectAssimilation(String model,
+                                                      ChatMessageDTO originalUser,
+                                                      String conversationSummary,
+                                                      List<ChatMessageDTO> completedConversationMessages,
+                                                      List<ChatMessageDTO> fixedPlanningMessages,
+                                                      CurrentTaskInputs inputs,
+                                                      boolean cumulativeContextPressure) {
+        List<LogicalMessageGroup> uncoveredGroups = inputs.uncoveredGroups();
+        if (uncoveredGroups.isEmpty()) {
+            throw new IllegalStateException("Current task pressure has no complete logical group to assimilate");
+        }
+        int selectedGroupCount = cumulativeContextPressure || uncoveredGroups.size() == 1
+                ? uncoveredGroups.size()
+                : uncoveredGroups.size() - 1;
+        int minimumStateTokens = currentTaskStateBodyTokens(model, minimumContinuationState());
+        AssimilationSelection selection;
+        while (true) {
+            selection = assimilationSelection(model, originalUser, conversationSummary,
+                    completedConversationMessages, fixedPlanningMessages, inputs, selectedGroupCount);
+            if (selectedGroupCount == uncoveredGroups.size()
+                    || selection.availableStateTokens() >= minimumStateTokens) {
+                return selection;
+            }
+            selectedGroupCount++;
+        }
+    }
+
+    private AssimilationSelection assimilationSelection(String model,
+                                                         ChatMessageDTO originalUser,
+                                                         String conversationSummary,
+                                                         List<ChatMessageDTO> completedConversationMessages,
+                                                         List<ChatMessageDTO> fixedPlanningMessages,
+                                                         CurrentTaskInputs inputs,
+                                                         int selectedGroupCount) {
+        List<LogicalMessageGroup> uncoveredGroups = inputs.uncoveredGroups();
+        LogicalMessageGroup first = uncoveredGroups.get(0);
+        LogicalMessageGroup lastSelected = uncoveredGroups.get(selectedGroupCount - 1);
+        List<ChatMessageDTO> selected = List.copyOf(inputs.protocolMessages().subList(
+                first.startInclusive(), lastSelected.endExclusive()));
+        int retainedStart = selectedGroupCount == uncoveredGroups.size()
+                ? inputs.protocolMessages().size()
+                : uncoveredGroups.get(selectedGroupCount).startInclusive();
+        List<ChatMessageDTO> retained = List.copyOf(inputs.protocolMessages().subList(
+                retainedStart, inputs.protocolMessages().size()));
+        CandidateMeasurement withoutState = measureCandidate(model, originalUser, conversationSummary,
+                completedConversationMessages, fixedPlanningMessages, null, retained);
+        CandidateMeasurement withEmptyState = measureCandidate(model, originalUser, conversationSummary,
+                completedConversationMessages, fixedPlanningMessages, "", retained);
+        int stateWrapperTokens = Math.max(0,
+                withEmptyState.fullCandidateTokens() - withoutState.fullCandidateTokens());
+        int hardBudget = properties.thresholdFor(model).getMaxContextTokens();
+        int availableStateTokens = Math.max(0,
+                hardBudget - withoutState.fullCandidateTokens() - stateWrapperTokens);
+        return new AssimilationSelection(selectedGroupCount, selected, retained,
+                planningContentTokens(model, List.of(), selected).tokens(),
+                planningContentTokens(model, List.of(), retained).tokens(),
+                withoutState.fullCandidateTokens(), stateWrapperTokens, availableStateTokens);
+    }
+
+    private CandidateMeasurement measureCandidate(String model,
+                                                   ChatMessageDTO originalUser,
+                                                   String conversationSummary,
+                                                   List<ChatMessageDTO> completedConversationMessages,
+                                                   List<ChatMessageDTO> fixedPlanningMessages,
+                                                   String state,
+                                                   List<ChatMessageDTO> retainedProtocolMessages) {
+        List<ChatMessageDTO> base = baseCurrentTaskContext(
+                originalUser, conversationSummary, completedConversationMessages);
+        List<ChatMessageDTO> candidate = new ArrayList<>(base);
+        if (state != null) {
+            candidate.add(currentTaskSummaryMessage(state));
+        }
+        if (retainedProtocolMessages != null) {
+            candidate.addAll(retainedProtocolMessages);
+        }
+        int fixedTokens = planningContentTokens(model, fixedPlanningMessages, List.of()).tokens();
+        int currentUserTokens = planningContentTokens(model, List.of(), List.of(originalUser)).tokens();
+        List<ChatMessageDTO> conversationOnly = base.stream()
+                .filter(message -> !samePersistentMessage(message, originalUser))
+                .toList();
+        int conversationTokens = planningContentTokens(model, List.of(), conversationOnly).tokens();
+        int stateTokens = state == null ? 0 : currentTaskStateBodyTokens(model, state);
+        int stateMessageTokens = state == null ? 0 : currentTaskStateMessageTokens(model, state);
+        int rawTokens = planningContentTokens(model, List.of(),
+                retainedProtocolMessages == null ? List.of() : retainedProtocolMessages).tokens();
+        TokenCount full = planningContentTokens(model, fixedPlanningMessages, candidate);
+        return new CandidateMeasurement(fixedTokens, conversationTokens, currentUserTokens,
+                stateTokens, stateMessageTokens, rawTokens, full.tokens(), full.source());
+    }
+
+    private List<ChatMessageDTO> baseCurrentTaskContext(ChatMessageDTO originalUser,
+                                                        String conversationSummary,
+                                                        List<ChatMessageDTO> completedConversationMessages) {
+        List<ChatMessageDTO> base = new ArrayList<>();
+        if (StringUtils.hasText(conversationSummary)) {
+            base.add(summaryMessage(conversationSummary));
+        }
+        if (completedConversationMessages != null) {
+            base.addAll(completedConversationMessages);
+        }
+        boolean currentUserPresent = base.stream().anyMatch(message -> samePersistentMessage(message, originalUser));
+        if (!currentUserPresent) {
+            base.add(originalUser);
+        }
+        return List.copyOf(base);
+    }
+
+    private boolean samePersistentMessage(ChatMessageDTO left, ChatMessageDTO right) {
+        if (left == null || right == null) {
+            return false;
+        }
+        if (StringUtils.hasText(left.getId()) && StringUtils.hasText(right.getId())) {
+            return left.getId().equals(right.getId());
+        }
+        return left == right;
+    }
+
+    private String minimumContinuationState() {
+        return CURRENT_TASK_SUMMARY_HEADER + "\n\n"
+                + CURRENT_TASK_SUMMARY_SECTIONS.stream()
+                .map(section -> section + "\n  - none")
+                .collect(Collectors.joining("\n"));
     }
 
     private String buildCurrentTaskSummaryPrompt(ChatMessageDTO originalUser,
                                                  String existingSummary,
                                                  List<ChatMessageDTO> uncoveredProtocolMessages) {
         String previous = StringUtils.hasText(existingSummary) ? existingSummary : "none";
-        return "你是一个 Java Agent 当前任务Working Context摘要器。\n"
-                + "输入只包含原始用户问题、已有Current Task Working Summary以及当前任务未覆盖的完整Tool protocol groups。\n"
-                + "保留会影响后续Planning的成功事实、失败/拒绝/跳过状态、PARTIAL/hasMore语义、精确数值、顺序与因果。\n"
-                + "存在repoId/chunkId时以原格式保留稳定引用。不要复制完整Tool正文，不要添加未确认事实。\n"
+        return "你是 Java Agent 当前任务的Continuation State更新器。\n"
+                + "输出不是Tool transcript摘要或Evidence Archive，而是Agent继续完成原始任务现在真正需要的工作状态。\n"
+                + "输入只包含原始用户问题、已有Continuation State和本次要assimiliate的完整Tool protocol groups。\n"
+                + "只保留仍影响后续Planning的Known事实、关键Constraints/精确值、必要stable refs、Open问题和Next方向。\n"
+                + "删除Tool调用过程、背景解释、重复事实、已完成且不影响后续行动的细节和低价值reference。\n"
+                + "存在仍有价值的源码引用时以完整repoId/chunkId pair保留。不要复制完整Tool正文，不要添加未确认事实。\n"
                 + "必须严格使用以下结构并保留全部section标题：\n\n"
                 + CURRENT_TASK_SUMMARY_HEADER + "\n\n"
                 + String.join("\n", CURRENT_TASK_SUMMARY_SECTIONS) + "\n\n"
-                + "没有内容的section写none。控制在 " + properties.getMaxSummaryChars() + " 字符以内。\n\n"
+                + "每个section只写一个简洁缩进条目，可用分号分隔必要事实；没有内容写none。\n"
+                + "不要写叙事性回答、推理过程或逐Tool复述。\n\n"
                 + "Original User Question:\n" + originalUser.getContent() + "\n\n"
-                + "Existing Current Task Working Summary:\n" + previous + "\n\n"
+                + "Existing Current Task Continuation State:\n" + previous + "\n\n"
                 + "Uncovered complete Tool protocol groups:\n"
                 + formatCurrentTaskProtocol(uncoveredProtocolMessages);
     }
 
-    private String buildCurrentTaskCorrectivePrompt(String candidate, String validationFailure) {
-        return "Rewrite the candidate as one bounded Current Task Working Summary.\n"
+    private String buildCurrentTaskStructureCorrectivePrompt(ChatMessageDTO originalUser,
+                                                             String candidate,
+                                                             String validationFailure,
+                                                             int availableStateTokens) {
+        return "Repair the proposed Current Task Continuation State.\n"
                 + "Return plain text only: no explanation and no Markdown code fence.\n"
                 + "Copy every heading in the template below byte-for-byte, in exactly this order. "
                 + "Do not translate, rename, omit, or add headings.\n"
-                + "Preserve confirmed facts, exact values, ordering, causality, and repoId/chunkId.\n"
+                + "Do not introduce new facts. Retain only information needed to continue the original task.\n"
+                + "If a source locator is retained, keep its complete repoId/chunkId pair.\n"
                 + "Use exactly one concise indented bullet under every section; write none when empty.\n"
-                + "The complete response must not exceed " + properties.getMaxSummaryChars() + " characters.\n"
+                + "Target at most " + availableStateTokens + " estimated state tokens so the full Planning request can fit.\n"
                 + "Validation failure: " + validationFailure + "\n\n"
                 + CURRENT_TASK_SUMMARY_HEADER + "\n\n"
                 + CURRENT_TASK_SUMMARY_SECTIONS.stream()
                 .map(section -> section + "\n  - <one concise value or none>")
                 .collect(Collectors.joining("\n")) + "\n\n"
+                + "Original User Question:\n" + originalUser.getContent() + "\n\n"
                 + "Candidate to rewrite:\n" + nullToEmpty(candidate);
+    }
+
+    private String buildCurrentTaskBudgetCorrectivePrompt(ChatMessageDTO originalUser,
+                                                          String proposedState,
+                                                          int availableStateTokens) {
+        return "Compact only the proposed Current Task Continuation State below. Do not re-analyze Tool evidence.\n"
+                + "If space is limited, prioritize in this order:\n"
+                + "1. Goal, Open, Next.\n"
+                + "2. Known facts and exact Constraints that directly affect the next planning decision.\n"
+                + "3. Only Refs likely needed for an exact reread.\n"
+                + "Remove Tool-call narration, background explanation, duplication, resolved low-value details, and low-value refs.\n"
+                + "Do not introduce new facts. If a locator is retained, keep its complete repoId/chunkId pair.\n"
+                + "Keep every required heading in order and exactly one concise indented bullet per section.\n"
+                + "Available estimated state token budget: " + availableStateTokens + ". This is guidance; return a complete valid state.\n\n"
+                + "Original User Question:\n" + originalUser.getContent() + "\n\n"
+                + "Proposed Continuation State to compact:\n" + nullToEmpty(proposedState);
     }
 
     private String formatCurrentTaskProtocol(List<ChatMessageDTO> messages) {
@@ -622,43 +819,43 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         }).collect(Collectors.joining("\n\n"));
     }
 
-    private void validateCurrentTaskSummary(String model,
-                                            String summary,
-                                            String existingSummary,
-                                            List<ChatMessageDTO> uncoveredProtocolMessages) {
+    private void validateCurrentTaskStateStructure(String summary) {
         if (!StringUtils.hasText(summary) || !summary.startsWith(CURRENT_TASK_SUMMARY_HEADER)) {
             if (!StringUtils.hasText(summary)) {
-                throw new IllegalStateException("Current task summary is empty");
+                throw new IllegalStateException("Current task continuation state is empty");
             }
-            throw new RepairableCurrentTaskSummaryException("Current task summary has invalid structure");
+            throw new RepairableCurrentTaskSummaryException("Current task continuation state has invalid structure");
         }
         int previousIndex = -1;
         for (String section : CURRENT_TASK_SUMMARY_SECTIONS) {
             int index = summary.indexOf(section);
             if (index <= previousIndex) {
                 throw new RepairableCurrentTaskSummaryException(
-                        "Current task summary is missing ordered section: " + section);
+                        "Current task continuation state is missing ordered section: " + section);
             }
             previousIndex = index;
         }
-        if (summary.length() > properties.getMaxSummaryChars()) {
+        long repoIds = REPO_ID_ASSIGNMENT.matcher(summary).results().count();
+        long chunkIds = CHUNK_ID_ASSIGNMENT.matcher(summary).results().count();
+        if (repoIds != chunkIds) {
             throw new RepairableCurrentTaskSummaryException(
-                    "Current task summary exceeds maxSummaryChars");
+                    "Current task continuation state contains an incomplete repoId/chunkId pair");
         }
-        boolean mentionsStableRef = summary.contains("repoId") || summary.contains("chunkId");
-        if (mentionsStableRef && !STABLE_REF_PATTERN.matcher(summary).matches()) {
-            throw new IllegalStateException("Current task summary contains malformed stable reference");
-        }
+    }
+
+    private void validateCurrentTaskStateReduction(String model,
+                                                   String summary,
+                                                   String existingSummary,
+                                                   List<ChatMessageDTO> selectedProtocolMessages) {
         List<ChatMessageDTO> before = new ArrayList<>();
         if (StringUtils.hasText(existingSummary)) {
             before.add(currentTaskSummaryMessage(existingSummary));
         }
-        before.addAll(uncoveredProtocolMessages);
-        int beforeTokens = totalContentTokens(model, before).tokens();
-        int afterTokens = tokenCounter.countText(model,
-                ConversationContextCompressor.currentTaskSummaryMessageContent(summary)).tokens();
+        before.addAll(selectedProtocolMessages);
+        int beforeTokens = planningContentTokens(model, List.of(), before).tokens();
+        int afterTokens = currentTaskStateMessageTokens(model, summary);
         if (afterTokens >= beforeTokens) {
-            throw new IllegalStateException("Current task summary did not reduce tokens");
+            throw new IllegalStateException("Current task continuation state did not reduce tokens");
         }
     }
 
@@ -963,6 +1160,92 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         return tokenCounter.countMessages(model, messages);
     }
 
+    private TokenCount planningContentTokens(String model,
+                                             List<ChatMessageDTO> fixedPlanningMessages,
+                                             List<ChatMessageDTO> contextMessages) {
+        List<ChatMessageDTO> measurable = new ArrayList<>();
+        if (fixedPlanningMessages != null) {
+            measurable.addAll(fixedPlanningMessages.stream()
+                    .map(this::toPlanningMeasurementMessage)
+                    .toList());
+        }
+        if (contextMessages != null) {
+            measurable.addAll(contextMessages.stream()
+                    .map(this::toPlanningMeasurementMessage)
+                    .toList());
+        }
+        return tokenCounter.countMessages(model, measurable);
+    }
+
+    private ChatMessageDTO toPlanningMeasurementMessage(ChatMessageDTO message) {
+        if (message == null || !hasToolCalls(message)) {
+            return message;
+        }
+        StringBuilder content = new StringBuilder(nullToEmpty(message.getContent()));
+        for (AssistantMessage.ToolCall call : message.getMetadata().getToolCalls()) {
+            content.append('\n')
+                    .append(nullToEmpty(call.id())).append(' ')
+                    .append(nullToEmpty(call.name())).append(' ')
+                    .append(nullToEmpty(call.arguments()));
+        }
+        return ChatMessageDTO.builder()
+                .id(message.getId())
+                .sessionId(message.getSessionId())
+                .role(message.getRole())
+                .content(content.toString())
+                .metadata(message.getMetadata())
+                .createdAt(message.getCreatedAt())
+                .build();
+    }
+
+    private int currentTaskStateBodyTokens(String model, String state) {
+        return tokenCounter.countText(model, nullToEmpty(state)).tokens();
+    }
+
+    private int currentTaskStateMessageTokens(String model, String state) {
+        return tokenCounter.countText(model,
+                ConversationContextCompressor.currentTaskSummaryMessageContent(nullToEmpty(state))).tokens();
+    }
+
+    private void logCurrentTaskBudgetAttempt(String attemptId,
+                                             String model,
+                                             ChatMessageDTO originalUser,
+                                             String conversationSummary,
+                                             List<ChatMessageDTO> completedConversationMessages,
+                                             List<ChatMessageDTO> fixedPlanningMessages,
+                                             String existingState,
+                                             AssimilationSelection selection,
+                                             String primaryState,
+                                             CandidateMeasurement primaryMeasurement,
+                                             boolean budgetCorrectiveInvoked,
+                                             String acceptedState,
+                                             CandidateMeasurement finalMeasurement,
+                                             boolean accepted) {
+        CandidateMeasurement before = measureCandidate(model, originalUser, conversationSummary,
+                completedConversationMessages, fixedPlanningMessages, existingState,
+                mergeProtocol(selection.selectedProtocolMessages(), selection.retainedProtocolMessages()));
+        log.info("Current task budget attempt: attemptId={}, candidateBeforeTokens={}, fixedTokens={}, conversationTokens={}, currentUserTokens={}, existingStateTokens={}, selectedGroups={}, selectedRawTokens={}, retainedRawTokens={}, availableStateTokens={}, primaryStateTokens={}, primaryCandidateTokens={}, budgetCorrectiveInvoked={}, correctedStateTokens={}, correctedCandidateTokens={}, accepted={}",
+                attemptId, before.fullCandidateTokens(), finalMeasurement.fixedTokens(),
+                finalMeasurement.conversationTokens(), finalMeasurement.currentUserTokens(),
+                currentTaskStateBodyTokens(model, existingState), selection.selectedGroupCount(),
+                selection.selectedRawTokens(), selection.retainedRawTokens(), selection.availableStateTokens(),
+                primaryMeasurement.stateTokens(), primaryMeasurement.fullCandidateTokens(),
+                budgetCorrectiveInvoked,
+                budgetCorrectiveInvoked ? currentTaskStateBodyTokens(model, acceptedState) : 0,
+                finalMeasurement.fullCandidateTokens(), accepted);
+    }
+
+    private List<ChatMessageDTO> mergeProtocol(List<ChatMessageDTO> first, List<ChatMessageDTO> second) {
+        List<ChatMessageDTO> merged = new ArrayList<>();
+        if (first != null) {
+            merged.addAll(first);
+        }
+        if (second != null) {
+            merged.addAll(second);
+        }
+        return List.copyOf(merged);
+    }
+
     private MaxToolResultTokenCount maxSingleToolResultTokens(String model, List<ChatMessageDTO> messages) {
         List<TokenCount> tokenCounts = messages.stream()
                 .filter(message -> message.getRole() == ChatMessageDTO.RoleType.TOOL)
@@ -1108,10 +1391,31 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                                              int finalOrder) {
     }
 
-    private record CurrentTaskInputs(List<LogicalMessageGroup> allGroups,
+    private record CurrentTaskInputs(List<ChatMessageDTO> protocolMessages,
+                                     List<LogicalMessageGroup> allGroups,
                                      List<LogicalMessageGroup> uncoveredGroups,
                                      List<ChatMessageDTO> uncoveredProtocolMessages,
                                      List<ChatMessageDTO> effectiveMessages) {
+    }
+
+    private record AssimilationSelection(int selectedGroupCount,
+                                         List<ChatMessageDTO> selectedProtocolMessages,
+                                         List<ChatMessageDTO> retainedProtocolMessages,
+                                         int selectedRawTokens,
+                                         int retainedRawTokens,
+                                         int candidateWithoutStateTokens,
+                                         int stateWrapperTokens,
+                                         int availableStateTokens) {
+    }
+
+    private record CandidateMeasurement(int fixedTokens,
+                                        int conversationTokens,
+                                        int currentUserTokens,
+                                        int stateTokens,
+                                        int stateMessageTokens,
+                                        int rawTokens,
+                                        int fullCandidateTokens,
+                                        String tokenSource) {
     }
 
     private static final class RepairableCurrentTaskSummaryException extends IllegalStateException {

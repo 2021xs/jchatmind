@@ -388,7 +388,7 @@ public class JChatMind {
         return memory;
     }
 
-    private void compressContextBeforeThinkIfNeeded() {
+    private void compressContextBeforeThinkIfNeeded(int loopStep) {
         if (conversationContextCompressor == null || currentTaskId == null) {
             return;
         }
@@ -403,10 +403,11 @@ public class JChatMind {
         ChatMessageDTO currentUser = currentUserMessage(allMessages);
         List<ChatMessageDTO> projectedProtocol = projectPersistentToolResponses(
                 persistentProtocol);
+        List<ChatMessageDTO> fixedPlanningMessages = fixedPlanningMeasurementMessages(loopStep);
         ConversationContextCompressor.CompressionCheck check =
                 conversationContextCompressor.checkCurrentTask(
                         model, currentUser, conversation.summary(), conversation.messages(),
-                        projectedProtocol, currentTaskWorkingState);
+                        projectedProtocol, fixedPlanningMessages, currentTaskWorkingState);
         if (!check.needed()) {
             return;
         }
@@ -422,7 +423,7 @@ public class JChatMind {
             ConversationContextCompressor.CurrentTaskCompression compressedContext =
                     conversationContextCompressor.compressCurrentTaskIfNeeded(
                             chatSessionId, model, currentUser, conversation.summary(), conversation.messages(),
-                            projectedProtocol, currentTaskWorkingState);
+                            projectedProtocol, fixedPlanningMessages, currentTaskWorkingState);
             currentTaskWorkingState = compressedContext.state();
             if (compressedContext.compressed()) {
                 this.chatMemory.clear(this.chatSessionId);
@@ -455,6 +456,25 @@ public class JChatMind {
             log.warn("Runtime context compression failed, continuing with current memory: taskId={}, error={}",
                     currentTaskId, e.getMessage(), e);
         }
+    }
+
+    private List<ChatMessageDTO> fixedPlanningMeasurementMessages(int loopStep) {
+        List<ChatMessageDTO> fixed = new ArrayList<>();
+        if (StringUtils.hasText(systemPrompt)) {
+            fixed.add(ChatMessageDTO.builder()
+                    .role(ChatMessageDTO.RoleType.SYSTEM)
+                    .content(systemPrompt)
+                    .build());
+        }
+        String thinkPrompt = buildPlanningPrompt(this.availableKbs, loopStep, maxLoopSteps, toolCallCount,
+                taskEvidenceState.snapshot());
+        if (StringUtils.hasText(thinkPrompt)) {
+            fixed.add(ChatMessageDTO.builder()
+                    .role(ChatMessageDTO.RoleType.SYSTEM)
+                    .content(thinkPrompt)
+                    .build());
+        }
+        return List.copyOf(fixed);
     }
 
     private boolean think(int loopStep) {
@@ -1135,7 +1155,7 @@ public class JChatMind {
 
     private void step(int loopStep) {
         throwIfCancellationRequested();
-        compressContextBeforeThinkIfNeeded();
+        compressContextBeforeThinkIfNeeded(loopStep);
         throwIfCancellationRequested();
 
         if (loopStep >= maxLoopSteps || forceFinalAnswer || finalizationRequired) {
