@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -54,6 +55,19 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
             "- Refs",
             "- Open",
             "- Next");
+    private static final String CURRENT_TASK_DELTA_HEADER = "Current Task Continuation State Delta";
+    private static final List<String> CURRENT_TASK_DELTA_SECTIONS = List.of(
+            "- Goal",
+            "- KnownAdd",
+            "- KnownRemove",
+            "- ConstraintsAdd",
+            "- ConstraintsRemove",
+            "- RefsAdd",
+            "- RefsRemove",
+            "- Open",
+            "- Next");
+    private static final String KEEP = "KEEP";
+    private static final String REMOVE_REASON_DELIMITER = " || reason:";
     private static final Pattern REPO_ID_ASSIGNMENT = Pattern.compile("repoId\\s*[:=]\\s*\\S+");
     private static final Pattern CHUNK_ID_ASSIGNMENT = Pattern.compile("chunkId\\s*[:=]\\s*\\S+");
 
@@ -195,7 +209,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         AssimilationSelection selection = selectAssimilation(model, originalUser, conversationSummary,
                 completedConversationMessages, fixedPlanningMessages, inputs,
                 check.effectiveContextTokens() >= check.maxContextTokens());
-        String prompt = buildCurrentTaskSummaryPrompt(originalUser, safeState.summary(),
+        String prompt = buildCurrentTaskDeltaPrompt(originalUser, safeState.summary(),
                 selection.selectedProtocolMessages());
         long start = System.currentTimeMillis();
         int correctiveRetryCount = 0;
@@ -205,24 +219,28 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         String correctiveState = null;
         String acceptedState = null;
         try {
+            ContinuationState existingState = parseCurrentTaskState(safeState.summary());
             String generated = conversationSummaryClient.summarize(model, prompt);
             primaryState = generated == null ? null : generated.strip();
-            String summary = primaryState;
+            String summary;
             boolean budgetCorrectiveInvoked = false;
             CandidateMeasurement primaryMeasurement;
             try {
+                ContinuationStateDelta delta = parseCurrentTaskDelta(primaryState);
+                summary = renderCurrentTaskState(mergeCurrentTaskState(existingState, delta));
                 validateCurrentTaskStateStructure(summary);
                 validateCurrentTaskStateReduction(model, summary, safeState.summary(),
                         selection.selectedProtocolMessages());
             } catch (RepairableCurrentTaskSummaryException repairable) {
                 correctiveRetryCount = 1;
-                correctivePrompt = buildCurrentTaskStructureCorrectivePrompt(
-                        originalUser, summary, repairable.getMessage(), selection.availableStateTokens());
+                correctivePrompt = buildCurrentTaskDeltaStructureCorrectivePrompt(
+                        originalUser, primaryState, repairable.getMessage(), selection.availableStateTokens());
                 log.info("Current task state corrective retry: attemptId={}, type=structure, reason={}, candidateChars={}",
-                        attemptId, repairable.getMessage(), length(summary));
+                        attemptId, repairable.getMessage(), length(primaryState));
                 String corrected = conversationSummaryClient.summarize(model, correctivePrompt);
                 correctiveState = corrected == null ? null : corrected.strip();
-                summary = correctiveState;
+                ContinuationStateDelta correctedDelta = parseCurrentTaskDelta(correctiveState);
+                summary = renderCurrentTaskState(mergeCurrentTaskState(existingState, correctedDelta));
                 validateCurrentTaskStateStructure(summary);
                 validateCurrentTaskStateReduction(model, summary, safeState.summary(),
                         selection.selectedProtocolMessages());
@@ -238,14 +256,17 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 }
                 correctiveRetryCount = 1;
                 budgetCorrectiveInvoked = true;
-                correctivePrompt = buildCurrentTaskBudgetCorrectivePrompt(
+                correctivePrompt = buildCurrentTaskBudgetDeltaPrompt(
                         originalUser, summary, selection.availableStateTokens());
                 log.info("Current task state corrective retry: attemptId={}, type=budget, availableStateTokens={}, primaryStateTokens={}, primaryCandidateTokens={}",
                         attemptId, selection.availableStateTokens(), primaryMeasurement.stateTokens(),
                         primaryMeasurement.fullCandidateTokens());
                 String corrected = conversationSummaryClient.summarize(model, correctivePrompt);
-                String correctedState = corrected == null ? null : corrected.strip();
-                correctiveState = correctedState;
+                correctiveState = corrected == null ? null : corrected.strip();
+                ContinuationStateDelta budgetDelta = parseCurrentTaskDelta(correctiveState);
+                validateBudgetCorrectiveDelta(budgetDelta);
+                String correctedState = renderCurrentTaskState(mergeCurrentTaskState(
+                        parseCurrentTaskState(summary), budgetDelta));
                 validateCurrentTaskStateStructure(correctedState);
                 int correctedTokens = currentTaskStateBodyTokens(model, correctedState);
                 if (correctedTokens >= primaryMeasurement.stateTokens()) {
@@ -759,20 +780,22 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 .collect(Collectors.joining("\n"));
     }
 
-    private String buildCurrentTaskSummaryPrompt(ChatMessageDTO originalUser,
-                                                 String existingSummary,
-                                                 List<ChatMessageDTO> uncoveredProtocolMessages) {
+    private String buildCurrentTaskDeltaPrompt(ChatMessageDTO originalUser,
+                                               String existingSummary,
+                                               List<ChatMessageDTO> uncoveredProtocolMessages) {
         String previous = StringUtils.hasText(existingSummary) ? existingSummary : "none";
-        return "你是 Java Agent 当前任务的Continuation State更新器。\n"
-                + "输出不是Tool transcript摘要或Evidence Archive，而是Agent继续完成原始任务现在真正需要的工作状态。\n"
+        return "你是 Java Agent 当前任务的Continuation State增量更新器。\n"
+                + "输出State Delta，不要重写完整Existing State。Java会确定性保留并合并已有状态。\n"
+                + "Existing State中的Known、Constraints、Refs默认carry-forward；本轮没有变化时不要复述。\n"
+                + "KnownRemove、ConstraintsRemove、RefsRemove只能用于被新证据否定、确认错误或失效的旧条目，"
+                + "格式必须是：<旧条目原文> || reason: <非空原因>。不要因为暂时不重要而删除。\n"
+                + "Goal默认输出KEEP；Open和Next可以输出完整替换值，KEEP表示保持，none表示清空。\n"
                 + "输入只包含原始用户问题、已有Continuation State和本次要assimiliate的完整Tool protocol groups。\n"
-                + "只保留仍影响后续Planning的Known事实、关键Constraints/精确值、必要stable refs、Open问题和Next方向。\n"
-                + "删除Tool调用过程、背景解释、重复事实、已完成且不影响后续行动的细节和低价值reference。\n"
-                + "存在仍有价值的源码引用时以完整repoId/chunkId pair保留。不要复制完整Tool正文，不要添加未确认事实。\n"
+                + "KnownAdd只写本轮新增且已确认的事实/关系；ConstraintsAdd保留精确值、状态、类名、方法名和queue名；"
+                + "RefsAdd只写本轮新增的完整repoId/chunkId pair。不要复制Tool正文，不要添加未确认事实。\n"
                 + "必须严格使用以下结构并保留全部section标题：\n\n"
-                + CURRENT_TASK_SUMMARY_HEADER + "\n\n"
-                + String.join("\n", CURRENT_TASK_SUMMARY_SECTIONS) + "\n\n"
-                + "每个section只写一个简洁缩进条目，可用分号分隔必要事实；没有内容写none。\n"
+                + deltaTemplate() + "\n\n"
+                + "每个新增、删除、Open或Next条目使用一个缩进bullet；没有内容写none。"
                 + "不要写叙事性回答、推理过程或逐Tool复述。\n\n"
                 + "Original User Question:\n" + originalUser.getContent() + "\n\n"
                 + "Existing Current Task Continuation State:\n" + previous + "\n\n"
@@ -780,41 +803,48 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 + formatCurrentTaskProtocol(uncoveredProtocolMessages);
     }
 
-    private String buildCurrentTaskStructureCorrectivePrompt(ChatMessageDTO originalUser,
-                                                             String candidate,
-                                                             String validationFailure,
-                                                             int availableStateTokens) {
-        return "Repair the proposed Current Task Continuation State.\n"
+    private String buildCurrentTaskDeltaStructureCorrectivePrompt(ChatMessageDTO originalUser,
+                                                                  String candidate,
+                                                                  String validationFailure,
+                                                                  int availableStateTokens) {
+        return "Repair the proposed Current Task Continuation State Delta.\n"
                 + "Return plain text only: no explanation and no Markdown code fence.\n"
                 + "Copy every heading in the template below byte-for-byte, in exactly this order. "
                 + "Do not translate, rename, omit, or add headings.\n"
-                + "Do not introduce new facts. Retain only information needed to continue the original task.\n"
-                + "If a source locator is retained, keep its complete repoId/chunkId pair.\n"
-                + "Use exactly one concise indented bullet under every section; write none when empty.\n"
-                + "Target at most " + availableStateTokens + " estimated state tokens so the full Planning request can fit.\n"
+                + "Do not rewrite a complete State and do not introduce new facts. Preserve additions/removals from the candidate only.\n"
+                + "Removal entries require an exact old item plus ' || reason: ' and a non-empty reason.\n"
+                + "If a source locator is added, keep its complete repoId/chunkId pair. Write none for empty sections.\n"
+                + "The deterministically merged State should fit about " + availableStateTokens + " estimated tokens.\n"
                 + "Validation failure: " + validationFailure + "\n\n"
-                + CURRENT_TASK_SUMMARY_HEADER + "\n\n"
-                + CURRENT_TASK_SUMMARY_SECTIONS.stream()
-                .map(section -> section + "\n  - <one concise value or none>")
-                .collect(Collectors.joining("\n")) + "\n\n"
+                + deltaTemplate() + "\n\n"
                 + "Original User Question:\n" + originalUser.getContent() + "\n\n"
-                + "Candidate to rewrite:\n" + nullToEmpty(candidate);
+                + "Candidate Delta to repair:\n" + nullToEmpty(candidate);
     }
 
-    private String buildCurrentTaskBudgetCorrectivePrompt(ChatMessageDTO originalUser,
-                                                          String proposedState,
-                                                          int availableStateTokens) {
-        return "Compact only the proposed Current Task Continuation State below. Do not re-analyze Tool evidence.\n"
-                + "If space is limited, prioritize in this order:\n"
-                + "1. Goal, Open, Next.\n"
-                + "2. Known facts and exact Constraints that directly affect the next planning decision.\n"
-                + "3. Only Refs likely needed for an exact reread.\n"
-                + "Remove Tool-call narration, background explanation, duplication, resolved low-value details, and low-value refs.\n"
-                + "Do not introduce new facts. If a locator is retained, keep its complete repoId/chunkId pair.\n"
-                + "Keep every required heading in order and exactly one concise indented bullet per section.\n"
-                + "Available estimated state token budget: " + availableStateTokens + ". This is guidance; return a complete valid state.\n\n"
+    private String buildCurrentTaskBudgetDeltaPrompt(ChatMessageDTO originalUser,
+                                                     String proposedState,
+                                                     int availableStateTokens) {
+        return "Compact only the dynamic Open and Next sections of the proposed Current Task Continuation State.\n"
+                + "Return a State Delta, not a complete State. Java will carry Goal, Known, Constraints, and Refs forward exactly.\n"
+                + "Required protected output: Goal=KEEP; all Add/Remove sections=none. Do not remove or rewrite confirmed facts, exact values, relationships, or refs.\n"
+                + "Only shorten wording, remove duplication, or clear resolved content in Open and Next.\n"
+                + "Available estimated state token budget: " + availableStateTokens + ". This is guidance; return a complete valid Delta.\n\n"
+                + deltaTemplate() + "\n\n"
                 + "Original User Question:\n" + originalUser.getContent() + "\n\n"
-                + "Proposed Continuation State to compact:\n" + nullToEmpty(proposedState);
+                + "Proposed merged Continuation State:\n" + nullToEmpty(proposedState);
+    }
+
+    private String deltaTemplate() {
+        return CURRENT_TASK_DELTA_HEADER + "\n\n"
+                + "- Goal\n  - KEEP\n"
+                + "- KnownAdd\n  - none\n"
+                + "- KnownRemove\n  - none\n"
+                + "- ConstraintsAdd\n  - none\n"
+                + "- ConstraintsRemove\n  - none\n"
+                + "- RefsAdd\n  - none\n"
+                + "- RefsRemove\n  - none\n"
+                + "- Open\n  - KEEP\n"
+                + "- Next\n  - KEEP";
     }
 
     private String formatCurrentTaskProtocol(List<ChatMessageDTO> messages) {
@@ -832,6 +862,193 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
             return "ToolResponse: id=" + responseId + ", name=" + toolName + "\n"
                     + nullToEmpty(message.getContent());
         }).collect(Collectors.joining("\n\n"));
+    }
+
+    private ContinuationState parseCurrentTaskState(String state) {
+        if (!StringUtils.hasText(state)) {
+            return ContinuationState.empty();
+        }
+        Map<String, List<String>> sections = parseSectionedBody(
+                state, CURRENT_TASK_SUMMARY_HEADER, CURRENT_TASK_SUMMARY_SECTIONS);
+        List<String> goals = meaningfulItems(sections.get("- Goal"));
+        if (goals.size() != 1) {
+            throw new IllegalStateException("Current task continuation state requires exactly one Goal item");
+        }
+        return new ContinuationState(goals.get(0),
+                meaningfulItems(sections.get("- Known")),
+                meaningfulItems(sections.get("- Constraints")),
+                meaningfulItems(sections.get("- Refs")),
+                meaningfulItems(sections.get("- Open")),
+                meaningfulItems(sections.get("- Next")));
+    }
+
+    private ContinuationStateDelta parseCurrentTaskDelta(String deltaBody) {
+        if (!StringUtils.hasText(deltaBody)) {
+            throw new IllegalStateException("Current task continuation state Delta is empty");
+        }
+        Map<String, List<String>> sections = parseSectionedBody(
+                deltaBody, CURRENT_TASK_DELTA_HEADER, CURRENT_TASK_DELTA_SECTIONS);
+        List<String> goalItems = meaningfulItems(sections.get("- Goal"));
+        if (goalItems.size() != 1) {
+            throw new RepairableCurrentTaskSummaryException(
+                    "Current task continuation state Delta requires exactly one Goal item");
+        }
+        String goalUpdate = KEEP.equalsIgnoreCase(goalItems.get(0)) ? null : goalItems.get(0);
+        return new ContinuationStateDelta(goalUpdate,
+                meaningfulItems(sections.get("- KnownAdd")),
+                removals(sections.get("- KnownRemove"), "Known"),
+                meaningfulItems(sections.get("- ConstraintsAdd")),
+                removals(sections.get("- ConstraintsRemove"), "Constraints"),
+                meaningfulItems(sections.get("- RefsAdd")),
+                removals(sections.get("- RefsRemove"), "Refs"),
+                dynamicSection(sections.get("- Open")),
+                dynamicSection(sections.get("- Next")));
+    }
+
+    private Map<String, List<String>> parseSectionedBody(String body,
+                                                          String header,
+                                                          List<String> expectedSections) {
+        String normalized = nullToEmpty(body).replace("\r\n", "\n").strip();
+        String[] lines = normalized.split("\n", -1);
+        if (lines.length == 0 || !header.equals(lines[0].strip())) {
+            throw new RepairableCurrentTaskSummaryException("Invalid header: expected " + header);
+        }
+        Map<String, List<String>> values = new LinkedHashMap<>();
+        int sectionIndex = -1;
+        String currentSection = null;
+        for (int index = 1; index < lines.length; index++) {
+            String stripped = lines[index].strip();
+            if (sectionIndex + 1 < expectedSections.size()
+                    && expectedSections.get(sectionIndex + 1).equals(stripped)) {
+                sectionIndex++;
+                currentSection = stripped;
+                values.put(currentSection, new ArrayList<>());
+                continue;
+            }
+            if (expectedSections.contains(stripped)) {
+                throw new RepairableCurrentTaskSummaryException(
+                        "Missing or out-of-order section before " + stripped);
+            }
+            if (stripped.isEmpty()) {
+                continue;
+            }
+            if (currentSection == null) {
+                throw new RepairableCurrentTaskSummaryException("Content appears before the first section");
+            }
+            List<String> items = values.get(currentSection);
+            if (stripped.startsWith("- ")) {
+                items.add(stripped.substring(2).strip());
+            } else if (items.isEmpty()) {
+                throw new RepairableCurrentTaskSummaryException(
+                        "Section item must be an indented bullet: " + currentSection);
+            } else {
+                int last = items.size() - 1;
+                items.set(last, items.get(last) + " " + stripped);
+            }
+        }
+        if (sectionIndex != expectedSections.size() - 1) {
+            throw new RepairableCurrentTaskSummaryException("Missing required ordered sections");
+        }
+        return values;
+    }
+
+    private List<String> meaningfulItems(List<String> items) {
+        if (items == null || items.isEmpty()) {
+            return List.of();
+        }
+        List<String> meaningful = items.stream()
+                .map(String::strip)
+                .filter(StringUtils::hasText)
+                .filter(item -> !"none".equalsIgnoreCase(item))
+                .toList();
+        if (meaningful.stream().anyMatch(item -> KEEP.equalsIgnoreCase(item)) && meaningful.size() > 1) {
+            throw new RepairableCurrentTaskSummaryException("KEEP cannot be combined with other section items");
+        }
+        return meaningful;
+    }
+
+    private List<StateRemoval> removals(List<String> items, String section) {
+        List<String> meaningful = meaningfulItems(items);
+        List<StateRemoval> removals = new ArrayList<>(meaningful.size());
+        for (String item : meaningful) {
+            int delimiter = item.toLowerCase().lastIndexOf(REMOVE_REASON_DELIMITER);
+            if (delimiter <= 0) {
+                throw new IllegalStateException(section + " removal requires exact target and non-empty reason");
+            }
+            String target = item.substring(0, delimiter).strip();
+            String reason = item.substring(delimiter + REMOVE_REASON_DELIMITER.length()).strip();
+            if (!StringUtils.hasText(target) || !StringUtils.hasText(reason)) {
+                throw new IllegalStateException(section + " removal requires exact target and non-empty reason");
+            }
+            removals.add(new StateRemoval(target, reason));
+        }
+        return List.copyOf(removals);
+    }
+
+    private DynamicStateSection dynamicSection(List<String> items) {
+        List<String> meaningful = meaningfulItems(items);
+        if (meaningful.size() == 1 && KEEP.equalsIgnoreCase(meaningful.get(0))) {
+            return DynamicStateSection.keepExisting();
+        }
+        return new DynamicStateSection(false, meaningful);
+    }
+
+    private ContinuationState mergeCurrentTaskState(ContinuationState existing,
+                                                    ContinuationStateDelta delta) {
+        String goal = StringUtils.hasText(delta.goalUpdate()) ? delta.goalUpdate() : existing.goal();
+        if (!StringUtils.hasText(goal)) {
+            throw new IllegalStateException("Current task continuation state Delta did not establish Goal");
+        }
+        List<String> known = mergeMonotonicSection("Known", existing.known(),
+                delta.knownAdd(), delta.knownRemove());
+        List<String> constraints = mergeMonotonicSection("Constraints", existing.constraints(),
+                delta.constraintsAdd(), delta.constraintsRemove());
+        List<String> refs = mergeMonotonicSection("Refs", existing.refs(),
+                delta.refsAdd(), delta.refsRemove());
+        List<String> open = delta.open().keep() ? existing.open() : delta.open().items();
+        List<String> next = delta.next().keep() ? existing.next() : delta.next().items();
+        return new ContinuationState(goal, known, constraints, refs, open, next);
+    }
+
+    private List<String> mergeMonotonicSection(String section,
+                                               List<String> existing,
+                                               List<String> additions,
+                                               List<StateRemoval> removals) {
+        LinkedHashSet<String> merged = new LinkedHashSet<>(existing);
+        for (StateRemoval removal : removals) {
+            if (!merged.remove(removal.target())) {
+                throw new IllegalStateException(section + " removal target does not exist: " + removal.target());
+            }
+        }
+        merged.addAll(additions);
+        return List.copyOf(merged);
+    }
+
+    private String renderCurrentTaskState(ContinuationState state) {
+        return CURRENT_TASK_SUMMARY_HEADER + "\n\n"
+                + renderStateSection("- Goal", List.of(state.goal())) + "\n"
+                + renderStateSection("- Known", state.known()) + "\n"
+                + renderStateSection("- Constraints", state.constraints()) + "\n"
+                + renderStateSection("- Refs", state.refs()) + "\n"
+                + renderStateSection("- Open", state.open()) + "\n"
+                + renderStateSection("- Next", state.next());
+    }
+
+    private String renderStateSection(String heading, List<String> items) {
+        List<String> safeItems = items == null || items.isEmpty() ? List.of("none") : items;
+        return heading + "\n" + safeItems.stream()
+                .map(item -> "  - " + item)
+                .collect(Collectors.joining("\n"));
+    }
+
+    private void validateBudgetCorrectiveDelta(ContinuationStateDelta delta) {
+        if (StringUtils.hasText(delta.goalUpdate())
+                || !delta.knownAdd().isEmpty() || !delta.knownRemove().isEmpty()
+                || !delta.constraintsAdd().isEmpty() || !delta.constraintsRemove().isEmpty()
+                || !delta.refsAdd().isEmpty() || !delta.refsRemove().isEmpty()) {
+            throw new IllegalStateException(
+                    "Budget corrective Delta may update only dynamic Open and Next sections");
+        }
     }
 
     private void validateCurrentTaskStateStructure(String summary) {
@@ -856,6 +1073,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
             throw new RepairableCurrentTaskSummaryException(
                     "Current task continuation state contains an incomplete repoId/chunkId pair");
         }
+        parseCurrentTaskState(summary);
     }
 
     private void validateCurrentTaskStateReduction(String model,
@@ -1466,6 +1684,37 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                                         int rawTokens,
                                         int fullCandidateTokens,
                                         String tokenSource) {
+    }
+
+    private record ContinuationState(String goal,
+                                     List<String> known,
+                                     List<String> constraints,
+                                     List<String> refs,
+                                     List<String> open,
+                                     List<String> next) {
+        private static ContinuationState empty() {
+            return new ContinuationState(null, List.of(), List.of(), List.of(), List.of(), List.of());
+        }
+    }
+
+    private record ContinuationStateDelta(String goalUpdate,
+                                          List<String> knownAdd,
+                                          List<StateRemoval> knownRemove,
+                                          List<String> constraintsAdd,
+                                          List<StateRemoval> constraintsRemove,
+                                          List<String> refsAdd,
+                                          List<StateRemoval> refsRemove,
+                                          DynamicStateSection open,
+                                          DynamicStateSection next) {
+    }
+
+    private record StateRemoval(String target, String reason) {
+    }
+
+    private record DynamicStateSection(boolean keep, List<String> items) {
+        private static DynamicStateSection keepExisting() {
+            return new DynamicStateSection(true, List.of());
+        }
     }
 
     private static final class RepairableCurrentTaskSummaryException extends IllegalStateException {

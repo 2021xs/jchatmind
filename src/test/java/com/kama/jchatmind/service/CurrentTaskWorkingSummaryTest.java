@@ -29,6 +29,7 @@ import static org.mockito.Mockito.verify;
 class CurrentTaskWorkingSummaryTest {
 
     private static final String MODEL = "deepseek-chat";
+    private static final String KEEP = "KEEP";
     private static final String SUMMARY_V1 = """
             Current Task Continuation State
 
@@ -48,6 +49,51 @@ class CurrentTaskWorkingSummaryTest {
             """;
     private static final String SUMMARY_V2 = SUMMARY_V1.replace(
             "Verify the exact database row.", "The exact database row is now confirmed.");
+    private static final String DELTA_V1 = """
+            Current Task Continuation State Delta
+
+            - Goal
+              - Diagnose order 123 without losing the original question.
+            - KnownAdd
+              - Search confirmed the handler location.
+            - KnownRemove
+              - none
+            - ConstraintsAdd
+              - status=206, rowLimit=50, hasMore=true.
+            - ConstraintsRemove
+              - none
+            - RefsAdd
+              - repoId: repo-1
+              - chunkId: chunk-1
+            - RefsRemove
+              - none
+            - Open
+              - Verify the exact database row.
+            - Next
+              - Call getCodeChunk and run a narrower query.
+            """;
+    private static final String KEEP_DELTA = """
+            Current Task Continuation State Delta
+
+            - Goal
+              - KEEP
+            - KnownAdd
+              - none
+            - KnownRemove
+              - none
+            - ConstraintsAdd
+              - none
+            - ConstraintsRemove
+              - none
+            - RefsAdd
+              - none
+            - RefsRemove
+              - none
+            - Open
+              - KEEP
+            - Next
+              - KEEP
+            """;
 
     private ContextCompressionProperties properties;
     private RecordingSummaryClient summaryClient;
@@ -127,7 +173,7 @@ class CurrentTaskWorkingSummaryTest {
         protocol.addAll(group("g2", "getCodeChunk", longBody("new exact source body")));
         ConversationContextCompressor.CurrentTaskWorkingState existing =
                 new ConversationContextCompressor.CurrentTaskWorkingState(SUMMARY_V1, 1, 1, 1);
-        summaryClient.nextSummary = SUMMARY_V2;
+        summaryClient.nextSummary = keepDeltaWithOpen("The exact database row is now confirmed.", KEEP);
 
         ConversationContextCompressor.CurrentTaskCompression result = compress(protocol, existing);
 
@@ -135,6 +181,7 @@ class CurrentTaskWorkingSummaryTest {
         assertThat(result.state().coveredThroughLogicalGroup()).isEqualTo(2);
         assertThat(result.state().summaryDepth()).isEqualTo(2);
         assertThat(result.state().compressionCount()).isEqualTo(2);
+        assertThat(result.state().summary()).isEqualTo(SUMMARY_V2.strip());
         assertThat(summaryClient.lastPrompt)
                 .contains(SUMMARY_V1, "new exact source body")
                 .doesNotContain("already covered body");
@@ -179,8 +226,7 @@ class CurrentTaskWorkingSummaryTest {
         properties.setMaxContextTokens(2_000);
         List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
                 "repoId: repo-1\nchunkId: chunk-1\n" + "raw-evidence ".repeat(800));
-        String overLegacyLimit = stateWithKnown("K".repeat(1_300));
-        assertThat(overLegacyLimit.length()).isGreaterThan(properties.getMaxSummaryChars());
+        String overLegacyLimit = deltaWithKnown("K".repeat(1_300));
         summaryClient.nextSummary = overLegacyLimit;
 
         ConversationContextCompressor.CurrentTaskCompression result = compress(
@@ -189,7 +235,8 @@ class CurrentTaskWorkingSummaryTest {
         assertThat(result.compressed()).isTrue();
         assertThat(result.correctiveRetryCount()).isZero();
         assertThat(result.state().coveredThroughLogicalGroup()).isEqualTo(1);
-        assertThat(result.state().summary()).isEqualTo(overLegacyLimit.strip());
+        assertThat(result.state().summary().length()).isGreaterThan(properties.getMaxSummaryChars());
+        assertThat(result.state().summary()).contains("K".repeat(1_300));
         assertThat(summaryClient.callCount).isEqualTo(1);
     }
 
@@ -199,20 +246,22 @@ class CurrentTaskWorkingSummaryTest {
         String rawMarker = "RAW_TOOL_BODY_MUST_NOT_REENTER_CORRECTIVE";
         List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
                 rawMarker + "\n" + "detail ".repeat(600));
-        String primary = stateWithKnown("P".repeat(900));
+        String primary = deltaWithOpen("P".repeat(900), "N".repeat(300));
+        String corrective = keepDeltaWithOpen("Verify one remaining item.", "Continue with the next exact check.");
         summaryClient.queuedResponses.add(primary);
-        summaryClient.queuedResponses.add(SUMMARY_V1);
+        summaryClient.queuedResponses.add(corrective);
 
         ConversationContextCompressor.CurrentTaskCompression result = compress(
                 protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
 
         assertThat(result.compressed()).isTrue();
         assertThat(result.correctiveRetryCount()).isEqualTo(1);
-        assertThat(result.state().summary()).isEqualTo(SUMMARY_V1.strip());
+        assertThat(result.state().summary())
+                .contains("Verify one remaining item.", "Continue with the next exact check.");
         assertThat(result.state().coveredThroughLogicalGroup()).isEqualTo(1);
         assertThat(summaryClient.callCount).isEqualTo(2);
         assertThat(summaryClient.lastPrompt)
-                .contains("Proposed Continuation State to compact", primary.strip(),
+                .contains("Proposed merged Continuation State",
                         "Available estimated state token budget", "Original current user question")
                 .doesNotContain(rawMarker);
     }
@@ -223,9 +272,10 @@ class CurrentTaskWorkingSummaryTest {
         String rawMarker = "DIAGNOSTIC_RAW_TOOL_BODY";
         List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
                 rawMarker + "\n" + "detail ".repeat(600));
-        String primary = stateWithKnown("P".repeat(900));
+        String primary = deltaWithOpen("P".repeat(900), "N".repeat(300));
+        String corrective = keepDeltaWithOpen("Verify one remaining item.", "Continue with the next exact check.");
         summaryClient.queuedResponses.add(primary);
-        summaryClient.queuedResponses.add(SUMMARY_V1);
+        summaryClient.queuedResponses.add(corrective);
         AtomicReference<AgentLifecycleObservationPublisher.CompressionObservation> captured =
                 new AtomicReference<>();
 
@@ -245,7 +295,7 @@ class CurrentTaskWorkingSummaryTest {
         assertThat(observation.primaryState()).isEqualTo(primary.strip());
         assertThat(observation.correctivePrompt()).isEqualTo(summaryClient.prompts.get(1));
         assertThat(observation.correctivePrompt()).doesNotContain(rawMarker);
-        assertThat(observation.correctiveState()).isEqualTo(SUMMARY_V1.strip());
+        assertThat(observation.correctiveState()).isEqualTo(corrective.strip());
         assertThat(observation.acceptedState()).isEqualTo(result.state().summary());
         assertThat(observation.accepted()).isTrue();
         assertThat(observation.coveredThroughLogicalGroup()).isEqualTo(1);
@@ -254,7 +304,8 @@ class CurrentTaskWorkingSummaryTest {
         assertThat(observation.summaryDepth()).isEqualTo(1);
         assertThat(observation.compressionCount()).isEqualTo(1);
         assertThat(observation.correctiveRetryCount()).isEqualTo(1);
-        assertThat(result.state().summary()).isEqualTo(SUMMARY_V1.strip());
+        assertThat(result.state().summary())
+                .contains("Verify one remaining item.", "Continue with the next exact check.");
     }
 
     @Test
@@ -262,8 +313,8 @@ class CurrentTaskWorkingSummaryTest {
         properties.setMaxContextTokens(350);
         List<ChatMessageDTO> protocol = group("g1", "knowledgeQuery",
                 "raw-marker\n" + "detail ".repeat(600));
-        summaryClient.queuedResponses.add(stateWithKnown("P".repeat(900)));
-        summaryClient.queuedResponses.add(stateWithKnown("C".repeat(700)));
+        summaryClient.queuedResponses.add(deltaWithKnown("P".repeat(900)));
+        summaryClient.queuedResponses.add(keepDeltaWithOpen("C".repeat(700), "still too large"));
 
         ConversationContextCompressor.CurrentTaskCompression result = compress(
                 protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
@@ -281,7 +332,7 @@ class CurrentTaskWorkingSummaryTest {
         List<ChatMessageDTO> protocol = group("g1", "databaseQuery",
                 "raw-db-body\n" + "detail ".repeat(600));
         summaryClient.queuedResponses.add("invalid primary");
-        summaryClient.queuedResponses.add(stateWithKnown("C".repeat(700)));
+        summaryClient.queuedResponses.add(deltaWithKnown("C".repeat(700)));
 
         ConversationContextCompressor.CurrentTaskCompression result = compress(
                 protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
@@ -358,7 +409,7 @@ class CurrentTaskWorkingSummaryTest {
         protocol.addAll(group("g2", "databaseQuery", "old-two\n" + "detail ".repeat(180)));
         List<ChatMessageDTO> recent = group("g3", "knowledgeQuery", "RECENT_RAW\n" + "detail ".repeat(30));
         protocol.addAll(recent);
-        summaryClient.nextSummary = SUMMARY_V1;
+        summaryClient.nextSummary = DELTA_V1;
 
         ConversationContextCompressor.CurrentTaskCompression result = compress(
                 protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
@@ -375,7 +426,7 @@ class CurrentTaskWorkingSummaryTest {
         List<ChatMessageDTO> protocol = new ArrayList<>();
         protocol.addAll(group("g1", "searchProjectCode", "OLD_RAW\n" + "detail ".repeat(180)));
         protocol.addAll(group("g2", "knowledgeQuery", "RECENT_RAW\n" + "detail ".repeat(180)));
-        summaryClient.nextSummary = SUMMARY_V1;
+        summaryClient.nextSummary = DELTA_V1;
 
         ConversationContextCompressor.CurrentTaskCompression result = compress(
                 protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
@@ -391,7 +442,7 @@ class CurrentTaskWorkingSummaryTest {
         properties.setMaxContextTokens(300);
         List<ChatMessageDTO> protocol = group("g1", "mcp.snapshot",
                 "ONLY_GROUP\n" + "detail ".repeat(600));
-        summaryClient.nextSummary = SUMMARY_V1;
+        summaryClient.nextSummary = DELTA_V1;
 
         ConversationContextCompressor.CurrentTaskCompression result = compress(
                 protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
@@ -405,8 +456,8 @@ class CurrentTaskWorkingSummaryTest {
     void incompleteLocatorUsesSingleStructureCorrectiveAndKeepsPair() {
         List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
                 longBody("repoId: repo-1\nchunkId: chunk-1"));
-        summaryClient.queuedResponses.add(stateWithRefs("repoId: repo-1"));
-        summaryClient.queuedResponses.add(SUMMARY_V1);
+        summaryClient.queuedResponses.add(deltaWithRefs("repoId: repo-1"));
+        summaryClient.queuedResponses.add(DELTA_V1);
 
         ConversationContextCompressor.CurrentTaskCompression result = compress(
                 protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
@@ -422,8 +473,8 @@ class CurrentTaskWorkingSummaryTest {
         properties.setMaxContextTokens(350);
         List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
                 "raw-fixed-marker\n" + "detail ".repeat(600));
-        summaryClient.queuedResponses.add(stateWithKnown("P".repeat(900)));
-        summaryClient.queuedResponses.add(SUMMARY_V1);
+        summaryClient.queuedResponses.add(deltaWithOpen("P".repeat(900), "N".repeat(300)));
+        summaryClient.queuedResponses.add(keepDeltaWithOpen("compact", "next"));
         List<ChatMessageDTO> fixed = List.of(ChatMessageDTO.builder()
                 .role(ChatMessageDTO.RoleType.SYSTEM)
                 .content("FIXED_PLANNING\n" + "instruction ".repeat(20))
@@ -435,6 +486,174 @@ class CurrentTaskWorkingSummaryTest {
         assertThat(result.compressed()).isTrue();
         assertThat(summaryClient.lastPrompt).contains("Available estimated state token budget");
         assertThat(summaryClient.callCount).isEqualTo(2);
+    }
+
+    @Test
+    void confirmedLuaMappingProducerConsumerRelationshipAndExactRefsSurviveFiveUnrelatedUpdates() {
+        properties.setMaxContextTokens(2_000);
+        String luaRepoId = "bf4ef891-330b-4ce8-9002-ba4c43ffe210";
+        String producerRepoId = "12ea4f96-8096-47ce-a230-d54ddb75042c";
+        String consumerRepoId = "727834fa-2971-4625-a0ef-edf5f54eed93";
+        String initialState = """
+                Current Task Continuation State
+
+                - Goal
+                  - Explain the complete seckill order lifecycle.
+                - Known
+                  - VoucherOrderProducer#sendSeckillOrder -> SECKILL_ORDER_QUEUE -> VoucherOrderConsumer#handleSeckillOrderBatch.
+                - Constraints
+                  - seckill.lua: 3 = stock key missing; 1 = stock <= 0; 2 = duplicate user; 0 = success.
+                - Refs
+                  - lua repoId: %s
+                  - lua chunkId: lua-chunk
+                  - producer repoId: %s
+                  - producer chunkId: producer-chunk
+                  - consumer repoId: %s
+                  - consumer chunkId: consumer-chunk
+                - Open
+                  - Verify timeout close behavior.
+                - Next
+                  - Inspect the next unrelated component.
+                """.formatted(luaRepoId, producerRepoId, consumerRepoId).strip();
+        ConversationContextCompressor.CurrentTaskWorkingState state =
+                new ConversationContextCompressor.CurrentTaskWorkingState(initialState, 0, 1, 1);
+        List<ChatMessageDTO> protocol = new ArrayList<>();
+
+        for (int update = 1; update <= 5; update++) {
+            protocol.addAll(group("unrelated-" + update, "knowledgeQuery",
+                    longBody("unrelated additive evidence " + update)));
+            summaryClient.queuedResponses.add(keepDeltaWithOpen(
+                    "Unrelated question " + update + " remains open.",
+                    "Inspect unrelated component " + (update + 1) + "."));
+
+            ConversationContextCompressor.CurrentTaskCompression result = compress(protocol, state);
+
+            assertThat(result.compressed()).isTrue();
+            assertThat(result.state().coveredThroughLogicalGroup()).isEqualTo(update);
+            state = result.state();
+        }
+
+        assertThat(state.summary())
+                .contains("3 = stock key missing", "1 = stock <= 0", "2 = duplicate user", "0 = success")
+                .contains("VoucherOrderProducer#sendSeckillOrder")
+                .contains("SECKILL_ORDER_QUEUE")
+                .contains("VoucherOrderConsumer#handleSeckillOrderBatch")
+                .contains("lua repoId: " + luaRepoId, "lua chunkId: lua-chunk")
+                .contains("producer repoId: " + producerRepoId, "producer chunkId: producer-chunk")
+                .contains("consumer repoId: " + consumerRepoId, "consumer chunkId: consumer-chunk");
+        assertThat(summaryClient.callCount).isEqualTo(5);
+    }
+
+    @Test
+    void additionsMergeWhileOpenAndNextReplaceDynamically() {
+        properties.setMaxContextTokens(2_000);
+        ConversationContextCompressor.CurrentTaskWorkingState existing =
+                new ConversationContextCompressor.CurrentTaskWorkingState(SUMMARY_V1, 0, 1, 1);
+        summaryClient.nextSummary = """
+                Current Task Continuation State Delta
+
+                - Goal
+                  - KEEP
+                - KnownAdd
+                  - VoucherOrderConsumer handles the queue batch.
+                - KnownRemove
+                  - none
+                - ConstraintsAdd
+                  - returnCode=2 means duplicate user.
+                - ConstraintsRemove
+                  - none
+                - RefsAdd
+                  - repoId: bf4ef891-330b-4ce8-9002-ba4c43ffe210
+                  - chunkId: consumer-chunk
+                - RefsRemove
+                  - none
+                - Open
+                  - none
+                - Next
+                  - Inspect timeout close behavior.
+                """;
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                group("add", "getCodeChunk", longBody("new confirmed consumer evidence")), existing);
+
+        assertThat(result.compressed()).isTrue();
+        assertThat(result.state().summary())
+                .contains("Search confirmed the handler location.")
+                .contains("VoucherOrderConsumer handles the queue batch.")
+                .contains("status=206, rowLimit=50, hasMore=true.")
+                .contains("returnCode=2 means duplicate user.")
+                .contains("repoId: repo-1", "chunkId: chunk-1")
+                .contains("repoId: bf4ef891-330b-4ce8-9002-ba4c43ffe210", "chunkId: consumer-chunk")
+                .contains("Inspect timeout close behavior.")
+                .doesNotContain("Verify the exact database row.")
+                .doesNotContain("Call getCodeChunk and run a narrower query.");
+    }
+
+    @Test
+    void explicitRemovalOfExistingKnownWithReasonIsApplied() {
+        properties.setMaxContextTokens(2_000);
+        ConversationContextCompressor.CurrentTaskWorkingState existing =
+                new ConversationContextCompressor.CurrentTaskWorkingState(SUMMARY_V1, 0, 1, 1);
+        summaryClient.nextSummary = deltaRemovingKnown(
+                "Search confirmed the handler location. || reason: contradicted by exact source");
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                group("remove", "getCodeChunk", longBody("contradicting exact source")), existing);
+
+        assertThat(result.compressed()).isTrue();
+        assertThat(result.state().summary())
+                .doesNotContain("Search confirmed the handler location.")
+                .contains("status=206, rowLimit=50, hasMore=true.", "repoId: repo-1", "chunkId: chunk-1");
+    }
+
+    @Test
+    void removalWithoutReasonFailsClosedAndKeepsOldStateAndRawGroup() {
+        properties.setMaxContextTokens(2_000);
+        List<ChatMessageDTO> protocol = group("invalid-remove", "getCodeChunk",
+                longBody("contradicting exact source"));
+        ConversationContextCompressor.CurrentTaskWorkingState existing =
+                new ConversationContextCompressor.CurrentTaskWorkingState(SUMMARY_V1, 0, 1, 1);
+        summaryClient.nextSummary = deltaRemovingKnown("Search confirmed the handler location.");
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(protocol, existing);
+
+        assertThat(result.compressed()).isFalse();
+        assertThat(result.state().summary()).isEqualTo(SUMMARY_V1);
+        assertThat(result.state().coveredThroughLogicalGroup()).isZero();
+        assertThat(result.uncoveredProtocolMessages()).containsExactlyElementsOf(protocol);
+    }
+
+    @Test
+    void removalOfMissingTargetFailsClosedWithoutChangingOtherState() {
+        properties.setMaxContextTokens(2_000);
+        List<ChatMessageDTO> protocol = group("missing-remove", "getCodeChunk",
+                longBody("unrelated exact source"));
+        ConversationContextCompressor.CurrentTaskWorkingState existing =
+                new ConversationContextCompressor.CurrentTaskWorkingState(SUMMARY_V1, 0, 1, 1);
+        summaryClient.nextSummary = deltaRemovingKnown(
+                "A fact that never existed. || reason: invalidated by exact source");
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(protocol, existing);
+
+        assertThat(result.compressed()).isFalse();
+        assertThat(result.state().summary()).isEqualTo(SUMMARY_V1);
+        assertThat(result.state().coveredThroughLogicalGroup()).isZero();
+        assertThat(result.uncoveredProtocolMessages()).containsExactlyElementsOf(protocol);
+    }
+
+    @Test
+    void noNewConfirmedInformationKeepsProtectedStateUnchanged() {
+        properties.setMaxContextTokens(2_000);
+        ConversationContextCompressor.CurrentTaskWorkingState existing =
+                new ConversationContextCompressor.CurrentTaskWorkingState(SUMMARY_V1, 0, 1, 1);
+        summaryClient.nextSummary = KEEP_DELTA;
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                group("no-new", "knowledgeQuery", longBody("no new confirmed information")), existing);
+
+        assertThat(result.compressed()).isTrue();
+        assertThat(result.state().summary()).isEqualTo(SUMMARY_V1.strip());
+        assertThat(result.state().coveredThroughLogicalGroup()).isEqualTo(1);
     }
 
     private ConversationContextCompressor.CurrentTaskCompression compress(
@@ -481,16 +700,33 @@ class CurrentTaskWorkingSummaryTest {
         return marker + "\n" + "detail ".repeat(180);
     }
 
-    private String stateWithKnown(String known) {
-        return SUMMARY_V1.replace("Search confirmed the handler location.", known);
+    private String deltaWithKnown(String known) {
+        return DELTA_V1.replace("Search confirmed the handler location.", known);
     }
 
-    private String stateWithRefs(String refs) {
-        return SUMMARY_V1.replace("repoId: repo-1\n  - chunkId: chunk-1", refs);
+    private String deltaWithRefs(String refs) {
+        return DELTA_V1.replace("repoId: repo-1\n  - chunkId: chunk-1", refs);
+    }
+
+    private String deltaWithOpen(String open, String next) {
+        return KEEP_DELTA
+                .replace("- Goal\n  - KEEP", "- Goal\n  - Diagnose order 123 without losing the original question.")
+                .replace("- Open\n  - KEEP", "- Open\n  - " + open)
+                .replace("- Next\n  - KEEP", "- Next\n  - " + next);
+    }
+
+    private String keepDeltaWithOpen(String open, String next) {
+        return KEEP_DELTA
+                .replace("- Open\n  - KEEP", "- Open\n  - " + open)
+                .replace("- Next\n  - KEEP", "- Next\n  - " + next);
+    }
+
+    private String deltaRemovingKnown(String removal) {
+        return KEEP_DELTA.replace("- KnownRemove\n  - none", "- KnownRemove\n  - " + removal);
     }
 
     private static final class RecordingSummaryClient implements ConversationSummaryClient {
-        private String nextSummary = SUMMARY_V1;
+        private String nextSummary = DELTA_V1;
         private final List<String> queuedResponses = new ArrayList<>();
         private final List<String> prompts = new ArrayList<>();
         private String lastPrompt;
