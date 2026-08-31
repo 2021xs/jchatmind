@@ -205,6 +205,7 @@ public class JChatMind {
                 ? new AgentRunFailureHandler(agentTaskLogService, this.agentEventPublisher)
                 : agentRunFailureHandler;
         Assert.notNull(toolCallBatchExecutor, "ToolCallBatchExecutor cannot be null");
+        Assert.notNull(conversationContextCompressor, "ConversationContextCompressor cannot be null");
         this.toolCallBatchExecutor = toolCallBatchExecutor;
         this.conversationContextCompressor = conversationContextCompressor;
         this.userMessageId = userMessageId;
@@ -435,6 +436,7 @@ public class JChatMind {
                             + compressedContext.state().coveredThroughLogicalGroup()
                             + ", summaryDepth=" + compressedContext.state().summaryDepth()
                             + ", compressionCount=" + compressedContext.state().compressionCount()
+                            + ", correctiveRetryCount=" + compressedContext.correctiveRetryCount()
                             + ", uncoveredProtocolMessages="
                             + compressedContext.uncoveredProtocolMessages().size());
             sendAgentEvent(AgentSseEvent.Type.STEP_DONE, payload(
@@ -467,6 +469,12 @@ public class JChatMind {
                 : planningToolCallbacks();
         List<Message> requestMessages = AgentMemoryHistorySanitizer.toSafeModelMessages(
                 this.chatMemory.get(this.chatSessionId));
+        List<Message> measuredPlanningMessages = new ArrayList<>(requestMessages);
+        if (StringUtils.hasText(thinkPrompt)) {
+            measuredPlanningMessages.add(new SystemMessage(thinkPrompt));
+        }
+        conversationContextCompressor.assertPlanningContextWithinBudget(
+                model, measuredPlanningMessages);
         Prompt prompt = Prompt.builder()
                 .chatOptions(this.chatOptions)
                 .messages(requestMessages)

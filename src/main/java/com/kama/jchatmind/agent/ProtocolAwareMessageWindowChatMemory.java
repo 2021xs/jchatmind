@@ -1,6 +1,5 @@
 package com.kama.jchatmind.agent;
 
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
@@ -17,14 +16,12 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * A message window that evicts complete tool protocol batches instead of individual
- * assistant/tool messages.
+ * Runtime message storage that validates complete tool protocol batches.
+ * Context pressure and lossy eviction are owned by ConversationContextCompressor.
  */
-@Slf4j
 final class ProtocolAwareMessageWindowChatMemory implements ChatMemory {
 
     private final ChatMemoryRepository repository;
-    private final int maxMessages;
 
     ProtocolAwareMessageWindowChatMemory(int maxMessages) {
         this(new InMemoryChatMemoryRepository(), maxMessages);
@@ -32,9 +29,10 @@ final class ProtocolAwareMessageWindowChatMemory implements ChatMemory {
 
     ProtocolAwareMessageWindowChatMemory(ChatMemoryRepository repository, int maxMessages) {
         Assert.notNull(repository, "repository cannot be null");
+        // Retain the legacy setting as a validated compatibility input only. Context
+        // pressure is enforced by ConversationContextCompressor, never by this store.
         Assert.isTrue(maxMessages > 0, "maxMessages must be greater than 0");
         this.repository = repository;
-        this.maxMessages = maxMessages;
     }
 
     @Override
@@ -46,13 +44,8 @@ final class ProtocolAwareMessageWindowChatMemory implements ChatMemory {
         List<Message> existing = repository.findByConversationId(conversationId);
         List<Message> combined = replaceExistingSystemMessages(existing, messages);
         combined.addAll(messages);
-        List<Message> retained = trimToProtocolSafeWindow(combined);
-        repository.saveAll(conversationId, retained);
-        if (retained.size() != combined.size()) {
-            log.info("Protocol-aware runtime memory trimmed: maxMessages={}, beforeMessages={}, "
-                            + "afterMessages={}, protocolValid=true, orphanToolResponses=0, partialToolBatches=0",
-                    maxMessages, combined.size(), retained.size());
-        }
+        logicalMessageGroups(combined);
+        repository.saveAll(conversationId, combined);
     }
 
     @Override
@@ -79,54 +72,6 @@ final class ProtocolAwareMessageWindowChatMemory implements ChatMemory {
         return existing.stream()
                 .filter(message -> !(message instanceof SystemMessage))
                 .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
-    }
-
-    private List<Message> trimToProtocolSafeWindow(List<Message> messages) {
-        List<LogicalMessageGroup> groups = logicalMessageGroups(messages);
-        if (messages.size() <= maxMessages) {
-            return messages;
-        }
-
-        boolean[] retained = new boolean[groups.size()];
-        int systemMessageCount = 0;
-        for (int index = 0; index < groups.size(); index++) {
-            LogicalMessageGroup group = groups.get(index);
-            if (group.system()) {
-                retained[index] = true;
-                systemMessageCount += group.size();
-            }
-        }
-
-        int remainingBudget = Math.max(0, maxMessages - systemMessageCount);
-        boolean retainedNonSystem = false;
-        for (int index = groups.size() - 1; index >= 0; index--) {
-            LogicalMessageGroup group = groups.get(index);
-            if (group.system()) {
-                continue;
-            }
-            if (group.size() <= remainingBudget) {
-                retained[index] = true;
-                retainedNonSystem = true;
-                remainingBudget -= group.size();
-                continue;
-            }
-            if (!retainedNonSystem && group.toolBatch()) {
-                // Correctness wins over a hard message cap when the newest atomic batch
-                // cannot fit by itself.
-                retained[index] = true;
-            }
-            break;
-        }
-
-        List<Message> result = new ArrayList<>();
-        for (int index = 0; index < groups.size(); index++) {
-            if (!retained[index]) {
-                continue;
-            }
-            LogicalMessageGroup group = groups.get(index);
-            result.addAll(messages.subList(group.startInclusive(), group.endExclusive()));
-        }
-        return result;
     }
 
     private static List<LogicalMessageGroup> logicalMessageGroups(List<Message> messages) {
@@ -212,8 +157,5 @@ final class ProtocolAwareMessageWindowChatMemory implements ChatMemory {
                                        int endExclusive,
                                        boolean system,
                                        boolean toolBatch) {
-        private int size() {
-            return endExclusive - startInclusive;
-        }
     }
 }

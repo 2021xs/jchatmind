@@ -1,6 +1,7 @@
 package com.kama.jchatmind.service;
 
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
+import org.springframework.ai.chat.messages.Message;
 
 import java.util.List;
 
@@ -33,6 +34,8 @@ public interface ConversationContextCompressor {
                                                         List<ChatMessageDTO> completedConversationMessages,
                                                         List<ChatMessageDTO> currentTaskProtocolMessages,
                                                         CurrentTaskWorkingState state);
+
+    void assertPlanningContextWithinBudget(String model, List<Message> messages);
 
     static String summaryMessageContent(String summary) {
         return SUMMARY_PREFIX + summary + SUMMARY_SUFFIX;
@@ -104,6 +107,7 @@ public interface ConversationContextCompressor {
     record CurrentTaskCompression(CurrentTaskWorkingState state,
                                   List<ChatMessageDTO> uncoveredProtocolMessages,
                                   CompressionCheck check,
-                                  boolean compressed) {
+                                  boolean compressed,
+                                  int correctiveRetryCount) {
     }
 }

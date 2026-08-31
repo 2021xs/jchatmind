@@ -36,15 +36,75 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class JChatMindRealRunObservabilityTest {
+
+    @Test
+    void overBudgetPlanningContextFailsBeforeProviderCall() {
+        ChatClient chatClient = mock(ChatClient.class);
+        AgentTaskLogService logService = mock(AgentTaskLogService.class);
+        when(logService.startTask(anyString(), anyString(), anyString(), anyString(), anyString(),
+                org.mockito.ArgumentMatchers.anyInt(), anyString()))
+                .thenReturn(AgentTask.builder().id("task-budget").build());
+        when(logService.startStep(anyString(), org.mockito.ArgumentMatchers.anyInt(), anyString(),
+                anyString(), anyString()))
+                .thenReturn(AgentStep.builder().id("step-budget").stepNo(1).stepType("THINK").build());
+
+        ConversationContextCompressor compressor = mock(ConversationContextCompressor.class);
+        doThrow(new IllegalStateException("Planning working context exceeds hard token budget"))
+                .when(compressor).assertPlanningContextWithinBudget(anyString(), any());
+        ChatMessageFacadeService chatMessages = mock(ChatMessageFacadeService.class);
+        when(chatMessages.getChatMessageDTOsBySessionId(anyString())).thenReturn(List.of());
+        AgentRunFailureHandler failureHandler = mock(AgentRunFailureHandler.class);
+
+        JChatMind agent = new JChatMind(
+                "22222222-2222-2222-2222-222222222222",
+                "test-model",
+                "test-agent",
+                "test",
+                "system",
+                chatClient,
+                1,
+                List.of(new UserMessage("context that must be measured")),
+                List.of(),
+                List.of(),
+                "11111111-1111-1111-1111-111111111111",
+                mock(SseService.class),
+                mock(AgentEventPublisher.class),
+                mock(ToolExecutionService.class),
+                chatMessages,
+                mock(ChatMessageConverter.class),
+                logService,
+                compressor,
+                "33333333-3333-3333-3333-333333333333",
+                List.of(),
+                new ToolCorrectionProperties(),
+                new ToolFailureClassifier(),
+                failureHandler,
+                mock(ToolCallBatchExecutor.class)
+        );
+
+        RuntimeException failure = assertThrows(RuntimeException.class, agent::run);
+
+        assertThat(failure.getCause())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("hard token budget");
+        verify(chatClient, never()).prompt(any(Prompt.class));
+        verify(failureHandler).handle(anyString(), anyString(), any(AgentStep.class),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+                any(IllegalStateException.class));
+    }
 
     @Test
     void runWithoutToolCallsWritesTaskThinkAndFinishLogs() {

@@ -10,12 +10,16 @@ import com.kama.jchatmind.service.impl.EstimatedTokenCounter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -69,7 +73,10 @@ class CurrentTaskWorkingSummaryTest {
     void noPressureKeepsAllRawGroupsAndDoesNotSummarize() {
         properties.setMaxContextTokens(20_000);
         properties.setMaxSingleToolResultTokens(20_000);
-        List<ChatMessageDTO> protocol = group("g1", "searchProjectCode", "small result");
+        properties.setMaxHistoryMessages(1);
+        List<ChatMessageDTO> protocol = new ArrayList<>();
+        protocol.addAll(group("g1", "searchProjectCode", "small result one"));
+        protocol.addAll(group("g2", "databaseQuery", "small result two"));
 
         ConversationContextCompressor.CurrentTaskCompression result = compress(
                 protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
@@ -78,6 +85,7 @@ class CurrentTaskWorkingSummaryTest {
         assertThat(result.state().summary()).isNull();
         assertThat(result.uncoveredProtocolMessages()).containsExactlyElementsOf(protocol);
         assertThat(summaryClient.callCount).isZero();
+        assertThat(result.check().reason()).isEqualTo("not_needed");
     }
 
     @Test
@@ -96,12 +104,19 @@ class CurrentTaskWorkingSummaryTest {
         assertThat(result.state().coveredThroughLogicalGroup()).isEqualTo(3);
         assertThat(result.state().summaryDepth()).isEqualTo(1);
         assertThat(result.state().compressionCount()).isEqualTo(1);
+        assertThat(result.correctiveRetryCount()).isZero();
         assertThat(result.uncoveredProtocolMessages()).isEmpty();
         assertThat(result.state().summary())
                 .contains("status=206", "rowLimit=50", "hasMore=true", "repoId: repo-1", "chunkId: chunk-1");
         assertThat(summaryClient.lastPrompt)
                 .contains("Original current user question", "PARTIAL", "hasMore=true", "repoId: repo-1")
                 .doesNotContain("completed-secret-tool-body");
+        properties.setMaxContextTokens(400);
+        assertThatCode(() -> compressor.assertPlanningContextWithinBudget(MODEL, List.of(
+                new UserMessage("Original current user question"),
+                new SystemMessage(ConversationContextCompressor.currentTaskSummaryMessageContent(
+                        result.state().summary())))))
+                .doesNotThrowAnyException();
         verify(chatSessionMapper, never()).updateById(org.mockito.ArgumentMatchers.any());
     }
 
@@ -141,6 +156,7 @@ class CurrentTaskWorkingSummaryTest {
         assertThat(result.state().summaryDepth()).isEqualTo(state.summaryDepth());
         assertThat(result.state().compressionCount()).isEqualTo(state.compressionCount());
         assertThat(result.state().compressionSuppressed()).isTrue();
+        assertThat(result.correctiveRetryCount()).isEqualTo(1);
         assertThat(result.uncoveredProtocolMessages()).containsExactlyElementsOf(protocol);
 
         ChatMessageDTO currentUser = ChatMessageDTO.builder()
@@ -155,7 +171,65 @@ class CurrentTaskWorkingSummaryTest {
                 "session-1", MODEL, currentUser, null, List.of(currentUser), protocol, result.state());
         assertThat(retry.compressed()).isFalse();
         assertThat(retry.state()).isEqualTo(result.state());
+        assertThat(summaryClient.callCount).isEqualTo(2);
+    }
+
+    @Test
+    void overLengthSummaryGetsOneCorrectiveRetryAndThenAdvancesCoverage() {
+        List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
+                longBody("repoId: repo-1\nchunkId: chunk-1\nEXACT=42"));
+        summaryClient.queuedResponses.add(SUMMARY_V1 + "x".repeat(properties.getMaxSummaryChars()));
+        summaryClient.queuedResponses.add(SUMMARY_V1);
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
+
+        assertThat(result.compressed()).isTrue();
+        assertThat(result.correctiveRetryCount()).isEqualTo(1);
+        assertThat(result.state().coveredThroughLogicalGroup()).isEqualTo(1);
+        assertThat(result.state().compressionSuppressed()).isFalse();
+        assertThat(result.uncoveredProtocolMessages()).isEmpty();
+        assertThat(summaryClient.callCount).isEqualTo(2);
+        assertThat(summaryClient.lastPrompt)
+                .contains("plain text only", "must not exceed 1200 characters",
+                        "Do not translate, rename, omit, or add headings",
+                        "repoId: repo-1", "chunkId: chunk-1");
+    }
+
+    @Test
+    void emptySummaryFailsClosedWithoutCorrectiveRetry() {
+        List<ChatMessageDTO> protocol = group("g1", "knowledgeQuery", longBody("confirmed fact"));
+        summaryClient.nextSummary = "";
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
+
+        assertThat(result.compressed()).isFalse();
+        assertThat(result.correctiveRetryCount()).isZero();
+        assertThat(result.state().coveredThroughLogicalGroup()).isZero();
+        assertThat(result.uncoveredProtocolMessages()).containsExactlyElementsOf(protocol);
         assertThat(summaryClient.callCount).isEqualTo(1);
+    }
+
+    @Test
+    void planningBudgetGateUsesConfiguredTokenThreshold() {
+        properties.setMaxContextTokens(20);
+
+        assertThatCode(() -> compressor.assertPlanningContextWithinBudget(
+                MODEL, List.of(new UserMessage("short"), new SystemMessage("prompt"))))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> compressor.assertPlanningContextWithinBudget(
+                MODEL, List.of(new UserMessage("x".repeat(100)))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("maxContextTokens=20");
+        ToolResponseMessage oversizedToolResponse = ToolResponseMessage.builder()
+                .responses(List.of(new ToolResponseMessage.ToolResponse(
+                        "call-budget", "searchProjectCode", "y".repeat(100))))
+                .build();
+        assertThatThrownBy(() -> compressor.assertPlanningContextWithinBudget(
+                MODEL, List.of(oversizedToolResponse)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("maxContextTokens=20");
     }
 
     @Test
@@ -218,6 +292,7 @@ class CurrentTaskWorkingSummaryTest {
 
     private static final class RecordingSummaryClient implements ConversationSummaryClient {
         private String nextSummary = SUMMARY_V1;
+        private final List<String> queuedResponses = new ArrayList<>();
         private String lastPrompt;
         private int callCount;
 
@@ -225,7 +300,7 @@ class CurrentTaskWorkingSummaryTest {
         public String summarize(String model, String prompt) {
             callCount++;
             lastPrompt = prompt;
-            return nextSummary;
+            return queuedResponses.isEmpty() ? nextSummary : queuedResponses.remove(0);
         }
     }
 }

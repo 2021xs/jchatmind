@@ -16,6 +16,10 @@ import com.kama.jchatmind.service.ConversationSummaryClient;
 import com.kama.jchatmind.service.TokenCounter;
 import com.kama.jchatmind.service.TokenCounter.TokenCount;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -154,16 +158,14 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         MaxToolResultTokenCount maxTool = maxSingleToolResultTokens(model, inputs.effectiveMessages());
         boolean overContext = effective.tokens() >= threshold.getMaxContextTokens();
         boolean overSingleResult = maxTool.tokens() >= threshold.getMaxSingleToolResultTokens();
-        boolean overMessages = inputs.effectiveMessages().size() > properties.getMaxHistoryMessages();
         boolean needed = properties.isEnabled() && !inputs.uncoveredGroups().isEmpty()
                 && !safeState.compressionSuppressed()
-                && (overContext || overSingleResult || overMessages);
+                && (overContext || overSingleResult);
         String reason = !properties.isEnabled() ? "disabled"
                 : inputs.uncoveredGroups().isEmpty() ? "no_new_messages"
                 : safeState.compressionSuppressed() ? "previous_failure"
                 : overSingleResult ? "single_tool_result_tokens"
                 : overContext ? "context_tokens"
-                : overMessages ? "history_messages"
                 : "not_needed";
         return new CompressionCheck(needed, reason, inputs.effectiveMessages().size(),
                 effective.tokens(), effective.tokens(), maxTool.tokens(),
@@ -186,17 +188,29 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         CompressionCheck check = checkCurrentTask(model, originalUser, conversationSummary,
                 completedConversationMessages, currentTaskProtocolMessages, safeState);
         if (!check.needed()) {
-            return new CurrentTaskCompression(safeState, inputs.uncoveredProtocolMessages(), check, false);
+            return new CurrentTaskCompression(safeState, inputs.uncoveredProtocolMessages(), check, false, 0);
         }
 
         String prompt = buildCurrentTaskSummaryPrompt(originalUser, safeState.summary(),
                 inputs.uncoveredProtocolMessages());
         long start = System.currentTimeMillis();
+        int correctiveRetryCount = 0;
         try {
             String generated = conversationSummaryClient.summarize(model, prompt);
             String summary = generated == null ? null : generated.strip();
-            validateCurrentTaskSummary(model, summary, safeState.summary(),
-                    inputs.uncoveredProtocolMessages());
+            try {
+                validateCurrentTaskSummary(model, summary, safeState.summary(),
+                        inputs.uncoveredProtocolMessages());
+            } catch (RepairableCurrentTaskSummaryException repairable) {
+                correctiveRetryCount = 1;
+                String correctivePrompt = buildCurrentTaskCorrectivePrompt(summary, repairable.getMessage());
+                log.info("Current task summary corrective retry: sessionId={}, reason={}, candidateChars={}",
+                        sessionId, repairable.getMessage(), length(summary));
+                String corrected = conversationSummaryClient.summarize(model, correctivePrompt);
+                summary = corrected == null ? null : corrected.strip();
+                validateCurrentTaskSummary(model, summary, safeState.summary(),
+                        inputs.uncoveredProtocolMessages());
+            }
             CurrentTaskWorkingState updated = new CurrentTaskWorkingState(
                     summary,
                     inputs.allGroups().size(),
@@ -205,7 +219,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                     false);
             publishCurrentTaskCompression(sessionId, model, check, prompt, safeState.summary(), summary,
                     System.currentTimeMillis() - start, true, null);
-            return new CurrentTaskCompression(updated, List.of(), check, true);
+            return new CurrentTaskCompression(updated, List.of(), check, true, correctiveRetryCount);
         } catch (Exception error) {
             publishCurrentTaskCompression(sessionId, model, check, prompt, safeState.summary(), null,
                     System.currentTimeMillis() - start, false,
@@ -218,8 +232,59 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                     safeState.summaryDepth(),
                     safeState.compressionCount(),
                     true);
-            return new CurrentTaskCompression(suppressed, inputs.uncoveredProtocolMessages(), check, false);
+            return new CurrentTaskCompression(suppressed, inputs.uncoveredProtocolMessages(), check, false,
+                    correctiveRetryCount);
         }
+    }
+
+    @Override
+    public void assertPlanningContextWithinBudget(String model, List<Message> messages) {
+        List<Message> safeMessages = messages == null ? List.of() : List.copyOf(messages);
+        List<ChatMessageDTO> measurableMessages = safeMessages.stream()
+                .map(this::toTokenMeasurementMessage)
+                .toList();
+        TokenCount measured = tokenCounter.countMessages(model, measurableMessages);
+        int hardBudget = properties.thresholdFor(model).getMaxContextTokens();
+        if (measured.tokens() > hardBudget) {
+            throw new IllegalStateException("Planning working context exceeds hard token budget: tokens="
+                    + measured.tokens() + ", maxContextTokens=" + hardBudget
+                    + ", tokenSource=" + measured.source());
+        }
+    }
+
+    private ChatMessageDTO toTokenMeasurementMessage(Message message) {
+        ChatMessageDTO.RoleType role;
+        String measurableContent = message.getText();
+        if (message instanceof UserMessage) {
+            role = ChatMessageDTO.RoleType.USER;
+        } else if (message instanceof AssistantMessage assistantMessage) {
+            role = ChatMessageDTO.RoleType.ASSISTANT;
+            measurableContent = assistantMeasurementContent(assistantMessage);
+        } else if (message instanceof ToolResponseMessage toolResponseMessage) {
+            role = ChatMessageDTO.RoleType.TOOL;
+            measurableContent = toolResponseMessage.getResponses().stream()
+                    .map(response -> nullToEmpty(response.responseData()))
+                    .collect(Collectors.joining("\n"));
+        } else {
+            role = ChatMessageDTO.RoleType.SYSTEM;
+        }
+        return ChatMessageDTO.builder()
+                .role(role)
+                .content(measurableContent)
+                .build();
+    }
+
+    private String assistantMeasurementContent(AssistantMessage message) {
+        StringBuilder content = new StringBuilder(nullToEmpty(message.getText()));
+        if (message.getToolCalls() != null) {
+            for (AssistantMessage.ToolCall call : message.getToolCalls()) {
+                content.append('\n')
+                        .append(nullToEmpty(call.id())).append(' ')
+                        .append(nullToEmpty(call.name())).append(' ')
+                        .append(nullToEmpty(call.arguments()));
+            }
+        }
+        return content.toString();
     }
 
     @Override
@@ -250,8 +315,8 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
     public CompressedContext compressIfNeeded(String sessionId, String model, List<ChatMessageDTO> allMessages) {
         List<ChatMessageDTO> sortedMessages = sortedMessages(allMessages);
         if (!properties.isEnabled()) {
-            return new CompressedContext(null,
-                    keepRecentMessages(sortedMessages, logicalMessageGroups(sortedMessages)), false);
+            logicalMessageGroups(sortedMessages);
+            return new CompressedContext(null, sortedMessages, false);
         }
 
         ChatSessionDTO.MetaData metadata = loadMetadata(sessionId);
@@ -266,7 +331,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                     check.maxContextTokens(), check.maxSingleToolResultTokensThreshold());
             List<ChatMessageDTO> currentMessages = state.summaryUsable()
                     ? state.effectiveTail()
-                    : state.recentMessages();
+                    : sortedMessages;
             return new CompressedContext(state.effectiveSummary(), currentMessages, false);
         }
 
@@ -317,7 +382,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                     sessionId, sortedMessages.size(), recentMessages.size(), latencyMs, e.getMessage(), e);
             List<ChatMessageDTO> fallbackMessages = state.summaryUsable()
                     ? state.effectiveTail()
-                    : recentMessages;
+                    : sortedMessages;
             return new CompressedContext(state.effectiveSummary(), fallbackMessages, false);
         }
     }
@@ -524,6 +589,22 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 + formatCurrentTaskProtocol(uncoveredProtocolMessages);
     }
 
+    private String buildCurrentTaskCorrectivePrompt(String candidate, String validationFailure) {
+        return "Rewrite the candidate as one bounded Current Task Working Summary.\n"
+                + "Return plain text only: no explanation and no Markdown code fence.\n"
+                + "Copy every heading in the template below byte-for-byte, in exactly this order. "
+                + "Do not translate, rename, omit, or add headings.\n"
+                + "Preserve confirmed facts, exact values, ordering, causality, and repoId/chunkId.\n"
+                + "Use exactly one concise indented bullet under every section; write none when empty.\n"
+                + "The complete response must not exceed " + properties.getMaxSummaryChars() + " characters.\n"
+                + "Validation failure: " + validationFailure + "\n\n"
+                + CURRENT_TASK_SUMMARY_HEADER + "\n\n"
+                + CURRENT_TASK_SUMMARY_SECTIONS.stream()
+                .map(section -> section + "\n  - <one concise value or none>")
+                .collect(Collectors.joining("\n")) + "\n\n"
+                + "Candidate to rewrite:\n" + nullToEmpty(candidate);
+    }
+
     private String formatCurrentTaskProtocol(List<ChatMessageDTO> messages) {
         return messages.stream().map(message -> {
             if (hasToolCalls(message)) {
@@ -546,18 +627,23 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                                             String existingSummary,
                                             List<ChatMessageDTO> uncoveredProtocolMessages) {
         if (!StringUtils.hasText(summary) || !summary.startsWith(CURRENT_TASK_SUMMARY_HEADER)) {
-            throw new IllegalStateException("Current task summary has invalid structure");
+            if (!StringUtils.hasText(summary)) {
+                throw new IllegalStateException("Current task summary is empty");
+            }
+            throw new RepairableCurrentTaskSummaryException("Current task summary has invalid structure");
         }
         int previousIndex = -1;
         for (String section : CURRENT_TASK_SUMMARY_SECTIONS) {
             int index = summary.indexOf(section);
             if (index <= previousIndex) {
-                throw new IllegalStateException("Current task summary is missing ordered section: " + section);
+                throw new RepairableCurrentTaskSummaryException(
+                        "Current task summary is missing ordered section: " + section);
             }
             previousIndex = index;
         }
         if (summary.length() > properties.getMaxSummaryChars()) {
-            throw new IllegalStateException("Current task summary exceeds maxSummaryChars");
+            throw new RepairableCurrentTaskSummaryException(
+                    "Current task summary exceeds maxSummaryChars");
         }
         boolean mentionsStableRef = summary.contains("repoId") || summary.contains("chunkId");
         if (mentionsStableRef && !STABLE_REF_PATTERN.matcher(summary).matches()) {
@@ -615,8 +701,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         effective.add(summaryMessage(summary));
         effective.addAll(uncoveredMessages);
         int tokenLimit = properties.thresholdFor(model).getMaxContextTokens();
-        return totalContentTokens(model, effective).tokens() >= tokenLimit
-                || uncoveredMessages.size() > properties.getMaxHistoryMessages();
+        return totalContentTokens(model, effective).tokens() >= tokenLimit;
     }
 
     private String buildCompletedConversationSummaryPrompt(List<CompletedConversationPair> pairs) {
@@ -1027,5 +1112,11 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                                      List<LogicalMessageGroup> uncoveredGroups,
                                      List<ChatMessageDTO> uncoveredProtocolMessages,
                                      List<ChatMessageDTO> effectiveMessages) {
+    }
+
+    private static final class RepairableCurrentTaskSummaryException extends IllegalStateException {
+        private RepairableCurrentTaskSummaryException(String message) {
+            super(message);
+        }
     }
 }

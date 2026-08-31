@@ -72,7 +72,7 @@ class ConversationContextCompressorTest {
     }
 
     @Test
-    void shouldSkipCompressionWhenOnlyMessageCountGrows() {
+    void shouldKeepAllMessagesWhenOnlyMessageCountGrows() {
         List<ChatMessageDTO> messages = messages(20);
         when(chatSessionMapper.selectById(SESSION_ID)).thenReturn(null);
 
@@ -80,8 +80,8 @@ class ConversationContextCompressorTest {
                 compressor.compressIfNeeded(SESSION_ID, MODEL, messages);
 
         assertFalse(result.compressed());
-        assertEquals(4, result.recentMessages().size());
-        assertEquals("msg-17", result.recentMessages().get(0).getId());
+        assertEquals(20, result.recentMessages().size());
+        assertEquals("msg-1", result.recentMessages().get(0).getId());
         assertEquals(0, summaryClient.callCount);
         verify(chatSessionMapper, never()).updateById(any());
     }
@@ -146,7 +146,7 @@ class ConversationContextCompressorTest {
     }
 
     @Test
-    void shouldMoveRecentWindowStartBeforeCompleteToolBatch() {
+    void shouldNotApplyRecentWindowWithoutTokenPressure() {
         properties.setMaxContextTokens(12000);
         properties.setMaxHistoryMessages(4);
         List<ChatMessageDTO> messages = List.of(
@@ -163,13 +163,13 @@ class ConversationContextCompressorTest {
                 compressor.compressIfNeeded(SESSION_ID, MODEL, messages);
 
         assertFalse(result.compressed());
-        assertEquals(List.of("msg-2", "msg-3", "msg-4", "msg-5", "msg-6"),
+        assertEquals(List.of("msg-1", "msg-2", "msg-3", "msg-4", "msg-5", "msg-6"),
                 ids(result.recentMessages()));
         assertCompleteToolProtocol(result.recentMessages());
     }
 
     @Test
-    void shouldKeepMultipleToolBatchesCompleteWhenBoundaryFallsInsideFirstBatch() {
+    void shouldKeepAllToolBatchesWithoutTokenPressure() {
         properties.setKeepRecentRounds(1);
         properties.setMaxHistoryMessages(5);
         properties.setMaxContextTokens(12000);
@@ -188,7 +188,7 @@ class ConversationContextCompressorTest {
         ConversationContextCompressor.CompressedContext result =
                 compressor.compressIfNeeded(SESSION_ID, MODEL, messages);
 
-        assertEquals(List.of("msg-2", "msg-3", "msg-4", "msg-5", "msg-6", "msg-7", "msg-8"),
+        assertEquals(List.of("msg-1", "msg-2", "msg-3", "msg-4", "msg-5", "msg-6", "msg-7", "msg-8"),
                 ids(result.recentMessages()));
         assertCompleteToolProtocol(result.recentMessages());
     }

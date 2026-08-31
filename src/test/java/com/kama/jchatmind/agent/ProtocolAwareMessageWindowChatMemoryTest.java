@@ -14,7 +14,6 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -23,7 +22,7 @@ class ProtocolAwareMessageWindowChatMemoryTest {
     private static final String SESSION_ID = "session-1";
 
     @Test
-    void messageLengthTenKeepsEveryRetainedToolBatchComplete() {
+    void messageLengthTenDoesNotEvictValidProtocolGroups() {
         ProtocolAwareMessageWindowChatMemory memory = new ProtocolAwareMessageWindowChatMemory(10);
         List<Message> messages = new ArrayList<>();
         messages.add(new SystemMessage("system"));
@@ -41,13 +40,12 @@ class ProtocolAwareMessageWindowChatMemoryTest {
         memory.add(SESSION_ID, messages);
 
         List<Message> retained = memory.get(SESSION_ID);
-        assertEquals(10, retained.size());
-        assertFalse(retained.contains(messages.get(1)), "oldest normal group should be evicted");
+        assertEquals(messages, retained);
         assertProtocolComplete(retained);
     }
 
     @Test
-    void evictionRemovesAWholeOldToolBatch() {
+    void messageLengthDoesNotEvictOldToolBatch() {
         ProtocolAwareMessageWindowChatMemory memory = new ProtocolAwareMessageWindowChatMemory(4);
         AssistantMessage oldAssistant = toolAssistant("A", "B");
         ToolResponseMessage oldResponse = toolResponse("A", "B");
@@ -63,8 +61,8 @@ class ProtocolAwareMessageWindowChatMemoryTest {
                 latestResponse));
 
         List<Message> retained = memory.get(SESSION_ID);
-        assertFalse(retained.contains(oldAssistant));
-        assertFalse(retained.contains(oldResponse));
+        assertTrue(retained.contains(oldAssistant));
+        assertTrue(retained.contains(oldResponse));
         assertTrue(retained.contains(latestAssistant));
         assertTrue(retained.contains(latestResponse));
         assertProtocolComplete(retained);
@@ -86,14 +84,14 @@ class ProtocolAwareMessageWindowChatMemoryTest {
         memory.add(SESSION_ID, messages);
 
         List<Message> retained = memory.get(SESSION_ID);
-        assertEquals(9, retained.size());
+        assertEquals(13, retained.size());
         assertProtocolComplete(retained);
         assertDoesNotThrow(() -> new FinalContextCompiler().compile(
                 new FinalSynthesisRequestFactory().create(retained, "current question")));
     }
 
     @Test
-    void ordinaryConversationStillUsesTheConfiguredWindow() {
+    void ordinaryConversationDoesNotUseConfiguredLengthAsEvictionWindow() {
         ProtocolAwareMessageWindowChatMemory memory = new ProtocolAwareMessageWindowChatMemory(4);
         UserMessage firstUser = new UserMessage("one");
         AssistantMessage firstAssistant = assistant("one answer");
@@ -108,8 +106,8 @@ class ProtocolAwareMessageWindowChatMemoryTest {
                 secondAssistant));
 
         List<Message> retained = memory.get(SESSION_ID);
-        assertEquals(4, retained.size());
-        assertFalse(retained.contains(firstUser));
+        assertEquals(5, retained.size());
+        assertTrue(retained.contains(firstUser));
         assertTrue(retained.contains(firstAssistant));
         assertTrue(retained.contains(secondUser));
         assertTrue(retained.contains(secondAssistant));
