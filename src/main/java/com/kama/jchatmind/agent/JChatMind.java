@@ -334,32 +334,7 @@ public class JChatMind {
     }
 
     private List<ChatMessageDTO> projectPersistentToolResponses(List<ChatMessageDTO> protocolMessages) {
-        return protocolMessages.stream().map(message -> {
-            if (message.getRole() != ChatMessageDTO.RoleType.TOOL) {
-                return message;
-            }
-            if (message.getMetadata() == null || message.getMetadata().getToolResponse() == null) {
-                throw new IllegalStateException("Persistent current-task ToolResponse is missing metadata: messageId="
-                        + message.getId());
-            }
-            ToolResponseMessage.ToolResponse projected =
-                    toolCallBatchExecutor.projectPersistedResponseForContext(
-                            message.getMetadata().getToolResponse());
-            return ChatMessageDTO.builder()
-                    .id(message.getId())
-                    .sessionId(message.getSessionId())
-                    .role(message.getRole())
-                    .content(projected.responseData())
-                    .metadata(ChatMessageDTO.MetaData.builder()
-                            .model(message.getMetadata().getModel())
-                            .taskId(message.getMetadata().getTaskId())
-                            .toolResponse(projected)
-                            .toolCalls(message.getMetadata().getToolCalls())
-                            .build())
-                    .createdAt(message.getCreatedAt())
-                    .updatedAt(message.getUpdatedAt())
-                    .build();
-        }).toList();
+        return toolCallBatchExecutor.projectPersistedProtocolForContext(model, protocolMessages);
     }
 
     private ChatMessageDTO currentUserMessage(List<ChatMessageDTO> allMessages) {

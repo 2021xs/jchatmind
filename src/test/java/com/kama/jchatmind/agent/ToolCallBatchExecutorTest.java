@@ -6,6 +6,7 @@ import com.kama.jchatmind.agent.tools.CodeChunkTools;
 import com.kama.jchatmind.config.ToolDuplicateDetectionProperties;
 import com.kama.jchatmind.config.ToolTimeoutProperties;
 import com.kama.jchatmind.config.ToolResultProperties;
+import com.kama.jchatmind.config.ContextCompressionProperties;
 import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.mcp.McpToolCallException;
 import com.kama.jchatmind.mapper.CodeChunkMapper;
@@ -16,6 +17,7 @@ import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.model.entity.CodeRepository;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
 import com.kama.jchatmind.service.ToolExecutionService;
+import com.kama.jchatmind.service.impl.EstimatedTokenCounter;
 import com.kama.jchatmind.tool.ToolExecutionContext;
 import com.kama.jchatmind.tool.ToolExecutionRecord;
 import com.kama.jchatmind.tool.ToolDuplicateCallException;
@@ -68,6 +70,7 @@ class ToolCallBatchExecutorTest {
     private ToolRegistry toolRegistry;
     private ToolTimeoutProperties timeoutProperties;
     private ToolResultProperties resultProperties;
+    private ContextCompressionProperties compressionProperties;
     private ThreadPoolTaskExecutor toolExecutor;
     private ToolCallBatchExecutor batchExecutor;
     private ToolCallBatchResult.ContextView lastContextView;
@@ -107,11 +110,12 @@ class ToolCallBatchExecutorTest {
         toolExecutor.setQueueCapacity(4);
         toolExecutor.setThreadNamePrefix("tool-timeout-test-");
         toolExecutor.initialize();
+        compressionProperties = new ContextCompressionProperties();
         batchExecutor = new ToolCallBatchExecutor(
                 toolExecutionService, toolExecutor, timeoutProperties,
                 new ToolResultGuard(resultProperties),
                 new ToolDuplicateCallDetector(new ObjectMapper(), new ToolDuplicateDetectionProperties()),
-                toolRegistry);
+                toolRegistry, new EstimatedTokenCounter(compressionProperties), compressionProperties);
     }
 
     @AfterEach

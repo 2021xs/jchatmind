@@ -1,7 +1,11 @@
 package com.kama.jchatmind.agent;
 
 import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
+import com.kama.jchatmind.agent.tools.CodeSearchEvidenceFormatter;
+import com.kama.jchatmind.config.ContextCompressionProperties;
 import com.kama.jchatmind.config.ToolTimeoutProperties;
+import com.kama.jchatmind.model.dto.ChatMessageDTO;
+import com.kama.jchatmind.service.TokenCounter;
 import com.kama.jchatmind.service.ToolExecutionService;
 import com.kama.jchatmind.tool.ToolArgumentException;
 import com.kama.jchatmind.tool.ToolDuplicateCallException;
@@ -60,19 +64,26 @@ public class ToolCallBatchExecutor {
     private final ToolResultGuard toolResultGuard;
     private final ToolDuplicateCallDetector duplicateCallDetector;
     private final ToolRegistry toolRegistry;
+    private final TokenCounter tokenCounter;
+    private final ContextCompressionProperties compressionProperties;
+    private final CodeSearchEvidenceFormatter codeSearchEvidenceFormatter = new CodeSearchEvidenceFormatter();
 
     public ToolCallBatchExecutor(ToolExecutionService toolExecutionService,
                                  @Qualifier("toolExecutor") AsyncTaskExecutor toolExecutor,
                                  ToolTimeoutProperties timeoutProperties,
                                  ToolResultGuard toolResultGuard,
                                  ToolDuplicateCallDetector duplicateCallDetector,
-                                 ToolRegistry toolRegistry) {
+                                 ToolRegistry toolRegistry,
+                                 TokenCounter tokenCounter,
+                                 ContextCompressionProperties compressionProperties) {
         this.toolExecutionService = toolExecutionService;
         this.toolExecutor = toolExecutor;
         this.timeoutProperties = timeoutProperties;
         this.toolResultGuard = toolResultGuard;
         this.duplicateCallDetector = duplicateCallDetector;
         this.toolRegistry = toolRegistry;
+        this.tokenCounter = tokenCounter;
+        this.compressionProperties = compressionProperties;
     }
 
     public ToolCallBatchResult execute(Prompt prompt,
@@ -130,14 +141,21 @@ public class ToolCallBatchExecutor {
         }
 
         Map<String, ToolExecutionRecord> recordsByCallId = recordsByCallId(batchResult.getRecords());
-        List<ToolResponseMessage.ToolResponse> contextResponses = new ArrayList<>();
+        List<GuardedResponse> guardedResponses = new ArrayList<>();
         for (ToolResponseMessage.ToolResponse persistentResponse : persistentResponseMessage.getResponses()) {
             ToolExecutionRecord record = recordsByCallId.get(persistentResponse.id());
             ToolResultGuard.GuardedToolResult guarded = contextProjection(record, persistentResponse);
-            applyResultMetrics(record, guarded);
-            publishProjectedToolResult(executionContext, batchResult, record, persistentResponse, guarded);
-            contextResponses.add(new ToolResponseMessage.ToolResponse(
-                    persistentResponse.id(), persistentResponse.name(), guarded.value()));
+            guardedResponses.add(new GuardedResponse(persistentResponse, guarded));
+        }
+        List<ToolResponseMessage.ToolResponse> contextResponses = projectLogicalBatch(
+                executionContext == null ? null : executionContext.getModelName(), guardedResponses);
+        for (int index = 0; index < guardedResponses.size(); index++) {
+            GuardedResponse source = guardedResponses.get(index);
+            ToolResponseMessage.ToolResponse contextResponse = contextResponses.get(index);
+            ToolExecutionRecord record = recordsByCallId.get(source.persistent().id());
+            ToolResultGuard.GuardedToolResult finalProjection = finalProjection(source, contextResponse);
+            applyResultMetrics(record, finalProjection);
+            publishProjectedToolResult(executionContext, batchResult, record, source.persistent(), finalProjection);
         }
 
         ToolResponseMessage contextResponseMessage = ToolResponseMessage.builder()
@@ -156,9 +174,218 @@ public class ToolCallBatchExecutor {
         if (persistentResponse == null) {
             throw new IllegalArgumentException("Persistent tool response is required");
         }
-        ToolResultGuard.GuardedToolResult guarded = contextProjection(null, persistentResponse);
-        return new ToolResponseMessage.ToolResponse(
-                persistentResponse.id(), persistentResponse.name(), guarded.value());
+        return projectPersistedResponsesForContext(null, List.of(persistentResponse)).get(0);
+    }
+
+    List<ToolResponseMessage.ToolResponse> projectPersistedResponsesForContext(
+            String model,
+            List<ToolResponseMessage.ToolResponse> persistentResponses) {
+        if (persistentResponses == null) {
+            throw new IllegalArgumentException("Persistent tool responses are required");
+        }
+        List<GuardedResponse> guarded = persistentResponses.stream()
+                .map(response -> new GuardedResponse(response, contextProjection(null, response)))
+                .toList();
+        return projectLogicalBatch(model, guarded);
+    }
+
+    List<ChatMessageDTO> projectPersistedProtocolForContext(
+            String model,
+            List<ChatMessageDTO> protocolMessages) {
+        if (protocolMessages == null || protocolMessages.isEmpty()) {
+            return List.of();
+        }
+        List<ChatMessageDTO> projected = new ArrayList<>();
+        int index = 0;
+        while (index < protocolMessages.size()) {
+            ChatMessageDTO assistant = protocolMessages.get(index);
+            List<AssistantMessage.ToolCall> calls = assistant.getMetadata() == null
+                    ? null : assistant.getMetadata().getToolCalls();
+            if (assistant.getRole() != ChatMessageDTO.RoleType.ASSISTANT || calls == null || calls.isEmpty()) {
+                throw new IllegalStateException("Persistent tool protocol is missing Assistant tool calls");
+            }
+            int responseCount = calls.size();
+            if (index + responseCount >= protocolMessages.size()) {
+                throw new IllegalStateException("Persistent tool protocol has missing terminal responses");
+            }
+            List<ChatMessageDTO> responseMessages = protocolMessages.subList(
+                    index + 1, index + 1 + responseCount);
+            List<ToolResponseMessage.ToolResponse> persistentResponses = new ArrayList<>();
+            for (ChatMessageDTO responseMessage : responseMessages) {
+                if (responseMessage.getRole() != ChatMessageDTO.RoleType.TOOL
+                        || responseMessage.getMetadata() == null
+                        || responseMessage.getMetadata().getToolResponse() == null) {
+                    throw new IllegalStateException(
+                            "Persistent tool protocol contains an invalid terminal response");
+                }
+                persistentResponses.add(responseMessage.getMetadata().getToolResponse());
+            }
+            validateProtocolIds(calls, persistentResponses);
+            List<ToolResponseMessage.ToolResponse> projectedResponses =
+                    projectPersistedResponsesForContext(model, persistentResponses);
+            projected.add(assistant);
+            for (int responseIndex = 0; responseIndex < responseMessages.size(); responseIndex++) {
+                projected.add(withProjectedResponse(responseMessages.get(responseIndex),
+                        projectedResponses.get(responseIndex)));
+            }
+            index += responseCount + 1;
+        }
+        return List.copyOf(projected);
+    }
+
+    private List<ToolResponseMessage.ToolResponse> projectLogicalBatch(
+            String model,
+            List<GuardedResponse> guardedResponses) {
+        List<ToolResponseMessage.ToolResponse> initial = guardedResponses.stream()
+                .map(response -> new ToolResponseMessage.ToolResponse(
+                        response.persistent().id(), response.persistent().name(), response.guarded().value()))
+                .toList();
+        int budget = aggregateToolResultBudget(model);
+        int beforeTokens = batchTokens(model, initial);
+        if (budget <= 0 || beforeTokens <= budget) {
+            return initial;
+        }
+
+        List<SearchProjectionSlot> slots = new ArrayList<>();
+        for (int index = 0; index < guardedResponses.size(); index++) {
+            int responseIndex = index;
+            GuardedResponse response = guardedResponses.get(index);
+            String canonicalName = toolRegistry.canonicalName(response.persistent().name());
+            if (!"searchProjectCode".equals(canonicalName)) {
+                continue;
+            }
+            codeSearchEvidenceFormatter.parseForProjection(response.persistent().responseData())
+                    .ifPresent(parsed -> slots.add(new SearchProjectionSlot(responseIndex, parsed)));
+        }
+        if (slots.isEmpty()) {
+            return initial;
+        }
+
+        List<ToolResponseMessage.ToolResponse> mandatoryFloor = renderSearchProjection(initial, slots, 0);
+        if (!withinExistingSingleResultViews(initial, mandatoryFloor, slots)) {
+            log.info("Structured search model-view mandatory floor exceeds an existing single-result view; "
+                            + "keeping the ToolResultGuard projection: model={}, searchResponses={}",
+                    model, slots.size());
+            return initial;
+        }
+        int floorTokens = batchTokens(model, mandatoryFloor);
+        if (floorTokens > budget) {
+            log.info("Structured search model-view mandatory floor exceeds aggregate budget: model={}, "
+                            + "budgetTokens={}, beforeTokens={}, floorTokens={}, searchResponses={}",
+                    model, budget, beforeTokens, floorTokens, slots.size());
+            return mandatoryFloor;
+        }
+
+        int upper = slots.stream()
+                .mapToInt(slot -> codeSearchEvidenceFormatter.maximumSnippetCodePoints(slot.parsed()))
+                .max()
+                .orElse(0);
+        List<ToolResponseMessage.ToolResponse> best = mandatoryFloor;
+        int low = 0;
+        int high = upper;
+        while (low <= high) {
+            int candidateLimit = low + (high - low) / 2;
+            List<ToolResponseMessage.ToolResponse> candidate =
+                    renderSearchProjection(initial, slots, candidateLimit);
+            if (batchTokens(model, candidate) <= budget
+                    && withinExistingSingleResultViews(initial, candidate, slots)) {
+                best = candidate;
+                low = candidateLimit + 1;
+            } else {
+                high = candidateLimit - 1;
+            }
+        }
+        log.info("Structured search model-view projected logical batch: model={}, budgetTokens={}, "
+                        + "beforeTokens={}, afterTokens={}, searchResponses={}",
+                model, budget, beforeTokens, batchTokens(model, best), slots.size());
+        return best;
+    }
+
+    private List<ToolResponseMessage.ToolResponse> renderSearchProjection(
+            List<ToolResponseMessage.ToolResponse> initial,
+            List<SearchProjectionSlot> slots,
+            int snippetLimit) {
+        List<ToolResponseMessage.ToolResponse> projected = new ArrayList<>(initial);
+        for (SearchProjectionSlot slot : slots) {
+            ToolResponseMessage.ToolResponse source = initial.get(slot.responseIndex());
+            String value = codeSearchEvidenceFormatter.renderProjected(slot.parsed(), snippetLimit).value();
+            projected.set(slot.responseIndex(), new ToolResponseMessage.ToolResponse(
+                    source.id(), source.name(), value));
+        }
+        return List.copyOf(projected);
+    }
+
+    private boolean withinExistingSingleResultViews(
+            List<ToolResponseMessage.ToolResponse> initial,
+            List<ToolResponseMessage.ToolResponse> candidate,
+            List<SearchProjectionSlot> slots) {
+        for (SearchProjectionSlot slot : slots) {
+            int index = slot.responseIndex();
+            if (codePointCount(candidate.get(index).responseData())
+                    > codePointCount(initial.get(index).responseData())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private int aggregateToolResultBudget(String model) {
+        ContextCompressionProperties.TokenThreshold threshold = compressionProperties.thresholdFor(model);
+        int pressureThreshold = threshold.getMaxSingleToolResultTokens() == null
+                ? compressionProperties.getMaxSingleToolResultTokens()
+                : threshold.getMaxSingleToolResultTokens();
+        return Math.max(1, pressureThreshold - 1);
+    }
+
+    private int batchTokens(String model, List<ToolResponseMessage.ToolResponse> responses) {
+        int total = 0;
+        for (ToolResponseMessage.ToolResponse response : responses) {
+            String envelope = "toolCallId: " + response.id() + "\ntoolName: " + response.name()
+                    + "\nresponse:\n" + (response.responseData() == null ? "" : response.responseData());
+            total += Math.max(0, tokenCounter.countText(model, envelope).tokens());
+        }
+        return total;
+    }
+
+    private ToolResultGuard.GuardedToolResult finalProjection(
+            GuardedResponse source,
+            ToolResponseMessage.ToolResponse contextResponse) {
+        String value = contextResponse.responseData();
+        int storedChars = codePointCount(value);
+        return new ToolResultGuard.GuardedToolResult(
+                value,
+                source.guarded().originalChars(),
+                storedChars,
+                source.guarded().maxResultChars(),
+                source.guarded().truncated() || !java.util.Objects.equals(source.guarded().value(), value));
+    }
+
+    private void validateProtocolIds(List<AssistantMessage.ToolCall> calls,
+                                     List<ToolResponseMessage.ToolResponse> responses) {
+        List<String> requested = calls.stream().map(AssistantMessage.ToolCall::id).toList();
+        List<String> actual = responses.stream().map(ToolResponseMessage.ToolResponse::id).toList();
+        if (!requested.equals(actual)) {
+            throw new IllegalStateException(
+                    "Persistent tool protocol response IDs/order do not match requests");
+        }
+    }
+
+    private ChatMessageDTO withProjectedResponse(ChatMessageDTO message,
+                                                 ToolResponseMessage.ToolResponse response) {
+        return ChatMessageDTO.builder()
+                .id(message.getId())
+                .sessionId(message.getSessionId())
+                .role(message.getRole())
+                .content(response.responseData())
+                .metadata(ChatMessageDTO.MetaData.builder()
+                        .model(message.getMetadata().getModel())
+                        .taskId(message.getMetadata().getTaskId())
+                        .toolResponse(response)
+                        .toolCalls(message.getMetadata().getToolCalls())
+                        .build())
+                .createdAt(message.getCreatedAt())
+                .updatedAt(message.getUpdatedAt())
+                .build();
     }
 
     private ToolResultGuard.GuardedToolResult contextProjection(
@@ -771,5 +998,14 @@ public class ToolCallBatchExecutor {
 
     private record CompleteTerminalBatch(ToolResponseMessage message,
                                          Map<String, ToolCallBatchResult.TerminalStatus> statuses) {
+    }
+
+    private record GuardedResponse(ToolResponseMessage.ToolResponse persistent,
+                                   ToolResultGuard.GuardedToolResult guarded) {
+    }
+
+    private record SearchProjectionSlot(
+            int responseIndex,
+            CodeSearchEvidenceFormatter.ParsedSearchResult parsed) {
     }
 }

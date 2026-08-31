@@ -211,13 +211,17 @@ class JChatMindDuplicateToolCallTest {
             toolExecutor.setQueueCapacity(4);
             toolExecutor.initialize();
 
+            com.kama.jchatmind.config.ContextCompressionProperties compressionProperties =
+                    new com.kama.jchatmind.config.ContextCompressionProperties();
             ToolCallBatchExecutor batchExecutor = new ToolCallBatchExecutor(
                     toolExecutionService,
                     toolExecutor,
                     new ToolTimeoutProperties(),
                     new ToolResultGuard(new ToolResultProperties()),
                     new ToolDuplicateCallDetector(new ObjectMapper(), new ToolDuplicateDetectionProperties()),
-                    toolRegistry);
+                    toolRegistry,
+                    new com.kama.jchatmind.service.impl.EstimatedTokenCounter(compressionProperties),
+                    compressionProperties);
             when(messageService.createChatMessage(any(ChatMessageDTO.class)))
                     .thenReturn(CreateChatMessageResponse.builder().chatMessageId("message-1").build());
             when(messageService.getChatMessageDTOsBySessionId(anyString())).thenReturn(List.of());

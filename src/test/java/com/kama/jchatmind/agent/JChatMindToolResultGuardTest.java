@@ -193,13 +193,17 @@ class JChatMindToolResultGuardTest {
         ToolResultGuard resultGuard = spy(new ToolResultGuard(resultProperties));
         try (AgentLifecycleObservationPublisher.Registration ignored =
                      AgentLifecycleObservationPublisher.registerFinalProjection(finalProjection::set)) {
+            com.kama.jchatmind.config.ContextCompressionProperties compressionProperties =
+                    new com.kama.jchatmind.config.ContextCompressionProperties();
             ToolCallBatchExecutor batchExecutor = new ToolCallBatchExecutor(
                     toolExecutionService,
                     toolExecutor,
                     new ToolTimeoutProperties(),
                     resultGuard,
                     new ToolDuplicateCallDetector(new ObjectMapper(), new ToolDuplicateDetectionProperties()),
-                    toolRegistry);
+                    toolRegistry,
+                    new com.kama.jchatmind.service.impl.EstimatedTokenCounter(compressionProperties),
+                    compressionProperties);
             JChatMind agent = new JChatMind(
                     "agent-1", "test-model", "test-agent", "test", "system", chatClient, 20,
                     List.of(new UserMessage("find evidence")), List.of(largeTool), List.of(), "session-1",
