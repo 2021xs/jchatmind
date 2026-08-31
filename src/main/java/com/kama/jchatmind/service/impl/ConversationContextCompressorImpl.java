@@ -200,9 +200,13 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         long start = System.currentTimeMillis();
         int correctiveRetryCount = 0;
         String attemptId = sessionId + ":" + (safeState.compressionCount() + 1);
+        String primaryState = null;
+        String correctivePrompt = null;
+        String correctiveState = null;
+        String acceptedState = null;
         try {
             String generated = conversationSummaryClient.summarize(model, prompt);
-            String primaryState = generated == null ? null : generated.strip();
+            primaryState = generated == null ? null : generated.strip();
             String summary = primaryState;
             boolean budgetCorrectiveInvoked = false;
             CandidateMeasurement primaryMeasurement;
@@ -212,12 +216,13 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                         selection.selectedProtocolMessages());
             } catch (RepairableCurrentTaskSummaryException repairable) {
                 correctiveRetryCount = 1;
-                String correctivePrompt = buildCurrentTaskStructureCorrectivePrompt(
+                correctivePrompt = buildCurrentTaskStructureCorrectivePrompt(
                         originalUser, summary, repairable.getMessage(), selection.availableStateTokens());
                 log.info("Current task state corrective retry: attemptId={}, type=structure, reason={}, candidateChars={}",
                         attemptId, repairable.getMessage(), length(summary));
                 String corrected = conversationSummaryClient.summarize(model, correctivePrompt);
-                summary = corrected == null ? null : corrected.strip();
+                correctiveState = corrected == null ? null : corrected.strip();
+                summary = correctiveState;
                 validateCurrentTaskStateStructure(summary);
                 validateCurrentTaskStateReduction(model, summary, safeState.summary(),
                         selection.selectedProtocolMessages());
@@ -233,13 +238,14 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 }
                 correctiveRetryCount = 1;
                 budgetCorrectiveInvoked = true;
-                String correctivePrompt = buildCurrentTaskBudgetCorrectivePrompt(
+                correctivePrompt = buildCurrentTaskBudgetCorrectivePrompt(
                         originalUser, summary, selection.availableStateTokens());
                 log.info("Current task state corrective retry: attemptId={}, type=budget, availableStateTokens={}, primaryStateTokens={}, primaryCandidateTokens={}",
                         attemptId, selection.availableStateTokens(), primaryMeasurement.stateTokens(),
                         primaryMeasurement.fullCandidateTokens());
                 String corrected = conversationSummaryClient.summarize(model, correctivePrompt);
                 String correctedState = corrected == null ? null : corrected.strip();
+                correctiveState = correctedState;
                 validateCurrentTaskStateStructure(correctedState);
                 int correctedTokens = currentTaskStateBodyTokens(model, correctedState);
                 if (correctedTokens >= primaryMeasurement.stateTokens()) {
@@ -263,11 +269,16 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                     safeState.summaryDepth() + 1,
                     safeState.compressionCount() + 1,
                     false);
+            acceptedState = summary;
             logCurrentTaskBudgetAttempt(attemptId, model, originalUser, conversationSummary,
                     completedConversationMessages, fixedPlanningMessages, safeState.summary(), selection,
                     primaryState, primaryMeasurement, budgetCorrectiveInvoked, summary, finalMeasurement, true);
             publishCurrentTaskCompression(sessionId, model, check, prompt, safeState.summary(), summary,
-                    System.currentTimeMillis() - start, true, null);
+                    System.currentTimeMillis() - start, true, null, attemptId, primaryState,
+                    correctivePrompt, correctiveState, acceptedState, true,
+                    updated.coveredThroughLogicalGroup(), selection.selectedProtocolMessages(),
+                    selection.retainedProtocolMessages(), updated.summaryDepth(),
+                    updated.compressionCount(), correctiveRetryCount);
             return new CurrentTaskCompression(updated, selection.retainedProtocolMessages(), check, true,
                     correctiveRetryCount);
         } catch (Exception error) {
@@ -277,7 +288,11 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                     selection.availableStateTokens(), error.getMessage());
             publishCurrentTaskCompression(sessionId, model, check, prompt, safeState.summary(), null,
                     System.currentTimeMillis() - start, false,
-                    error.getClass().getSimpleName() + ": " + error.getMessage());
+                    error.getClass().getSimpleName() + ": " + error.getMessage(), attemptId,
+                    primaryState, correctivePrompt, correctiveState, null, false,
+                    safeState.coveredThroughLogicalGroup(), selection.selectedProtocolMessages(),
+                    inputs.uncoveredProtocolMessages(), safeState.summaryDepth(),
+                    safeState.compressionCount(), correctiveRetryCount);
             log.warn("Current task continuation state failed closed: sessionId={}, coveredGroups={}, error={}",
                     sessionId, safeState.coveredThroughLogicalGroup(), error.getMessage(), error);
             CurrentTaskWorkingState suppressed = new CurrentTaskWorkingState(
@@ -867,17 +882,52 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                                                String outputSummary,
                                                long latencyMs,
                                                boolean succeeded,
-                                               String failure) {
+                                               String failure,
+                                               String compressionAttemptId,
+                                               String primaryState,
+                                               String correctivePrompt,
+                                               String correctiveState,
+                                               String acceptedState,
+                                               boolean accepted,
+                                               int coveredThroughLogicalGroup,
+                                               List<ChatMessageDTO> selectedProtocolMessages,
+                                               List<ChatMessageDTO> remainingRawProtocolMessages,
+                                               int summaryDepth,
+                                               int compressionCount,
+                                               int correctiveRetryCount) {
+        if (!AgentLifecycleObservationPublisher.isCompressionObservationEnabled()) {
+            return;
+        }
         int afterTokens = succeeded
                 ? tokenCounter.countText(model,
                 ConversationContextCompressor.currentTaskSummaryMessageContent(outputSummary)).tokens()
                 : check.effectiveContextTokens();
         AgentLifecycleObservationPublisher.publishCompression(
                 new AgentLifecycleObservationPublisher.CompressionObservation(
+                        diagnosticTaskId(selectedProtocolMessages, remainingRawProtocolMessages),
                         sessionId, model, "current_task_" + check.reason(),
                         check.effectiveContextTokens(), afterTokens, check.rawHistoryTokens(),
                         check.tokenSource(), prompt, previousSummary, outputSummary,
-                        latencyMs, succeeded, failure));
+                        latencyMs, succeeded, failure, compressionAttemptId, primaryState,
+                        correctivePrompt, correctiveState, acceptedState, accepted,
+                        coveredThroughLogicalGroup, selectedProtocolMessages,
+                        remainingRawProtocolMessages, summaryDepth, compressionCount,
+                        correctiveRetryCount));
+    }
+
+    private String diagnosticTaskId(List<ChatMessageDTO> selectedProtocolMessages,
+                                    List<ChatMessageDTO> remainingRawProtocolMessages) {
+        return java.util.stream.Stream.concat(
+                        selectedProtocolMessages == null ? java.util.stream.Stream.empty()
+                                : selectedProtocolMessages.stream(),
+                        remainingRawProtocolMessages == null ? java.util.stream.Stream.empty()
+                                : remainingRawProtocolMessages.stream())
+                .map(ChatMessageDTO::getMetadata)
+                .filter(java.util.Objects::nonNull)
+                .map(ChatMessageDTO.MetaData::getTaskId)
+                .filter(org.springframework.util.StringUtils::hasText)
+                .findFirst()
+                .orElse(null);
     }
 
     private ChatMessageDTO currentTaskSummaryMessage(String summary) {

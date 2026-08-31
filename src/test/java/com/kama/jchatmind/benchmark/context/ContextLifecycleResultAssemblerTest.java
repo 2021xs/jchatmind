@@ -1,8 +1,15 @@
 package com.kama.jchatmind.benchmark.context;
 
+import com.kama.jchatmind.agent.FinalConversationMessage;
+import com.kama.jchatmind.agent.FinalEvidence;
+import com.kama.jchatmind.agent.FinalEvidenceBatch;
+import com.kama.jchatmind.agent.FinalSynthesisRequest;
+import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.config.FinalSynthesisProperties;
+import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.entity.AgentTask;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.messages.UserMessage;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -10,6 +17,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ContextLifecycleResultAssemblerTest {
 
@@ -61,6 +69,63 @@ class ContextLifecycleResultAssemblerTest {
                 context.finalTranscriptContributionStatus());
     }
 
+    @Test
+    void assemblesActualEvidenceLifecycleBodiesAndJoinIdentities() {
+        ContextLifecycleCaseExecution execution = execution();
+        ContextLifecycleObservationCollector.CaseCapture capture = execution.capture();
+        ChatMessageDTO selected = ChatMessageDTO.builder()
+                .id("tool-message-1").role(ChatMessageDTO.RoleType.TOOL).content("selected model-view body")
+                .metadata(ChatMessageDTO.MetaData.builder().taskId("task-1").build()).build();
+        capture.compressions.add(new AgentLifecycleObservationPublisher.CompressionObservation(
+                "task-1", "session-1", "model", "current_task_pressure", 500, 300, 400,
+                "ESTIMATED", "rendered compression input", null, "accepted state", 25, true, null,
+                "session-1:1", "primary state", "corrective input", "corrected state",
+                "accepted state", true, 1, List.of(selected), List.of(), 1, 1, 1));
+        AgentLifecycleObservationPublisher.CodeEvidenceIdentity c1 =
+                new AgentLifecycleObservationPublisher.CodeEvidenceIdentity(
+                        "repo-1", "chunk-1", "A.java", "A#run", 1, 0.9);
+        AgentLifecycleObservationPublisher.CodeEvidenceIdentity c2 =
+                new AgentLifecycleObservationPublisher.CodeEvidenceIdentity(
+                        "repo-1", "chunk-2", "B.java", "B#run", 2, 0.8);
+        capture.selectorProvenance.add(
+                new AgentLifecycleObservationPublisher.SelectorProvenanceObservation(
+                        "task-1", "session-1", "call-1", "query", List.of(c1, c2),
+                        List.of(c1, c2), List.of(c1), List.of(c2)));
+        capture.toolResults.add(new AgentLifecycleObservationPublisher.ToolResultObservation(
+                "task-1", "session-1", "call-1", "searchProjectCode", "searchProjectCode",
+                "canonical body", "projected body", 14, 14, false, "SUCCESS"));
+        FinalSynthesisRequest finalRequest = finalRequest();
+        capture.finalProjection.set(new AgentLifecycleObservationPublisher.FinalProjectionObservation(
+                "task-1", "session-1", "model", List.of(new UserMessage("pre merge")),
+                List.of(new UserMessage("transcript snapshot")), finalRequest, 1, 1));
+        capture.finalProviderRequests.add(
+                new AgentLifecycleObservationPublisher.FinalProviderRequestObservation(
+                        "task-1", "session-1", "model", 1,
+                        List.of(new UserMessage("actual provider request"))));
+
+        ContextLifecycleBenchmarkResult.EvidenceLifecycleDiagnostics diagnostics =
+                new ContextLifecycleResultAssembler(3, new FinalSynthesisProperties())
+                        .assemble(execution).diagnostics();
+
+        assertEquals("canonical body", diagnostics.toolResults().get(0).canonicalBody());
+        assertEquals("projected body", diagnostics.toolResults().get(0).projectedModelViewBody());
+        assertEquals("chunk-1", diagnostics.selectorProvenance().get(0).selected().get(0).chunkId());
+        assertEquals("chunk-2", diagnostics.selectorProvenance().get(0).rejected().get(0).chunkId());
+        ContextLifecycleBenchmarkResult.CompressionDiagnostic compression = diagnostics.compressions().get(0);
+        assertEquals("rendered compression input", compression.inputBody());
+        assertEquals("primary state", compression.primaryState());
+        assertEquals("corrected state", compression.correctiveState());
+        assertEquals("accepted state", compression.acceptedState());
+        assertEquals("selected model-view body",
+                compression.selectedLogicalGroupMessages().get(0).text());
+        assertTrue(compression.accepted());
+        assertEquals(finalRequest, diagnostics.finalRequest().postTranscriptFinalRequest());
+        assertEquals("pre merge", diagnostics.finalRequest().preTranscriptExecutionContext().get(0).text());
+        assertEquals("transcript snapshot", diagnostics.finalRequest().taskToolTranscript().get(0).text());
+        assertEquals("actual provider request",
+                diagnostics.finalRequest().compiledProviderRequests().get(0).messages().get(0).text());
+    }
+
     private ContextLifecycleCaseExecution execution() {
         ContextLifecycleBenchmarkCase benchmarkCase = new ContextLifecycleBenchmarkCase();
         benchmarkCase.caseId = "case-1";
@@ -83,5 +148,14 @@ class ContextLifecycleResultAssemblerTest {
                 index, index, index == 1 ? "THINK" : "FINAL", "model", 1L, "STOP", input,
                 ContextLifecycleBenchmarkResult.TokenMeasurement.unavailable(),
                 1, input.estimatedTokens(), EstimatedMessageTokenMeasurer.SOURCE, Map.of(), null);
+    }
+
+    private FinalSynthesisRequest finalRequest() {
+        return new FinalSynthesisRequest(
+                "question",
+                List.of(new FinalConversationMessage(FinalConversationMessage.Role.USER, "history")),
+                List.of(new FinalEvidenceBatch(1, List.of(new FinalEvidence(
+                        "evidence-1", "call-1", "searchProjectCode", "evidence body", Map.of())))),
+                "answer directly");
     }
 }

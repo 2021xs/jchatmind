@@ -11,6 +11,8 @@ import com.kama.jchatmind.model.entity.AgentStep;
 import com.kama.jchatmind.model.entity.AgentTask;
 import com.kama.jchatmind.model.entity.ToolCallLog;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -61,6 +63,8 @@ final class ContextLifecycleResultAssembler {
         ContextLifecycleBenchmarkResult.CorrectnessMetrics correctness =
                 correctnessScorer.score(execution.benchmarkCase(), finalAnswer);
         List<String> failures = failures(execution, modelCalls, compressionEvents);
+        ContextLifecycleBenchmarkResult.EvidenceLifecycleDiagnostics diagnostics =
+                evidenceLifecycleDiagnostics(execution, taskId);
 
         return new ContextLifecycleBenchmarkResult.CaseResult(
                 execution.benchmarkCase().caseId,
@@ -77,7 +81,132 @@ final class ContextLifecycleResultAssembler {
                         .filter(Objects::nonNull).mapToLong(Long::longValue).sum(),
                 tokens, context, tools,
                 compressionTotals(compressionEvents), stability, correctness,
-                modelCalls, toolCalls, compressionEvents, finalAnswer, failures);
+                modelCalls, toolCalls, compressionEvents, diagnostics, finalAnswer, failures);
+    }
+
+    private ContextLifecycleBenchmarkResult.EvidenceLifecycleDiagnostics evidenceLifecycleDiagnostics(
+            ContextLifecycleCaseExecution execution, String taskId) {
+        List<ContextLifecycleBenchmarkResult.ToolResultDiagnostic> toolResults =
+                execution.capture().toolResults.stream()
+                        .map(value -> new ContextLifecycleBenchmarkResult.ToolResultDiagnostic(
+                                value.taskId(), value.sessionId(), value.toolCallId(),
+                                value.canonicalToolName(), value.actualToolName(), value.rawResult(),
+                                value.contextResult(), value.status()))
+                        .toList();
+        List<ContextLifecycleBenchmarkResult.SelectorProvenanceDiagnostic> selectorProvenance =
+                execution.capture().selectorProvenance.stream()
+                        .map(value -> new ContextLifecycleBenchmarkResult.SelectorProvenanceDiagnostic(
+                                value.taskId(), value.sessionId(), value.toolCallId(), value.query(),
+                                evidenceIdentities(value.rawTopK()), evidenceIdentities(value.selectorInput()),
+                                evidenceIdentities(value.selected()), evidenceIdentities(value.rejected())))
+                        .toList();
+        List<ContextLifecycleBenchmarkResult.CompressionDiagnostic> compressions =
+                execution.capture().compressions.stream()
+                        .map(value -> new ContextLifecycleBenchmarkResult.CompressionDiagnostic(
+                                value.compressionAttemptId(),
+                                value.taskId() == null ? taskId : value.taskId(), value.sessionId(),
+                                value.compressionPrompt(), value.primaryState(), value.correctivePrompt(),
+                                value.correctiveState(), value.acceptedState(), value.accepted(),
+                                value.coveredThroughLogicalGroup(),
+                                diagnosticDtos(value.selectedProtocolMessages()),
+                                diagnosticDtos(value.remainingRawProtocolMessages()),
+                                value.summaryDepth(), value.compressionCount(), value.correctiveRetryCount(),
+                                measurer.measureText(value.compressionPrompt()),
+                                measurer.measureText(value.acceptedState()), value.latencyMs(), value.failure()))
+                        .toList();
+        return new ContextLifecycleBenchmarkResult.EvidenceLifecycleDiagnostics(
+                toolResults, selectorProvenance, compressions, finalDiagnostic(execution));
+    }
+
+    private List<ContextLifecycleBenchmarkResult.EvidenceIdentity> evidenceIdentities(
+            List<AgentLifecycleObservationPublisher.CodeEvidenceIdentity> values) {
+        return values.stream()
+                .map(value -> new ContextLifecycleBenchmarkResult.EvidenceIdentity(
+                        value.repoId(), value.chunkId(), value.filePath(), value.symbolName(),
+                        value.rank(), value.score()))
+                .toList();
+    }
+
+    private ContextLifecycleBenchmarkResult.FinalDiagnostic finalDiagnostic(
+            ContextLifecycleCaseExecution execution) {
+        AgentLifecycleObservationPublisher.FinalProjectionObservation projection =
+                execution.capture().finalProjection.get();
+        if (projection == null && execution.capture().finalProviderRequests.isEmpty()) {
+            return null;
+        }
+        List<ContextLifecycleBenchmarkResult.ProviderRequestDiagnostic> providerRequests =
+                execution.capture().finalProviderRequests.stream()
+                        .map(value -> new ContextLifecycleBenchmarkResult.ProviderRequestDiagnostic(
+                                value.attempt(), diagnosticMessages(value.compiledProviderMessages())))
+                        .toList();
+        String taskId = projection == null ? execution.capture().taskId : projection.taskId();
+        String sessionId = projection == null ? execution.sessionId() : projection.sessionId();
+        List<ContextLifecycleBenchmarkResult.DiagnosticMessage> executionContext = projection == null
+                ? List.of() : diagnosticMessages(projection.executionTranscript());
+        List<ContextLifecycleBenchmarkResult.DiagnosticMessage> transcript = projection == null
+                ? List.of() : diagnosticMessages(projection.currentTaskToolTranscript());
+        int requestMessageCount = providerRequests.isEmpty()
+                ? 0 : providerRequests.get(providerRequests.size() - 1).messages().size();
+        List<Message> lastProviderMessages = execution.capture().finalProviderRequests.isEmpty()
+                ? List.of() : execution.capture().finalProviderRequests.get(
+                execution.capture().finalProviderRequests.size() - 1).compiledProviderMessages();
+        return new ContextLifecycleBenchmarkResult.FinalDiagnostic(
+                taskId, sessionId, executionContext, transcript,
+                projection == null ? null : projection.finalRequest(), providerRequests,
+                requestMessageCount, transcript.size(),
+                projection == null ? 0 : measurer.measure(projection.executionTranscript(), null).tokens(),
+                projection == null ? 0 : measurer.measure(projection.currentTaskToolTranscript(), null).tokens(),
+                measurer.measure(lastProviderMessages, null).tokens());
+    }
+
+    private List<ContextLifecycleBenchmarkResult.DiagnosticMessage> diagnosticMessages(List<Message> messages) {
+        return messages == null ? List.of() : messages.stream().map(this::diagnosticMessage).toList();
+    }
+
+    private ContextLifecycleBenchmarkResult.DiagnosticMessage diagnosticMessage(Message message) {
+        List<ContextLifecycleBenchmarkResult.DiagnosticToolCall> toolCalls = message instanceof AssistantMessage assistant
+                ? assistant.getToolCalls().stream()
+                .map(call -> new ContextLifecycleBenchmarkResult.DiagnosticToolCall(
+                        call.id(), call.name(), call.type(), call.arguments()))
+                .toList() : List.of();
+        List<ContextLifecycleBenchmarkResult.DiagnosticToolResponse> responses =
+                message instanceof ToolResponseMessage toolResponse
+                        ? toolResponse.getResponses().stream()
+                        .map(value -> new ContextLifecycleBenchmarkResult.DiagnosticToolResponse(
+                                value.id(), value.name(), value.responseData()))
+                        .toList() : List.of();
+        return new ContextLifecycleBenchmarkResult.DiagnosticMessage(
+                null, message.getMessageType().name(), message.getText(), message.getMetadata(), toolCalls, responses);
+    }
+
+    private List<ContextLifecycleBenchmarkResult.DiagnosticMessage> diagnosticDtos(
+            List<ChatMessageDTO> messages) {
+        return messages == null ? List.of() : messages.stream().map(this::diagnosticDto).toList();
+    }
+
+    private ContextLifecycleBenchmarkResult.DiagnosticMessage diagnosticDto(ChatMessageDTO message) {
+        List<ContextLifecycleBenchmarkResult.DiagnosticToolCall> calls =
+                message.getMetadata() == null || message.getMetadata().getToolCalls() == null
+                        ? List.of() : message.getMetadata().getToolCalls().stream()
+                        .map(call -> new ContextLifecycleBenchmarkResult.DiagnosticToolCall(
+                                call.id(), call.name(), call.type(), call.arguments()))
+                        .toList();
+        ToolResponseMessage.ToolResponse response = message.getMetadata() == null
+                ? null : message.getMetadata().getToolResponse();
+        List<ContextLifecycleBenchmarkResult.DiagnosticToolResponse> responses = response == null
+                ? List.of() : List.of(new ContextLifecycleBenchmarkResult.DiagnosticToolResponse(
+                response.id(), response.name(), response.responseData()));
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        if (message.getMetadata() != null) {
+            if (message.getMetadata().getTaskId() != null) {
+                metadata.put("taskId", message.getMetadata().getTaskId());
+            }
+            if (message.getMetadata().getModel() != null) {
+                metadata.put("model", message.getMetadata().getModel());
+            }
+        }
+        return new ContextLifecycleBenchmarkResult.DiagnosticMessage(
+                message.getId(), message.getRole().name(), message.getContent(), metadata, calls, responses);
     }
 
     private List<ContextLifecycleBenchmarkResult.ModelCallMetric> modelCalls(

@@ -559,7 +559,8 @@ public class ToolCallBatchExecutor {
 
                 Duration timeout = timeoutProperties.timeoutFor(
                         record.getActualToolName(), record.getCanonicalToolName());
-                Future<String> future = toolExecutor.submit(() -> delegate.call(toolInput, toolContext));
+                ToolContext effectiveToolContext = diagnosticToolContext(toolContext, record);
+                Future<String> future = toolExecutor.submit(() -> delegate.call(toolInput, effectiveToolContext));
                 if (cancellationControl != null) {
                     cancellationControl.attachToolFuture(future);
                 }
@@ -632,6 +633,28 @@ public class ToolCallBatchExecutor {
                                     String responseData) {
             terminalResponses.put(call.id(), new TerminalResponse(status,
                     new ToolResponseMessage.ToolResponse(call.id(), call.name(), responseData)));
+        }
+
+        private ToolContext diagnosticToolContext(ToolContext original, ToolExecutionRecord record) {
+            if (!AgentLifecycleObservationPublisher.isSelectorProvenanceObservationEnabled()
+                    || !TaskEvidenceState.CODE_SEARCH_TOOL_NAME.equals(record.getCanonicalToolName())) {
+                return original;
+            }
+            try {
+                Map<String, Object> context = new LinkedHashMap<>();
+                if (original != null && original.getContext() != null) {
+                    context.putAll(original.getContext());
+                }
+                context.put(AgentLifecycleObservationPublisher.DIAGNOSTIC_TOOL_CALL_ID_CONTEXT_KEY,
+                        record.getToolCallId());
+                context.put(AgentLifecycleObservationPublisher.DIAGNOSTIC_SESSION_ID_CONTEXT_KEY,
+                        executionContext.getSessionId());
+                return new ToolContext(Map.copyOf(context));
+            } catch (RuntimeException error) {
+                log.warn("Unable to attach benchmark selector diagnostic identity; continuing without it: toolCallId={}",
+                        record.getToolCallId(), error);
+                return original;
+            }
         }
 
         private boolean runSuccess(Runnable success) {

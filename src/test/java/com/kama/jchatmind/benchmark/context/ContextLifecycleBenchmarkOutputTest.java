@@ -1,6 +1,10 @@
 package com.kama.jchatmind.benchmark.context;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kama.jchatmind.agent.FinalConversationMessage;
+import com.kama.jchatmind.agent.FinalEvidence;
+import com.kama.jchatmind.agent.FinalEvidenceBatch;
+import com.kama.jchatmind.agent.FinalSynthesisRequest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -31,6 +35,11 @@ class ContextLifecycleBenchmarkOutputTest {
         assertTrue(json.contains("\"executionArchitecture\" : \"LEGACY\""));
         assertTrue(json.contains("\"taskToolTranscriptEstimatedTokens\" : 40"));
         assertTrue(json.contains("\"finalTranscriptContributionTokens\" : 30"));
+        assertTrue(json.contains("accepted continuation state body"));
+        assertTrue(json.contains("actual final provider body"));
+        assertTrue(json.contains("canonical tool body"));
+        assertTrue(json.contains("projected tool model view"));
+        assertTrue(json.contains("\"chunkId\" : \"chunk-1\""));
         String csv = Files.readString(artifacts.caseCsv());
         assertTrue(csv.startsWith("\"run_id\",\"architecture\",\"git_commit\",\"case_id\""));
         assertTrue(csv.contains("total_input_tokens_actual"));
@@ -108,6 +117,42 @@ class ContextLifecycleBenchmarkOutputTest {
         return new ContextLifecycleBenchmarkResult.CaseResult(
                 "case-1", "A", 1, "task-1", "session-1", "SUCCESS", "COMPLETED",
                 1000, 500, 200, 100, 200, totals, context, tools, compression, stability,
-                correctness, List.of(), List.of(), List.of(), "answer", List.of());
+                correctness, List.of(), List.of(), List.of(),
+                diagnostics(),
+                "answer", List.of());
+    }
+
+    private ContextLifecycleBenchmarkResult.EvidenceLifecycleDiagnostics diagnostics() {
+        ContextLifecycleBenchmarkResult.DiagnosticMessage selected = diagnosticMessage("TOOL", "selected raw body");
+        FinalSynthesisRequest finalRequest = new FinalSynthesisRequest(
+                "question",
+                List.of(new FinalConversationMessage(FinalConversationMessage.Role.USER, "prior turn")),
+                List.of(new FinalEvidenceBatch(1, List.of(new FinalEvidence(
+                        "evidence-1", "call-1", "searchProjectCode", "projected tool model view", Map.of())))),
+                "answer directly");
+        return new ContextLifecycleBenchmarkResult.EvidenceLifecycleDiagnostics(
+                List.of(new ContextLifecycleBenchmarkResult.ToolResultDiagnostic(
+                        "task-1", "session-1", "call-1", "searchProjectCode", "searchProjectCode",
+                        "canonical tool body", "projected tool model view", "SUCCESS")),
+                List.of(new ContextLifecycleBenchmarkResult.SelectorProvenanceDiagnostic(
+                        "task-1", "session-1", "call-1", "query",
+                        List.of(new ContextLifecycleBenchmarkResult.EvidenceIdentity(
+                                "repo-1", "chunk-1", "A.java", "A#run", 1, 0.9)),
+                        List.of(), List.of(), List.of())),
+                List.of(new ContextLifecycleBenchmarkResult.CompressionDiagnostic(
+                        "session-1:1", "task-1", "session-1", "actual compression input",
+                        "primary state", null, null, "accepted continuation state body", true, 1,
+                        List.of(selected), List.of(), 1, 1, 0, 100, 20, 10, null)),
+                new ContextLifecycleBenchmarkResult.FinalDiagnostic(
+                        "task-1", "session-1", List.of(diagnosticMessage("USER", "pre transcript")),
+                        List.of(diagnosticMessage("TOOL", "transcript body")), finalRequest,
+                        List.of(new ContextLifecycleBenchmarkResult.ProviderRequestDiagnostic(
+                                1, List.of(diagnosticMessage("USER", "actual final provider body")))),
+                        1, 1, 10, 20, 30));
+    }
+
+    private ContextLifecycleBenchmarkResult.DiagnosticMessage diagnosticMessage(String role, String text) {
+        return new ContextLifecycleBenchmarkResult.DiagnosticMessage(
+                null, role, text, Map.of(), List.of(), List.of());
     }
 }

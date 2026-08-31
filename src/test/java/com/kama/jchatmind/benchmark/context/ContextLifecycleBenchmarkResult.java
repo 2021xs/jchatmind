@@ -1,5 +1,7 @@
 package com.kama.jchatmind.benchmark.context;
 
+import com.kama.jchatmind.agent.FinalSynthesisRequest;
+
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Locale;
@@ -81,6 +83,7 @@ record ContextLifecycleBenchmarkResult(
             List<ModelCallMetric> modelCalls,
             List<ToolCallMetric> toolCalls,
             List<CompressionMetric> compressionEvents,
+            EvidenceLifecycleDiagnostics diagnostics,
             String finalAnswer,
             List<String> failures) {
 
@@ -88,6 +91,7 @@ record ContextLifecycleBenchmarkResult(
             modelCalls = immutable(modelCalls);
             toolCalls = immutable(toolCalls);
             compressionEvents = immutable(compressionEvents);
+            diagnostics = diagnostics == null ? EvidenceLifecycleDiagnostics.empty() : diagnostics;
             failures = immutable(failures);
         }
     }
@@ -284,6 +288,135 @@ record ContextLifecycleBenchmarkResult(
             String tokenSource,
             boolean succeeded,
             String failure) {
+    }
+
+    record EvidenceLifecycleDiagnostics(
+            List<ToolResultDiagnostic> toolResults,
+            List<SelectorProvenanceDiagnostic> selectorProvenance,
+            List<CompressionDiagnostic> compressions,
+            FinalDiagnostic finalRequest) {
+
+        EvidenceLifecycleDiagnostics {
+            toolResults = immutable(toolResults);
+            selectorProvenance = immutable(selectorProvenance);
+            compressions = immutable(compressions);
+        }
+
+        static EvidenceLifecycleDiagnostics empty() {
+            return new EvidenceLifecycleDiagnostics(List.of(), List.of(), List.of(), null);
+        }
+    }
+
+    record ToolResultDiagnostic(
+            String taskId,
+            String sessionId,
+            String toolCallId,
+            String toolName,
+            String actualToolName,
+            String canonicalBody,
+            String projectedModelViewBody,
+            String status) {
+    }
+
+    record EvidenceIdentity(
+            String repoId,
+            String chunkId,
+            String filePath,
+            String symbolName,
+            int rank,
+            Double score) {
+    }
+
+    record SelectorProvenanceDiagnostic(
+            String taskId,
+            String sessionId,
+            String toolCallId,
+            String query,
+            List<EvidenceIdentity> rawTopK,
+            List<EvidenceIdentity> selectorInput,
+            List<EvidenceIdentity> selected,
+            List<EvidenceIdentity> rejected) {
+
+        SelectorProvenanceDiagnostic {
+            rawTopK = immutable(rawTopK);
+            selectorInput = immutable(selectorInput);
+            selected = immutable(selected);
+            rejected = immutable(rejected);
+        }
+    }
+
+    record CompressionDiagnostic(
+            String compressionAttemptId,
+            String taskId,
+            String sessionId,
+            String inputBody,
+            String primaryState,
+            String correctiveInputBody,
+            String correctiveState,
+            String acceptedState,
+            boolean accepted,
+            int coveredThroughLogicalGroup,
+            List<DiagnosticMessage> selectedLogicalGroupMessages,
+            List<DiagnosticMessage> remainingRawLogicalGroupMessages,
+            int summaryDepth,
+            int compressionCount,
+            int correctiveRetryCount,
+            int inputTokens,
+            int outputTokens,
+            long latencyMs,
+            String failure) {
+
+        CompressionDiagnostic {
+            selectedLogicalGroupMessages = immutable(selectedLogicalGroupMessages);
+            remainingRawLogicalGroupMessages = immutable(remainingRawLogicalGroupMessages);
+        }
+    }
+
+    record FinalDiagnostic(
+            String taskId,
+            String sessionId,
+            List<DiagnosticMessage> preTranscriptExecutionContext,
+            List<DiagnosticMessage> taskToolTranscript,
+            FinalSynthesisRequest postTranscriptFinalRequest,
+            List<ProviderRequestDiagnostic> compiledProviderRequests,
+            int requestMessageCount,
+            int transcriptMessageCount,
+            int preTranscriptEstimatedTokens,
+            int transcriptEstimatedTokens,
+            int finalProviderEstimatedTokens) {
+
+        FinalDiagnostic {
+            preTranscriptExecutionContext = immutable(preTranscriptExecutionContext);
+            taskToolTranscript = immutable(taskToolTranscript);
+            compiledProviderRequests = immutable(compiledProviderRequests);
+        }
+    }
+
+    record ProviderRequestDiagnostic(int attempt, List<DiagnosticMessage> messages) {
+        ProviderRequestDiagnostic {
+            messages = immutable(messages);
+        }
+    }
+
+    record DiagnosticMessage(
+            String messageId,
+            String role,
+            String text,
+            Map<String, Object> metadata,
+            List<DiagnosticToolCall> toolCalls,
+            List<DiagnosticToolResponse> toolResponses) {
+
+        DiagnosticMessage {
+            metadata = immutable(metadata);
+            toolCalls = immutable(toolCalls);
+            toolResponses = immutable(toolResponses);
+        }
+    }
+
+    record DiagnosticToolCall(String id, String name, String type, String arguments) {
+    }
+
+    record DiagnosticToolResponse(String id, String name, String responseData) {
     }
 
     private static boolean blank(String value) {

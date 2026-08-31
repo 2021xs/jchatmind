@@ -1,12 +1,17 @@
 package com.kama.jchatmind.agent.tools;
 
+import com.kama.jchatmind.agent.TaskEvidenceState;
+import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.model.dto.CodeAnswerEvidenceResult;
 import com.kama.jchatmind.model.dto.CodeRagExecutionResult;
 import com.kama.jchatmind.model.dto.CodeSearchResult;
 import com.kama.jchatmind.service.CodeRagAnswerEvidenceService;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.model.ToolContext;
 
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -118,5 +123,56 @@ class CodeSearchToolsTest {
         assertEquals(123, execution.getSelectorLatencyMs());
         assertEquals(900, execution.getSelectorPromptChars());
         assertEquals(700, execution.getSelectorCandidateSectionChars());
+    }
+
+    @Test
+    void benchmarkObservationCapturesSelectorProvenanceWithoutChangingToolResult() {
+        CodeSearchResult c1 = result("repo-1", "c1", "A.java", "A#run", 0.9);
+        CodeSearchResult c2 = result("repo-1", "c2", "B.java", "B#run", 0.8);
+        CodeSearchResult c3 = result("repo-1", "c3", "C.java", "C#run", 0.7);
+        CodeAnswerEvidenceResult answer = CodeAnswerEvidenceResult.builder()
+                .selectedEvidence(List.of(c1, c3)).build();
+        CodeRagExecutionResult execution = CodeRagExecutionResult.builder()
+                .answerEvidence(answer).rawCandidates(List.of(c1, c2, c3)).build();
+        CodeRagAnswerEvidenceService service = mock(CodeRagAnswerEvidenceService.class);
+        when(service.retrieve("repo-1", "trace query")).thenReturn(answer);
+        when(service.execute("repo-1", "trace query")).thenReturn(execution);
+        CodeSearchTools tools = new CodeSearchTools(service);
+        ToolContext toolContext = new ToolContext(Map.of(
+                TaskEvidenceState.TASK_ID_TOOL_CONTEXT_KEY, "task-1",
+                AgentLifecycleObservationPublisher.DIAGNOSTIC_SESSION_ID_CONTEXT_KEY, "session-1",
+                AgentLifecycleObservationPublisher.DIAGNOSTIC_TOOL_CALL_ID_CONTEXT_KEY, "call-1"));
+
+        String diagnosticsOff = tools.searchProjectCode("repo-1", "trace query", toolContext);
+        AtomicReference<AgentLifecycleObservationPublisher.SelectorProvenanceObservation> captured =
+                new AtomicReference<>();
+        String diagnosticsOn;
+        try (AgentLifecycleObservationPublisher.Registration ignored =
+                     AgentLifecycleObservationPublisher.registerSelectorProvenance(captured::set)) {
+            diagnosticsOn = tools.searchProjectCode("repo-1", "trace query", toolContext);
+        }
+
+        assertEquals(diagnosticsOff, diagnosticsOn);
+        AgentLifecycleObservationPublisher.SelectorProvenanceObservation observation = captured.get();
+        assertEquals("task-1", observation.taskId());
+        assertEquals("session-1", observation.sessionId());
+        assertEquals("call-1", observation.toolCallId());
+        assertEquals("trace query", observation.query());
+        assertEquals(List.of("c1", "c2", "c3"),
+                observation.rawTopK().stream().map(
+                        AgentLifecycleObservationPublisher.CodeEvidenceIdentity::chunkId).toList());
+        assertEquals(List.of("c1", "c3"), observation.selected().stream().map(
+                AgentLifecycleObservationPublisher.CodeEvidenceIdentity::chunkId).toList());
+        assertEquals(List.of("c2"), observation.rejected().stream().map(
+                AgentLifecycleObservationPublisher.CodeEvidenceIdentity::chunkId).toList());
+        assertEquals(List.of(1, 2, 3), observation.rawTopK().stream().map(
+                AgentLifecycleObservationPublisher.CodeEvidenceIdentity::rank).toList());
+    }
+
+    private CodeSearchResult result(String repoId, String chunkId, String filePath,
+                                    String symbol, double score) {
+        return CodeSearchResult.builder()
+                .repoId(repoId).chunkId(chunkId).filePath(filePath).symbolName(symbol)
+                .score(score).contentPreview("content " + chunkId).build();
     }
 }

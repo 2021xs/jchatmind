@@ -733,6 +733,11 @@ public class JChatMind {
                         + "user-facing answer. Do not output evidence containers, batch markers, diagnostics, "
                         + "or tool calls.";
                 List<Message> finalMessages = finalContextCompiler.compile(finalRequest, correctiveInstruction);
+                if (AgentLifecycleObservationPublisher.isFinalProviderRequestObservationEnabled()) {
+                    AgentLifecycleObservationPublisher.publishFinalProviderRequest(
+                            new AgentLifecycleObservationPublisher.FinalProviderRequestObservation(
+                                    currentTaskId, chatSessionId, model, attempt, finalMessages));
+                }
                 Prompt prompt = Prompt.builder()
                         .chatOptions(createFinalSynthesisChatOptions())
                         .messages(finalMessages)

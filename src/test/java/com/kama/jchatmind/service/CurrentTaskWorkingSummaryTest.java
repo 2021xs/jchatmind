@@ -2,6 +2,7 @@ package com.kama.jchatmind.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kama.jchatmind.config.ContextCompressionProperties;
+import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.mapper.AgentTaskMapper;
 import com.kama.jchatmind.mapper.ChatSessionMapper;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
@@ -16,6 +17,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -213,6 +215,46 @@ class CurrentTaskWorkingSummaryTest {
                 .contains("Proposed Continuation State to compact", primary.strip(),
                         "Available estimated state token budget", "Original current user question")
                 .doesNotContain(rawMarker);
+    }
+
+    @Test
+    void benchmarkObservationCapturesActualCompressionBodiesWithoutChangingAcceptedState() {
+        properties.setMaxContextTokens(300);
+        String rawMarker = "DIAGNOSTIC_RAW_TOOL_BODY";
+        List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
+                rawMarker + "\n" + "detail ".repeat(600));
+        String primary = stateWithKnown("P".repeat(900));
+        summaryClient.queuedResponses.add(primary);
+        summaryClient.queuedResponses.add(SUMMARY_V1);
+        AtomicReference<AgentLifecycleObservationPublisher.CompressionObservation> captured =
+                new AtomicReference<>();
+
+        ConversationContextCompressor.CurrentTaskCompression result;
+        try (AgentLifecycleObservationPublisher.Registration ignored =
+                     AgentLifecycleObservationPublisher.registerCompression(captured::set)) {
+            result = compress(protocol, ConversationContextCompressor.CurrentTaskWorkingState.empty());
+        }
+
+        AgentLifecycleObservationPublisher.CompressionObservation observation = captured.get();
+        assertThat(observation).isNotNull();
+        assertThat(observation.taskId()).isEqualTo("task-1");
+        assertThat(observation.sessionId()).isEqualTo("session-1");
+        assertThat(observation.compressionAttemptId()).isEqualTo("session-1:1");
+        assertThat(observation.compressionPrompt()).isEqualTo(summaryClient.prompts.get(0));
+        assertThat(observation.compressionPrompt()).contains(rawMarker);
+        assertThat(observation.primaryState()).isEqualTo(primary.strip());
+        assertThat(observation.correctivePrompt()).isEqualTo(summaryClient.prompts.get(1));
+        assertThat(observation.correctivePrompt()).doesNotContain(rawMarker);
+        assertThat(observation.correctiveState()).isEqualTo(SUMMARY_V1.strip());
+        assertThat(observation.acceptedState()).isEqualTo(result.state().summary());
+        assertThat(observation.accepted()).isTrue();
+        assertThat(observation.coveredThroughLogicalGroup()).isEqualTo(1);
+        assertThat(observation.selectedProtocolMessages()).containsExactlyElementsOf(protocol);
+        assertThat(observation.remainingRawProtocolMessages()).isEmpty();
+        assertThat(observation.summaryDepth()).isEqualTo(1);
+        assertThat(observation.compressionCount()).isEqualTo(1);
+        assertThat(observation.correctiveRetryCount()).isEqualTo(1);
+        assertThat(result.state().summary()).isEqualTo(SUMMARY_V1.strip());
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.kama.jchatmind.agent.observability;
 
 import lombok.extern.slf4j.Slf4j;
 import com.kama.jchatmind.agent.FinalSynthesisRequest;
+import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import org.springframework.ai.chat.messages.Message;
 
 import java.util.List;
@@ -24,6 +25,15 @@ public final class AgentLifecycleObservationPublisher {
             new CopyOnWriteArrayList<>();
     private static final CopyOnWriteArrayList<FinalProjectionListener> FINAL_PROJECTION_LISTENERS =
             new CopyOnWriteArrayList<>();
+    private static final CopyOnWriteArrayList<FinalProviderRequestListener> FINAL_PROVIDER_REQUEST_LISTENERS =
+            new CopyOnWriteArrayList<>();
+    private static final CopyOnWriteArrayList<SelectorProvenanceListener> SELECTOR_PROVENANCE_LISTENERS =
+            new CopyOnWriteArrayList<>();
+
+    public static final String DIAGNOSTIC_TOOL_CALL_ID_CONTEXT_KEY =
+            "jchatmind.benchmark.diagnostic.toolCallId";
+    public static final String DIAGNOSTIC_SESSION_ID_CONTEXT_KEY =
+            "jchatmind.benchmark.diagnostic.sessionId";
 
     private AgentLifecycleObservationPublisher() {
     }
@@ -52,8 +62,28 @@ public final class AgentLifecycleObservationPublisher {
         return () -> FINAL_PROJECTION_LISTENERS.remove(required);
     }
 
+    public static Registration registerFinalProviderRequest(FinalProviderRequestListener listener) {
+        FinalProviderRequestListener required = Objects.requireNonNull(listener, "listener cannot be null");
+        FINAL_PROVIDER_REQUEST_LISTENERS.add(required);
+        return () -> FINAL_PROVIDER_REQUEST_LISTENERS.remove(required);
+    }
+
+    public static Registration registerSelectorProvenance(SelectorProvenanceListener listener) {
+        SelectorProvenanceListener required = Objects.requireNonNull(listener, "listener cannot be null");
+        SELECTOR_PROVENANCE_LISTENERS.add(required);
+        return () -> SELECTOR_PROVENANCE_LISTENERS.remove(required);
+    }
+
     public static boolean isCompressionObservationEnabled() {
         return !COMPRESSION_LISTENERS.isEmpty();
+    }
+
+    public static boolean isFinalProviderRequestObservationEnabled() {
+        return !FINAL_PROVIDER_REQUEST_LISTENERS.isEmpty();
+    }
+
+    public static boolean isSelectorProvenanceObservationEnabled() {
+        return !SELECTOR_PROVENANCE_LISTENERS.isEmpty();
     }
 
     public static void publishModelCall(ModelCallObservation observation) {
@@ -84,6 +114,18 @@ public final class AgentLifecycleObservationPublisher {
     public static void publishFinalProjection(FinalProjectionObservation observation) {
         publishSafely(FINAL_PROJECTION_LISTENERS, observation,
                 (listener, value) -> listener.onFinalProjection(value), "final_projection",
+                observation == null ? null : observation.taskId());
+    }
+
+    public static void publishFinalProviderRequest(FinalProviderRequestObservation observation) {
+        publishSafely(FINAL_PROVIDER_REQUEST_LISTENERS, observation,
+                (listener, value) -> listener.onFinalProviderRequest(value), "final_provider_request",
+                observation == null ? null : observation.taskId());
+    }
+
+    public static void publishSelectorProvenance(SelectorProvenanceObservation observation) {
+        publishSafely(SELECTOR_PROVENANCE_LISTENERS, observation,
+                (listener, value) -> listener.onSelectorProvenance(value), "selector_provenance",
                 observation == null ? null : observation.taskId());
     }
 
@@ -123,6 +165,16 @@ public final class AgentLifecycleObservationPublisher {
     @FunctionalInterface
     public interface FinalProjectionListener {
         void onFinalProjection(FinalProjectionObservation observation);
+    }
+
+    @FunctionalInterface
+    public interface FinalProviderRequestListener {
+        void onFinalProviderRequest(FinalProviderRequestObservation observation);
+    }
+
+    @FunctionalInterface
+    public interface SelectorProvenanceListener {
+        void onSelectorProvenance(SelectorProvenanceObservation observation);
     }
 
     @FunctionalInterface
@@ -183,6 +235,7 @@ public final class AgentLifecycleObservationPublisher {
     }
 
     public record CompressionObservation(
+            String taskId,
             String sessionId,
             String model,
             String reason,
@@ -195,7 +248,46 @@ public final class AgentLifecycleObservationPublisher {
             String outputSummary,
             long latencyMs,
             boolean succeeded,
-            String failure) {
+            String failure,
+            String compressionAttemptId,
+            String primaryState,
+            String correctivePrompt,
+            String correctiveState,
+            String acceptedState,
+            boolean accepted,
+            int coveredThroughLogicalGroup,
+            List<ChatMessageDTO> selectedProtocolMessages,
+            List<ChatMessageDTO> remainingRawProtocolMessages,
+            int summaryDepth,
+            int compressionCount,
+            int correctiveRetryCount) {
+
+        public CompressionObservation {
+            selectedProtocolMessages = selectedProtocolMessages == null
+                    ? List.of() : List.copyOf(selectedProtocolMessages);
+            remainingRawProtocolMessages = remainingRawProtocolMessages == null
+                    ? List.of() : List.copyOf(remainingRawProtocolMessages);
+        }
+
+        public CompressionObservation(
+                String sessionId,
+                String model,
+                String reason,
+                int tokensBeforeCompression,
+                int tokensAfterCompression,
+                int rawHistoryTokens,
+                String contextTokenSource,
+                String compressionPrompt,
+                String previousSummary,
+                String outputSummary,
+                long latencyMs,
+                boolean succeeded,
+                String failure) {
+            this(null, sessionId, model, reason, tokensBeforeCompression, tokensAfterCompression,
+                    rawHistoryTokens, contextTokenSource, compressionPrompt, previousSummary,
+                    outputSummary, latencyMs, succeeded, failure, null, null, null, null,
+                    null, false, 0, List.of(), List.of(), 0, 0, 0);
+        }
     }
 
     public record FinalProjectionObservation(
@@ -212,6 +304,47 @@ public final class AgentLifecycleObservationPublisher {
             executionTranscript = executionTranscript == null ? List.of() : List.copyOf(executionTranscript);
             currentTaskToolTranscript = currentTaskToolTranscript == null
                     ? List.of() : List.copyOf(currentTaskToolTranscript);
+        }
+    }
+
+
+    public record FinalProviderRequestObservation(
+            String taskId,
+            String sessionId,
+            String model,
+            int attempt,
+            List<Message> compiledProviderMessages) {
+
+        public FinalProviderRequestObservation {
+            compiledProviderMessages = compiledProviderMessages == null
+                    ? List.of() : List.copyOf(compiledProviderMessages);
+        }
+    }
+
+    public record CodeEvidenceIdentity(
+            String repoId,
+            String chunkId,
+            String filePath,
+            String symbolName,
+            int rank,
+            Double score) {
+    }
+
+    public record SelectorProvenanceObservation(
+            String taskId,
+            String sessionId,
+            String toolCallId,
+            String query,
+            List<CodeEvidenceIdentity> rawTopK,
+            List<CodeEvidenceIdentity> selectorInput,
+            List<CodeEvidenceIdentity> selected,
+            List<CodeEvidenceIdentity> rejected) {
+
+        public SelectorProvenanceObservation {
+            rawTopK = rawTopK == null ? List.of() : List.copyOf(rawTopK);
+            selectorInput = selectorInput == null ? List.of() : List.copyOf(selectorInput);
+            selected = selected == null ? List.of() : List.copyOf(selected);
+            rejected = rejected == null ? List.of() : List.copyOf(rejected);
         }
     }
 }

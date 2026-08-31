@@ -1,6 +1,7 @@
 package com.kama.jchatmind.agent;
 
 import com.kama.jchatmind.config.ToolCorrectionProperties;
+import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.converter.ChatMessageConverter;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.entity.AgentStep;
@@ -34,7 +35,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -50,6 +53,44 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class JChatMindFinalizationTest {
+
+    @Test
+    void finalProviderDiagnosticsCaptureActualMessagesWithoutChangingProviderInput() {
+        ClientHarness offHarness = mockChatClient(List.of(
+                toolCallResponse("call-1", "terminate", "{}")));
+        ToolCallBatchExecutor offExecutor = mockBatchExecutor();
+        when(offExecutor.execute(any(), any(), any(), any())).thenReturn(terminateResult());
+        JChatMind offAgent = newAgent(offHarness.client, mockLogService(new ArrayList<>()),
+                mockMessageService(new ArrayList<>()), offExecutor, List.of(callback("terminate")));
+        JChatMindSafeFinalTestSupport.configure(offAgent, offHarness.requestSpec, "answer from evidence");
+        offAgent.run();
+        ArgumentCaptor<Prompt> offPrompts = ArgumentCaptor.forClass(Prompt.class);
+        verify(offHarness.client, times(2)).prompt(offPrompts.capture());
+        List<Message> diagnosticsOff = offPrompts.getAllValues().get(1).getInstructions();
+
+        ClientHarness onHarness = mockChatClient(List.of(
+                toolCallResponse("call-1", "terminate", "{}")));
+        ToolCallBatchExecutor onExecutor = mockBatchExecutor();
+        when(onExecutor.execute(any(), any(), any(), any())).thenReturn(terminateResult());
+        JChatMind onAgent = newAgent(onHarness.client, mockLogService(new ArrayList<>()),
+                mockMessageService(new ArrayList<>()), onExecutor, List.of(callback("terminate")));
+        JChatMindSafeFinalTestSupport.configure(onAgent, onHarness.requestSpec, "answer from evidence");
+        AtomicReference<AgentLifecycleObservationPublisher.FinalProviderRequestObservation> captured =
+                new AtomicReference<>();
+        try (AgentLifecycleObservationPublisher.Registration ignored =
+                     AgentLifecycleObservationPublisher.registerFinalProviderRequest(captured::set)) {
+            onAgent.run();
+        }
+        ArgumentCaptor<Prompt> onPrompts = ArgumentCaptor.forClass(Prompt.class);
+        verify(onHarness.client, times(2)).prompt(onPrompts.capture());
+        List<Message> diagnosticsOn = onPrompts.getAllValues().get(1).getInstructions();
+
+        assertEquals(diagnosticsOff, diagnosticsOn);
+        assertEquals(diagnosticsOn, captured.get().compiledProviderMessages());
+        assertEquals("task-1", captured.get().taskId());
+        assertEquals("session-1", captured.get().sessionId());
+        assertEquals(1, captured.get().attempt());
+    }
 
     @Test
     void terminateRunsToolDisabledValidatedDurableFinalization() {

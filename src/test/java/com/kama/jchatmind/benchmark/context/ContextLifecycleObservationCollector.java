@@ -16,7 +16,9 @@ final class ContextLifecycleObservationCollector implements AutoCloseable {
                 AgentLifecycleObservationPublisher.register(this::onModelCall),
                 AgentLifecycleObservationPublisher.registerToolResult(this::onToolResult),
                 AgentLifecycleObservationPublisher.registerCompression(this::onCompression),
-                AgentLifecycleObservationPublisher.registerFinalProjection(this::onFinalProjection));
+                AgentLifecycleObservationPublisher.registerFinalProjection(this::onFinalProjection),
+                AgentLifecycleObservationPublisher.registerFinalProviderRequest(this::onFinalProviderRequest),
+                AgentLifecycleObservationPublisher.registerSelectorProvenance(this::onSelectorProvenance));
     }
 
     CaseCapture begin(String caseId, int repeatIndex, String sessionId) {
@@ -56,7 +58,7 @@ final class ContextLifecycleObservationCollector implements AutoCloseable {
     }
 
     private void onCompression(AgentLifecycleObservationPublisher.CompressionObservation observation) {
-        CaseCapture capture = matching(observation.sessionId(), null);
+        CaseCapture capture = matching(observation.sessionId(), observation.taskId());
         if (capture != null) {
             capture.compressions.add(observation);
         }
@@ -66,6 +68,22 @@ final class ContextLifecycleObservationCollector implements AutoCloseable {
         CaseCapture capture = matching(observation.sessionId(), observation.taskId());
         if (capture != null) {
             capture.finalProjection.set(observation);
+        }
+    }
+
+    private void onFinalProviderRequest(
+            AgentLifecycleObservationPublisher.FinalProviderRequestObservation observation) {
+        CaseCapture capture = matching(observation.sessionId(), observation.taskId());
+        if (capture != null) {
+            capture.finalProviderRequests.add(observation);
+        }
+    }
+
+    private void onSelectorProvenance(
+            AgentLifecycleObservationPublisher.SelectorProvenanceObservation observation) {
+        CaseCapture capture = matching(observation.sessionId(), observation.taskId());
+        if (capture != null) {
+            capture.selectorProvenance.add(observation);
         }
     }
 
@@ -112,6 +130,10 @@ final class ContextLifecycleObservationCollector implements AutoCloseable {
                 new CopyOnWriteArrayList<>();
         final AtomicReference<AgentLifecycleObservationPublisher.FinalProjectionObservation> finalProjection =
                 new AtomicReference<>();
+        final List<AgentLifecycleObservationPublisher.FinalProviderRequestObservation> finalProviderRequests =
+                new CopyOnWriteArrayList<>();
+        final List<AgentLifecycleObservationPublisher.SelectorProvenanceObservation> selectorProvenance =
+                new CopyOnWriteArrayList<>();
 
         CaseCapture(String caseId, int repeatIndex, String sessionId, OffsetDateTime startedAt) {
             this.caseId = caseId;
