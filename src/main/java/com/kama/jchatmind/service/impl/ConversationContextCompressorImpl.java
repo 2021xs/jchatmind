@@ -56,6 +56,8 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
             "- Open",
             "- Next");
     private static final String CURRENT_TASK_DELTA_HEADER = "Current Task Continuation State Delta";
+    private static final String INITIAL_GOAL_REFERENCE =
+            "Complete the original current User question retained separately in raw form.";
     private static final List<String> CURRENT_TASK_DELTA_SECTIONS = List.of(
             "- Goal",
             "- KnownAdd",
@@ -219,7 +221,8 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         String correctiveState = null;
         String acceptedState = null;
         try {
-            ContinuationState existingState = parseCurrentTaskState(safeState.summary());
+            ContinuationState existingState = initializeCurrentTaskGoal(
+                    parseCurrentTaskState(safeState.summary()), originalUser);
             String generated = conversationSummaryClient.summarize(model, prompt);
             primaryState = generated == null ? null : generated.strip();
             String summary;
@@ -789,13 +792,15 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 + "Existing State中的Known、Constraints、Refs默认carry-forward；本轮没有变化时不要复述。\n"
                 + "KnownRemove、ConstraintsRemove、RefsRemove只能用于被新证据否定、确认错误或失效的旧条目，"
                 + "格式必须是：<旧条目原文> || reason: <非空原因>。不要因为暂时不重要而删除。\n"
-                + "Goal默认输出KEEP；Open和Next可以输出完整替换值，KEEP表示保持，none表示清空。\n"
+                + "这是Sparse PATCH：只输出本轮真正变化的section。Goal省略表示KEEP；首次State的Goal由Java从绑定的原始User确定性初始化。"
+                + "Open和Next省略表示KEEP，显式none表示清空。所有Add/Remove section省略表示none。\n"
                 + "输入只包含原始用户问题、已有Continuation State和本次要assimiliate的完整Tool protocol groups。\n"
                 + "KnownAdd只写本轮新增且已确认的事实/关系；ConstraintsAdd保留精确值、状态、类名、方法名和queue名；"
                 + "RefsAdd只写本轮新增的完整repoId/chunkId pair。不要复制Tool正文，不要添加未确认事实。\n"
-                + "必须严格使用以下结构并保留全部section标题：\n\n"
-                + deltaTemplate() + "\n\n"
-                + "每个新增、删除、Open或Next条目使用一个缩进bullet；没有内容写none。"
+                + "固定且仅允许以下section，出现时必须保持此顺序：Goal、KnownAdd、KnownRemove、ConstraintsAdd、"
+                + "ConstraintsRemove、RefsAdd、RefsRemove、Open、Next。不要输出未变化的section。\n"
+                + "Sparse示例：\n\n" + sparseDeltaExample() + "\n\n"
+                + "每个新增、删除、Open或Next条目使用一个缩进bullet。"
                 + "不要写叙事性回答、推理过程或逐Tool复述。\n\n"
                 + "Original User Question:\n" + originalUser.getContent() + "\n\n"
                 + "Existing Current Task Continuation State:\n" + previous + "\n\n"
@@ -809,14 +814,16 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                                                                   int availableStateTokens) {
         return "Repair the proposed Current Task Continuation State Delta.\n"
                 + "Return plain text only: no explanation and no Markdown code fence.\n"
-                + "Copy every heading in the template below byte-for-byte, in exactly this order. "
-                + "Do not translate, rename, omit, or add headings.\n"
+                + "Return a sparse Delta using only recognized headings, in canonical order. "
+                + "Omit every unchanged heading; do not translate, rename, or add headings.\n"
                 + "Do not rewrite a complete State and do not introduce new facts. Preserve additions/removals from the candidate only.\n"
                 + "Removal entries require an exact old item plus ' || reason: ' and a non-empty reason.\n"
-                + "If a source locator is added, keep its complete repoId/chunkId pair. Write none for empty sections.\n"
+                + "If a source locator is added, keep its complete repoId/chunkId pair.\n"
                 + "The deterministically merged State should fit about " + availableStateTokens + " estimated tokens.\n"
                 + "Validation failure: " + validationFailure + "\n\n"
-                + deltaTemplate() + "\n\n"
+                + "Allowed headings: Goal, KnownAdd, KnownRemove, ConstraintsAdd, ConstraintsRemove, "
+                + "RefsAdd, RefsRemove, Open, Next.\n\n"
+                + sparseDeltaExample() + "\n\n"
                 + "Original User Question:\n" + originalUser.getContent() + "\n\n"
                 + "Candidate Delta to repair:\n" + nullToEmpty(candidate);
     }
@@ -826,25 +833,23 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                                                      int availableStateTokens) {
         return "Compact only the dynamic Open and Next sections of the proposed Current Task Continuation State.\n"
                 + "Return a State Delta, not a complete State. Java will carry Goal, Known, Constraints, and Refs forward exactly.\n"
-                + "Required protected output: Goal=KEEP; all Add/Remove sections=none. Do not remove or rewrite confirmed facts, exact values, relationships, or refs.\n"
+                + "Return only changed Open and/or Next sections. Omitted Goal and all omitted Add/Remove sections are deterministic no-ops. "
+                + "Do not remove or rewrite confirmed facts, exact values, relationships, or refs.\n"
                 + "Only shorten wording, remove duplication, or clear resolved content in Open and Next.\n"
-                + "Available estimated state token budget: " + availableStateTokens + ". This is guidance; return a complete valid Delta.\n\n"
-                + deltaTemplate() + "\n\n"
+                + "Available estimated state token budget: " + availableStateTokens + ". This is guidance; return a valid sparse Delta.\n\n"
+                + CURRENT_TASK_DELTA_HEADER + "\n\n"
+                + "- Open\n  - <short current unresolved item, KEEP by omission, or none to clear>\n"
+                + "- Next\n  - <short next planning action, KEEP by omission, or none to clear>\n\n"
                 + "Original User Question:\n" + originalUser.getContent() + "\n\n"
                 + "Proposed merged Continuation State:\n" + nullToEmpty(proposedState);
     }
 
-    private String deltaTemplate() {
+    private String sparseDeltaExample() {
         return CURRENT_TASK_DELTA_HEADER + "\n\n"
-                + "- Goal\n  - KEEP\n"
-                + "- KnownAdd\n  - none\n"
-                + "- KnownRemove\n  - none\n"
-                + "- ConstraintsAdd\n  - none\n"
-                + "- ConstraintsRemove\n  - none\n"
-                + "- RefsAdd\n  - none\n"
-                + "- RefsRemove\n  - none\n"
-                + "- Open\n  - KEEP\n"
-                + "- Next\n  - KEEP";
+                + "- KnownAdd\n  - <new confirmed fact or relationship>\n"
+                + "- RefsAdd\n  - <complete repoId/chunkId locator when newly needed>\n"
+                + "- Open\n  - <current unresolved question>\n"
+                + "- Next\n  - <next planning action>";
     }
 
     private String formatCurrentTaskProtocol(List<ChatMessageDTO> messages) {
@@ -886,14 +891,14 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         if (!StringUtils.hasText(deltaBody)) {
             throw new IllegalStateException("Current task continuation state Delta is empty");
         }
-        Map<String, List<String>> sections = parseSectionedBody(
-                deltaBody, CURRENT_TASK_DELTA_HEADER, CURRENT_TASK_DELTA_SECTIONS);
+        Map<String, List<String>> sections = parseSparseDeltaBody(deltaBody);
         List<String> goalItems = meaningfulItems(sections.get("- Goal"));
-        if (goalItems.size() != 1) {
+        if (sections.containsKey("- Goal") && goalItems.size() != 1) {
             throw new RepairableCurrentTaskSummaryException(
-                    "Current task continuation state Delta requires exactly one Goal item");
+                    "Present Goal section requires exactly one Goal item");
         }
-        String goalUpdate = KEEP.equalsIgnoreCase(goalItems.get(0)) ? null : goalItems.get(0);
+        String goalUpdate = goalItems.isEmpty() || KEEP.equalsIgnoreCase(goalItems.get(0))
+                ? null : goalItems.get(0);
         return new ContinuationStateDelta(goalUpdate,
                 meaningfulItems(sections.get("- KnownAdd")),
                 removals(sections.get("- KnownRemove"), "Known"),
@@ -901,8 +906,59 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 removals(sections.get("- ConstraintsRemove"), "Constraints"),
                 meaningfulItems(sections.get("- RefsAdd")),
                 removals(sections.get("- RefsRemove"), "Refs"),
-                dynamicSection(sections.get("- Open")),
-                dynamicSection(sections.get("- Next")));
+                dynamicSection(sections, "- Open"),
+                dynamicSection(sections, "- Next"));
+    }
+
+    private Map<String, List<String>> parseSparseDeltaBody(String body) {
+        String normalized = nullToEmpty(body).replace("\r\n", "\n").strip();
+        String[] lines = normalized.split("\n", -1);
+        if (lines.length == 0 || !CURRENT_TASK_DELTA_HEADER.equals(lines[0].strip())) {
+            throw new RepairableCurrentTaskSummaryException(
+                    "Invalid header: expected " + CURRENT_TASK_DELTA_HEADER);
+        }
+        Map<String, List<String>> values = new LinkedHashMap<>();
+        int previousSectionIndex = -1;
+        String currentSection = null;
+        for (int index = 1; index < lines.length; index++) {
+            String line = lines[index];
+            String stripped = line.strip();
+            if (stripped.isEmpty()) {
+                continue;
+            }
+            boolean rootBullet = line.equals(line.stripLeading()) && stripped.startsWith("- ");
+            if (rootBullet) {
+                int sectionIndex = CURRENT_TASK_DELTA_SECTIONS.indexOf(stripped);
+                if (sectionIndex < 0) {
+                    throw new RepairableCurrentTaskSummaryException(
+                            "Unknown current task Delta section: " + stripped);
+                }
+                if (sectionIndex <= previousSectionIndex || values.containsKey(stripped)) {
+                    throw new RepairableCurrentTaskSummaryException(
+                            "Duplicate or out-of-order current task Delta section: " + stripped);
+                }
+                previousSectionIndex = sectionIndex;
+                currentSection = stripped;
+                values.put(currentSection, new ArrayList<>());
+                continue;
+            }
+            if (currentSection == null) {
+                throw new RepairableCurrentTaskSummaryException(
+                        "Content appears before the first current task Delta section");
+            }
+            if (stripped.startsWith("- ") && !line.equals(line.stripLeading())) {
+                values.get(currentSection).add(stripped.substring(2).strip());
+                continue;
+            }
+            List<String> items = values.get(currentSection);
+            if (line.equals(line.stripLeading()) || items.isEmpty()) {
+                throw new RepairableCurrentTaskSummaryException(
+                        "Section item must be an indented bullet: " + currentSection);
+            }
+            int last = items.size() - 1;
+            items.set(last, items.get(last) + " " + stripped);
+        }
+        return values;
     }
 
     private Map<String, List<String>> parseSectionedBody(String body,
@@ -985,12 +1041,34 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         return List.copyOf(removals);
     }
 
-    private DynamicStateSection dynamicSection(List<String> items) {
-        List<String> meaningful = meaningfulItems(items);
+    private DynamicStateSection dynamicSection(Map<String, List<String>> sections, String section) {
+        if (!sections.containsKey(section)) {
+            return DynamicStateSection.keepExisting();
+        }
+        List<String> rawItems = sections.get(section);
+        if (rawItems == null || rawItems.isEmpty()) {
+            throw new RepairableCurrentTaskSummaryException(
+                    "Present dynamic section requires KEEP, none, or at least one item: " + section);
+        }
+        List<String> meaningful = meaningfulItems(rawItems);
         if (meaningful.size() == 1 && KEEP.equalsIgnoreCase(meaningful.get(0))) {
             return DynamicStateSection.keepExisting();
         }
         return new DynamicStateSection(false, meaningful);
+    }
+
+    private ContinuationState initializeCurrentTaskGoal(ContinuationState existing,
+                                                        ChatMessageDTO originalUser) {
+        if (StringUtils.hasText(existing.goal())) {
+            return existing;
+        }
+        if (originalUser == null || originalUser.getRole() != ChatMessageDTO.RoleType.USER
+                || !StringUtils.hasText(originalUser.getContent())) {
+            throw new IllegalStateException(
+                    "Current task original User is required to initialize Continuation State Goal");
+        }
+        return new ContinuationState(INITIAL_GOAL_REFERENCE, existing.known(), existing.constraints(),
+                existing.refs(), existing.open(), existing.next());
     }
 
     private ContinuationState mergeCurrentTaskState(ContinuationState existing,

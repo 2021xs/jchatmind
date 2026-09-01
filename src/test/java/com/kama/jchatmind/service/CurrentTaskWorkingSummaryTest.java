@@ -94,6 +94,16 @@ class CurrentTaskWorkingSummaryTest {
             - Next
               - KEEP
             """;
+    private static final String SPARSE_ADD_DELTA = """
+            Current Task Continuation State Delta
+
+            - KnownAdd
+              - Fact A
+            - RefsAdd
+              - repoId: sparse-repo, chunkId: sparse-chunk
+            - Next
+              - inspect B
+            """;
 
     private ContextCompressionProperties properties;
     private RecordingSummaryClient summaryClient;
@@ -654,6 +664,132 @@ class CurrentTaskWorkingSummaryTest {
         assertThat(result.compressed()).isTrue();
         assertThat(result.state().summary()).isEqualTo(SUMMARY_V1.strip());
         assertThat(result.state().coveredThroughLogicalGroup()).isEqualTo(1);
+    }
+
+    @Test
+    void sparseDeltaWithoutGoalKeepsExistingGoalWithoutCorrectiveRetry() {
+        properties.setMaxContextTokens(2_000);
+        ConversationContextCompressor.CurrentTaskWorkingState existing =
+                new ConversationContextCompressor.CurrentTaskWorkingState(SUMMARY_V1, 0, 1, 1);
+        summaryClient.nextSummary = SPARSE_ADD_DELTA;
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                group("sparse-existing", "searchProjectCode", longBody("new evidence")), existing);
+
+        assertThat(result.compressed()).isTrue();
+        assertThat(result.correctiveRetryCount()).isZero();
+        assertThat(summaryClient.callCount).isEqualTo(1);
+        assertThat(result.state().summary())
+                .contains("Diagnose order 123 without losing the original question.")
+                .contains("Fact A", "repoId: sparse-repo, chunkId: sparse-chunk", "inspect B")
+                .contains("Verify the exact database row.");
+    }
+
+    @Test
+    void initialSparseDeltaWithoutGoalUsesDeterministicRawUserReference() {
+        properties.setMaxContextTokens(2_000);
+        summaryClient.nextSummary = SPARSE_ADD_DELTA;
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                group("sparse-initial", "searchProjectCode", longBody("first evidence")),
+                ConversationContextCompressor.CurrentTaskWorkingState.empty());
+
+        assertThat(result.compressed()).isTrue();
+        assertThat(result.correctiveRetryCount()).isZero();
+        assertThat(summaryClient.callCount).isEqualTo(1);
+        assertThat(result.state().summary())
+                .contains("Complete the original current User question retained separately in raw form.")
+                .doesNotContain("Original current user question")
+                .contains("Fact A", "repoId: sparse-repo, chunkId: sparse-chunk");
+    }
+
+    @Test
+    void omittedNoOpSectionsKeepMonotonicAndDynamicState() {
+        properties.setMaxContextTokens(2_000);
+        ConversationContextCompressor.CurrentTaskWorkingState existing =
+                new ConversationContextCompressor.CurrentTaskWorkingState(SUMMARY_V1, 0, 1, 1);
+        summaryClient.nextSummary = """
+                Current Task Continuation State Delta
+
+                - KnownAdd
+                  - A newly confirmed fact.
+                - Next
+                  - Inspect the newly identified component.
+                """;
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                group("sparse-noops", "knowledgeQuery", longBody("new fact body")), existing);
+
+        assertThat(result.compressed()).isTrue();
+        assertThat(result.state().summary())
+                .contains("Search confirmed the handler location.", "A newly confirmed fact.")
+                .contains("status=206, rowLimit=50, hasMore=true.")
+                .contains("repoId: repo-1", "chunkId: chunk-1")
+                .contains("Verify the exact database row.")
+                .contains("Inspect the newly identified component.")
+                .doesNotContain("Call getCodeChunk and run a narrower query.");
+    }
+
+    @Test
+    void headerOnlySparseDeltaIsNoOpAndCanAssimilateNoNewInformation() {
+        properties.setMaxContextTokens(2_000);
+        ConversationContextCompressor.CurrentTaskWorkingState existing =
+                new ConversationContextCompressor.CurrentTaskWorkingState(SUMMARY_V1, 0, 1, 1);
+        summaryClient.nextSummary = "Current Task Continuation State Delta";
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(
+                group("sparse-empty", "knowledgeQuery", longBody("no new confirmed information")), existing);
+
+        assertThat(result.compressed()).isTrue();
+        assertThat(result.state().summary()).isEqualTo(SUMMARY_V1.strip());
+        assertThat(result.state().coveredThroughLogicalGroup()).isEqualTo(1);
+        assertThat(result.correctiveRetryCount()).isZero();
+    }
+
+    @Test
+    void unknownSparseSectionFailsClosedWithoutChangingStateOrCoverage() {
+        properties.setMaxContextTokens(2_000);
+        List<ChatMessageDTO> protocol = group(
+                "sparse-unknown", "knowledgeQuery", longBody("unrecognized patch"));
+        ConversationContextCompressor.CurrentTaskWorkingState existing =
+                new ConversationContextCompressor.CurrentTaskWorkingState(SUMMARY_V1, 0, 1, 1);
+        summaryClient.nextSummary = """
+                Current Task Continuation State Delta
+
+                - EvidenceManifest
+                  - forbidden second truth
+                """;
+
+        ConversationContextCompressor.CurrentTaskCompression result = compress(protocol, existing);
+
+        assertThat(result.compressed()).isFalse();
+        assertThat(result.state().summary()).isEqualTo(SUMMARY_V1);
+        assertThat(result.state().coveredThroughLogicalGroup()).isZero();
+        assertThat(result.uncoveredProtocolMessages()).containsExactlyElementsOf(protocol);
+        assertThat(summaryClient.callCount).isEqualTo(2);
+    }
+
+    @Test
+    void sparseDeltaOmitsNoOpSerializationAtLowerMeasuredSize() {
+        String fullForm = KEEP_DELTA
+                .replace("- KnownAdd\n  - none", "- KnownAdd\n  - Fact A")
+                .replace("- Next\n  - KEEP", "- Next\n  - inspect B");
+        String sparse = """
+                Current Task Continuation State Delta
+
+                - KnownAdd
+                  - Fact A
+                - Next
+                  - inspect B
+                """.strip();
+        EstimatedTokenCounter counter = new EstimatedTokenCounter(properties);
+        int fullTokens = counter.countText(MODEL, fullForm).tokens();
+        int sparseTokens = counter.countText(MODEL, sparse).tokens();
+
+        assertThat(sparse.length()).isLessThan(fullForm.length());
+        assertThat(sparseTokens).isLessThan(fullTokens);
+        System.out.printf("SPARSE_DELTA_SIZE oldChars=%d oldTokens=%d newChars=%d newTokens=%d%n",
+                fullForm.length(), fullTokens, sparse.length(), sparseTokens);
     }
 
     private ConversationContextCompressor.CurrentTaskCompression compress(
