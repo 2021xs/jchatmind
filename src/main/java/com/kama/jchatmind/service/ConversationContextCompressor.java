@@ -26,16 +26,16 @@ public interface ConversationContextCompressor {
                                       List<ChatMessageDTO> completedConversationMessages,
                                       List<ChatMessageDTO> currentTaskProtocolMessages,
                                       List<ChatMessageDTO> fixedPlanningMessages,
-                                      CurrentTaskWorkingState state);
+                                      ContinuationState state);
 
-    CurrentTaskCompression compressCurrentTaskIfNeeded(String sessionId,
-                                                        String model,
-                                                        ChatMessageDTO originalUser,
-                                                        String conversationSummary,
-                                                        List<ChatMessageDTO> completedConversationMessages,
-                                                        List<ChatMessageDTO> currentTaskProtocolMessages,
-                                                        List<ChatMessageDTO> fixedPlanningMessages,
-                                                        CurrentTaskWorkingState state);
+    ContinuationStateCompression compressCurrentTaskIfNeeded(String sessionId,
+                                                              String model,
+                                                              ChatMessageDTO originalUser,
+                                                              String conversationSummary,
+                                                              List<ChatMessageDTO> completedConversationMessages,
+                                                              List<ChatMessageDTO> currentTaskProtocolMessages,
+                                                              List<ChatMessageDTO> fixedPlanningMessages,
+                                                              ContinuationState state);
 
     void assertPlanningContextWithinBudget(String model, List<Message> messages);
 
@@ -43,8 +43,8 @@ public interface ConversationContextCompressor {
         return SUMMARY_PREFIX + summary + SUMMARY_SUFFIX;
     }
 
-    static String currentTaskSummaryMessageContent(String summary) {
-        return "[Current task continuation state]\n" + summary
+    static String continuationStateMessageContent(String state) {
+        return "[Current task continuation state]\n" + state
                 + "\n\nNote: This is lossy runtime working state. Preserve the raw current user question as authoritative.";
     }
 
@@ -88,28 +88,28 @@ public interface ConversationContextCompressor {
                                            int unlinkedLegacyFinalCount) {
     }
 
-    record CurrentTaskWorkingState(String summary,
-                                   int coveredThroughLogicalGroup,
-                                   int summaryDepth,
-                                   int compressionCount,
-                                   boolean compressionSuppressed) {
+    record ContinuationState(String content,
+                             int coveredThroughLogicalGroup,
+                             int stateDepth,
+                             int compressionCount,
+                             boolean compressionSuppressed) {
 
-        public CurrentTaskWorkingState(String summary,
-                                       int coveredThroughLogicalGroup,
-                                       int summaryDepth,
-                                       int compressionCount) {
-            this(summary, coveredThroughLogicalGroup, summaryDepth, compressionCount, false);
+        public ContinuationState(String content,
+                                 int coveredThroughLogicalGroup,
+                                 int stateDepth,
+                                 int compressionCount) {
+            this(content, coveredThroughLogicalGroup, stateDepth, compressionCount, false);
         }
 
-        public static CurrentTaskWorkingState empty() {
-            return new CurrentTaskWorkingState(null, 0, 0, 0, false);
+        public static ContinuationState empty() {
+            return new ContinuationState(null, 0, 0, 0, false);
         }
     }
 
-    record CurrentTaskCompression(CurrentTaskWorkingState state,
-                                  List<ChatMessageDTO> uncoveredProtocolMessages,
-                                  CompressionCheck check,
-                                  boolean compressed,
-                                  int correctiveRetryCount) {
+    record ContinuationStateCompression(ContinuationState state,
+                                        List<ChatMessageDTO> uncoveredProtocolMessages,
+                                        CompressionCheck check,
+                                        boolean compressed,
+                                        int correctiveRetryCount) {
     }
 }

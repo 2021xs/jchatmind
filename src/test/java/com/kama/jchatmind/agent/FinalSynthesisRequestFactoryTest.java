@@ -13,13 +13,13 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-class ManagedFinalShadowTest {
+class FinalSynthesisRequestFactoryTest {
 
     private final FinalSynthesisRequestFactory factory = new FinalSynthesisRequestFactory();
 
     @Test
     void noToolRetainsEligibleHistoryAndCurrentUser() {
-        FinalSynthesisRequest shadow = factory.createFromManagedContext(List.of(
+        FinalSynthesisRequest shadow = factory.create(List.of(
                 new SystemMessage("agent system"),
                 new UserMessage("historical user"),
                 assistant("historical final"),
@@ -33,7 +33,7 @@ class ManagedFinalShadowTest {
 
     @Test
     void smallToolModelViewIsRetainedWithoutTranscript() {
-        FinalSynthesisRequest shadow = factory.createFromManagedContext(List.of(
+        FinalSynthesisRequest shadow = factory.create(List.of(
                 new UserMessage("question"),
                 toolCalls("call-small", "databaseQuery"),
                 toolResponses("call-small", "databaseQuery", "small projected result")), "question");
@@ -51,7 +51,7 @@ class ManagedFinalShadowTest {
                 symbol: VoucherOrderController#seckillVoucher
                 """;
 
-        FinalSynthesisRequest shadow = factory.createFromManagedContext(List.of(
+        FinalSynthesisRequest shadow = factory.create(List.of(
                 new UserMessage("where is the endpoint"),
                 toolCalls("call-search", "searchProjectCode"),
                 toolResponses("call-search", "searchProjectCode", projected)), "where is the endpoint");
@@ -64,7 +64,7 @@ class ManagedFinalShadowTest {
     void exactChunkDetailRemainsAvailableFromActiveRawGroup() {
         String exactChunk = "Exact code chunk:\nrepoId: repo-1\nchunkId: chunk-lua\nreturn 3";
 
-        FinalSynthesisRequest shadow = factory.createFromManagedContext(List.of(
+        FinalSynthesisRequest shadow = factory.create(List.of(
                 new UserMessage("list exact return codes"),
                 toolCalls("call-chunk", "getCodeChunk"),
                 toolResponses("call-chunk", "getCodeChunk", exactChunk)), "list exact return codes");
@@ -76,9 +76,9 @@ class ManagedFinalShadowTest {
     void coveredGroupIsRepresentedByStateWithoutRawDuplication() {
         String state = "Goal:\n- explain flow\nKnown:\n- Lua return 3 means missing stock key\n"
                 + "Refs:\n- repoId=repo-1 chunkId=chunk-lua";
-        String stateMessage = ConversationContextCompressor.currentTaskSummaryMessageContent(state);
+        String stateMessage = ConversationContextCompressor.continuationStateMessageContent(state);
 
-        FinalSynthesisRequest shadow = factory.createFromManagedContext(List.of(
+        FinalSynthesisRequest shadow = factory.create(List.of(
                 new SystemMessage(stateMessage),
                 new UserMessage("explain flow")), "explain flow");
 
@@ -88,10 +88,10 @@ class ManagedFinalShadowTest {
 
     @Test
     void uncoveredGroupIsRetainedAlongsideAcceptedState() {
-        String state = ConversationContextCompressor.currentTaskSummaryMessageContent(
+        String state = ConversationContextCompressor.continuationStateMessageContent(
                 "Goal:\n- explain flow\nKnown:\n- producer sends the order");
 
-        FinalSynthesisRequest shadow = factory.createFromManagedContext(List.of(
+        FinalSynthesisRequest shadow = factory.create(List.of(
                 new SystemMessage(state),
                 new UserMessage("explain flow"),
                 toolCalls("call-uncovered", "getCodeChunk"),
@@ -103,7 +103,7 @@ class ManagedFinalShadowTest {
 
     @Test
     void crossTaskUsesHistoricalUserFinalProjectionWithoutRawToolLeakage() {
-        FinalSynthesisRequest shadow = factory.createFromManagedContext(List.of(
+        FinalSynthesisRequest shadow = factory.create(List.of(
                 new UserMessage("historical question"),
                 assistant("historical final answer"),
                 new UserMessage("current question")), "current question");
@@ -120,8 +120,8 @@ class ManagedFinalShadowTest {
                 new UserMessage("question"),
                 toolCalls("call-managed", "searchProjectCode"),
                 toolResponses("call-managed", "searchProjectCode", "managed evidence"));
-        FinalSynthesisRequest before = factory.createFromManagedContext(managed, "question");
-        FinalSynthesisRequest after = factory.createFromManagedContext(managed, "question");
+        FinalSynthesisRequest before = factory.create(managed, "question");
+        FinalSynthesisRequest after = factory.create(managed, "question");
 
         assertThat(after).isEqualTo(before);
         assertThat(evidenceContents(after)).containsExactly("managed evidence");
@@ -129,7 +129,7 @@ class ManagedFinalShadowTest {
 
     @Test
     void protocolIntegrityFailsClosedForOrphanToolMessage() {
-        assertThatThrownBy(() -> factory.createFromManagedContext(List.of(
+        assertThatThrownBy(() -> factory.create(List.of(
                 new UserMessage("question"),
                 toolResponses("orphan", "searchProjectCode", "evidence")), "question"))
                 .isInstanceOf(IllegalStateException.class)
@@ -140,7 +140,7 @@ class ManagedFinalShadowTest {
     void currentUserIsPreservedExactlyAsOriginalQuestion() {
         String raw = "Current user with exact value 36000 and spacing  ";
 
-        FinalSynthesisRequest shadow = factory.createFromManagedContext(
+        FinalSynthesisRequest shadow = factory.create(
                 List.of(new UserMessage(raw)), raw);
 
         assertThat(shadow.originalUserQuestion()).isEqualTo(raw);

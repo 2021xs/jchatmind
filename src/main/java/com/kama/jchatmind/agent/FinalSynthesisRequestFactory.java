@@ -16,7 +16,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Read-only projection from the protocol-bearing managed Working Context into
+ * Read-only projection from the protocol-bearing Working Context into
  * a structured final request. Invalid protocol fails closed; the context is
  * never edited or repaired here.
  */
@@ -25,20 +25,15 @@ public final class FinalSynthesisRequestFactory {
     static final String DEFAULT_FINAL_ANSWER_POLICY = "Answer the user's request directly and completely. "
             + "Use only supported evidence, distinguish facts from uncertainty, and do not expose internal formats.";
 
-    public FinalSynthesisRequest create(List<Message> executionTranscript) {
-        return createFromManagedContext(executionTranscript, null);
+    public FinalSynthesisRequest create(List<Message> workingContext) {
+        return create(workingContext, null);
     }
 
-    public FinalSynthesisRequest create(List<Message> executionTranscript, String originalUserQuestion) {
-        return createFromManagedContext(executionTranscript, originalUserQuestion);
-    }
-
-    /** Builds the Final request exclusively from the managed Working Context. */
-    public FinalSynthesisRequest createFromManagedContext(List<Message> managedWorkingContext,
-                                                          String originalUserQuestion) {
-        Assert.notNull(managedWorkingContext, "Managed Working Context cannot be null");
-        List<Message> safeMessages = AgentMemoryHistorySanitizer.toSafeModelMessages(managedWorkingContext);
-        assertProtocolWasNotDropped(managedWorkingContext, safeMessages);
+    /** Builds the Final request exclusively from the Working Context. */
+    public FinalSynthesisRequest create(List<Message> workingContext, String originalUserQuestion) {
+        Assert.notNull(workingContext, "Working Context cannot be null");
+        List<Message> safeMessages = AgentMemoryHistorySanitizer.toSafeModelMessages(workingContext);
+        assertProtocolWasNotDropped(workingContext, safeMessages);
 
         Map<String, ToolResponseMessage.ToolResponse> responsesById = responsesById(safeMessages);
         int lastUserIndex = lastUserIndex(safeMessages);

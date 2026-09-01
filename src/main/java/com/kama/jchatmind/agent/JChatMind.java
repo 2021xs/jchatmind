@@ -88,8 +88,8 @@ public class JChatMind {
     private String userMessageId;
     private String originalUserQuestion;
     private String currentTaskId;
-    private ConversationContextCompressor.CurrentTaskWorkingState currentTaskWorkingState =
-            ConversationContextCompressor.CurrentTaskWorkingState.empty();
+    private ConversationContextCompressor.ContinuationState continuationState =
+            ConversationContextCompressor.ContinuationState.empty();
     private AgentStep currentStep;
     private AgentExecutionContext agentExecutionContext;
     private List<String> runtimeToolNames;
@@ -218,7 +218,7 @@ public class JChatMind {
         }
         this.agentState = AgentState.IDLE;
 
-        this.chatMemory = new ProtocolAwareMessageWindowChatMemory(
+        this.chatMemory = new ProtocolAwareChatMemory(
                 maxMessages == null ? DEFAULT_MAX_MESSAGES : maxMessages);
 
         if (StringUtils.hasLength(systemPrompt)) {
@@ -345,18 +345,18 @@ public class JChatMind {
                         "Current task original User message is not available: messageId=" + userMessageId));
     }
 
-    private List<Message> taskAwareMemory(
+    private List<Message> workingContextMessages(
             ConversationContextCompressor.CompletedConversationProjection conversation,
-            ConversationContextCompressor.CurrentTaskCompression currentTask) {
+            ConversationContextCompressor.ContinuationStateCompression currentTask) {
         List<Message> memory = new ArrayList<>();
         if (StringUtils.hasLength(systemPrompt)) {
             memory.add(new SystemMessage(systemPrompt));
         }
         memory.addAll(AgentMemoryHistorySanitizer.toSafeReplayMessages(
                 conversation.summary(), conversation.messages()));
-        if (StringUtils.hasText(currentTask.state().summary())) {
-            memory.add(new SystemMessage(ConversationContextCompressor.currentTaskSummaryMessageContent(
-                    currentTask.state().summary())));
+        if (StringUtils.hasText(currentTask.state().content())) {
+            memory.add(new SystemMessage(ConversationContextCompressor.continuationStateMessageContent(
+                    currentTask.state().content())));
         }
         memory.addAll(toMemoryMessages(currentTask.uncoveredProtocolMessages()));
         return memory;
@@ -381,7 +381,7 @@ public class JChatMind {
         ConversationContextCompressor.CompressionCheck check =
                 conversationContextCompressor.checkCurrentTask(
                         model, currentUser, conversation.summary(), conversation.messages(),
-                        projectedProtocol, fixedPlanningMessages, currentTaskWorkingState);
+                        projectedProtocol, fixedPlanningMessages, continuationState);
         if (!check.needed()) {
             return;
         }
@@ -394,22 +394,22 @@ public class JChatMind {
                         + ", maxToolResultTokens=" + check.maxSingleToolResultTokens()
                         + ", newCompressibleMessages=" + check.newCompressibleMessages());
         try {
-            ConversationContextCompressor.CurrentTaskCompression compressedContext =
+            ConversationContextCompressor.ContinuationStateCompression compressedContext =
                     conversationContextCompressor.compressCurrentTaskIfNeeded(
                             chatSessionId, model, currentUser, conversation.summary(), conversation.messages(),
-                            projectedProtocol, fixedPlanningMessages, currentTaskWorkingState);
-            currentTaskWorkingState = compressedContext.state();
+                            projectedProtocol, fixedPlanningMessages, continuationState);
+            continuationState = compressedContext.state();
             if (compressedContext.compressed()) {
                 this.chatMemory.clear(this.chatSessionId);
-                this.chatMemory.add(this.chatSessionId, taskAwareMemory(conversation, compressedContext));
+                this.chatMemory.add(this.chatSessionId, workingContextMessages(conversation, compressedContext));
             }
             agentTaskLogService.finishStep(compressionStep.getId(),
                     "compressed=" + compressedContext.compressed()
-                            + ", summaryChars=" + (compressedContext.state().summary() == null
-                            ? 0 : compressedContext.state().summary().length())
+                            + ", stateChars=" + (compressedContext.state().content() == null
+                            ? 0 : compressedContext.state().content().length())
                             + ", coveredThroughLogicalGroup="
                             + compressedContext.state().coveredThroughLogicalGroup()
-                            + ", summaryDepth=" + compressedContext.state().summaryDepth()
+                            + ", stateDepth=" + compressedContext.state().stateDepth()
                             + ", compressionCount=" + compressedContext.state().compressionCount()
                             + ", correctiveRetryCount=" + compressedContext.correctiveRetryCount()
                             + ", uncoveredProtocolMessages="
@@ -673,14 +673,14 @@ public class JChatMind {
             ));
         }
 
-        List<Message> managedWorkingContext = this.chatMemory.get(this.chatSessionId);
-        FinalSynthesisRequest finalRequest = finalSynthesisRequestFactory.createFromManagedContext(
-                managedWorkingContext, originalUserQuestion);
+        List<Message> workingContext = this.chatMemory.get(this.chatSessionId);
+        FinalSynthesisRequest finalRequest = finalSynthesisRequestFactory.create(
+                workingContext, originalUserQuestion);
         AgentLifecycleObservationPublisher.publishFinalProjection(
                 new AgentLifecycleObservationPublisher.FinalProjectionObservation(
-                        currentTaskId, chatSessionId, model, managedWorkingContext, finalRequest,
-                        currentTaskWorkingState.summary(),
-                        currentTaskWorkingState.coveredThroughLogicalGroup()));
+                        currentTaskId, chatSessionId, model, workingContext, finalRequest,
+                        continuationState.content(),
+                        continuationState.coveredThroughLogicalGroup()));
         int evidenceCount = finalRequest.evidenceBatches().stream()
                 .mapToInt(batch -> batch.evidence().size())
                 .sum();
@@ -689,9 +689,9 @@ public class JChatMind {
                 .mapToInt(evidence -> evidence.content().length())
                 .sum();
         log.info("Final synthesis request projected: conversationMessages={}, evidenceBatches={}, "
-                        + "evidenceCount={}, evidenceChars={}, managedContextMessages={}",
+                        + "evidenceCount={}, evidenceChars={}, workingContextMessages={}",
                 finalRequest.conversationContext().size(), finalRequest.evidenceBatches().size(),
-                evidenceCount, evidenceChars, managedWorkingContext.size());
+                evidenceCount, evidenceChars, workingContext.size());
         finalLogicalRequestStartedAtMs = System.currentTimeMillis();
         int accumulatedReasoningEventCount = 0;
         int accumulatedReasoningChars = 0;
@@ -1198,7 +1198,7 @@ public class JChatMind {
 
         duplicateCallState.reset();
         taskEvidenceState.reset();
-        currentTaskWorkingState = ConversationContextCompressor.CurrentTaskWorkingState.empty();
+        continuationState = ConversationContextCompressor.ContinuationState.empty();
         forceFinalAnswer = false;
         finalizationRequired = false;
         pendingFinalSynthesisStep = null;

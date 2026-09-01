@@ -167,7 +167,7 @@ class CompressionModelReplayBenchmarkTest {
         ContextCompressionProperties properties = properties(
                 scenario.hardContextBudget(), scenario.maxSingleToolResultTokens());
         int stateTokens = merged.state() == null ? 0 : new EstimatedTokenCounter(properties)
-                .countText(MEASUREMENT_MODEL, merged.state().summary()).tokens();
+                .countText(MEASUREMENT_MODEL, merged.state().content()).tokens();
         int candidateTokens = merged.state() == null ? 0
                 : measureFullCandidateTokens(scenario, input, merged.state());
         boolean candidateFit = merged.state() != null
@@ -220,7 +220,7 @@ class CompressionModelReplayBenchmarkTest {
                 scenario.maxSingleToolResultTokens());
         ConversationContextCompressorImpl compressor = compressor(properties, client);
         AtomicReference<AgentLifecycleObservationPublisher.CompressionObservation> captured = new AtomicReference<>();
-        ConversationContextCompressor.CurrentTaskCompression runtimeResult;
+        ConversationContextCompressor.ContinuationStateCompression runtimeResult;
         try (AgentLifecycleObservationPublisher.Registration ignored =
                      AgentLifecycleObservationPublisher.registerCompression(captured::set)) {
             runtimeResult = compressor.compressCurrentTaskIfNeeded(
@@ -251,7 +251,7 @@ class CompressionModelReplayBenchmarkTest {
         AssertionResult assertions = assertSemantics(scenario, finalValidation);
         int mergedStateTokens = finalValidation.state() == null ? 0
                 : new EstimatedTokenCounter(properties).countText(
-                MEASUREMENT_MODEL, finalValidation.state().summary()).tokens();
+                MEASUREMENT_MODEL, finalValidation.state().content()).tokens();
         int fullCandidateTokens = finalValidation.state() == null ? 0
                 : measureFullCandidateTokens(scenario, input, finalValidation.state());
         boolean candidateFit = finalValidation.state() != null
@@ -298,7 +298,7 @@ class CompressionModelReplayBenchmarkTest {
         }
         ScriptedSummaryClient scripted = new ScriptedSummaryClient(outputs);
         ConversationContextCompressorImpl validationCompressor = compressor(properties(100_000, 1), scripted);
-        ConversationContextCompressor.CurrentTaskCompression result = validationCompressor.compressCurrentTaskIfNeeded(
+        ConversationContextCompressor.ContinuationStateCompression result = validationCompressor.compressCurrentTaskIfNeeded(
                 "validation-" + scenario.scenarioId(), MEASUREMENT_MODEL,
                 input.originalUser(), null, List.of(input.originalUser()), input.protocol(),
                 input.fixedPlanning(), input.existingState());
@@ -322,7 +322,7 @@ class CompressionModelReplayBenchmarkTest {
                         "No new durable facts; apply only the supplied dynamic correction.", false))))));
         ScriptedSummaryClient scripted = new ScriptedSummaryClient(List.of(correctiveDelta));
         ConversationContextCompressorImpl validationCompressor = compressor(properties(100_000, 1), scripted);
-        ConversationContextCompressor.CurrentTaskCompression result = validationCompressor.compressCurrentTaskIfNeeded(
+        ConversationContextCompressor.ContinuationStateCompression result = validationCompressor.compressCurrentTaskIfNeeded(
                 "validation-corrective-" + scenario.scenarioId(), MEASUREMENT_MODEL,
                 input.originalUser(), null, List.of(input.originalUser()), extended,
                 input.fixedPlanning(), primary.state());
@@ -331,7 +331,7 @@ class CompressionModelReplayBenchmarkTest {
 
     private int measureFullCandidateTokens(CompressionReplayScenarios.Scenario scenario,
                                            ScenarioInput input,
-                                           ConversationContextCompressor.CurrentTaskWorkingState state) {
+                                           ConversationContextCompressor.ContinuationState state) {
         ContextCompressionProperties measurementProperties = properties(
                 scenario.hardContextBudget(), scenario.maxSingleToolResultTokens());
         ConversationContextCompressorImpl measurement = compressor(measurementProperties,
@@ -344,10 +344,10 @@ class CompressionModelReplayBenchmarkTest {
     private AssertionResult assertSemantics(CompressionReplayScenarios.Scenario scenario,
                                             Validation validation) {
         if (!validation.mergedValid() || validation.state() == null
-                || !StringUtils.hasText(validation.state().summary())) {
+                || !StringUtils.hasText(validation.state().content())) {
             return AssertionResult.invalid(scenario);
         }
-        String state = validation.state().summary();
+        String state = validation.state().content();
         String lower = state.toLowerCase(Locale.ROOT);
         List<String> failures = new ArrayList<>();
         for (String expected : scenario.mustContainKnown()) {
@@ -542,9 +542,9 @@ class CompressionModelReplayBenchmarkTest {
         List<ChatMessageDTO> fixed = scenario.fixedPlanningMaterial().stream()
                 .map(content -> ChatMessageDTO.builder().role(ChatMessageDTO.RoleType.SYSTEM).content(content).build())
                 .toList();
-        ConversationContextCompressor.CurrentTaskWorkingState state = scenario.existingState() == null
-                ? ConversationContextCompressor.CurrentTaskWorkingState.empty()
-                : new ConversationContextCompressor.CurrentTaskWorkingState(
+        ConversationContextCompressor.ContinuationState state = scenario.existingState() == null
+                ? ConversationContextCompressor.ContinuationState.empty()
+                : new ConversationContextCompressor.ContinuationState(
                 scenario.existingState(), scenario.coveredThroughLogicalGroupBefore(), 1, 1);
         return new ScenarioInput(user, protocol(scenario.groups()), fixed, state);
     }
@@ -800,11 +800,11 @@ class CompressionModelReplayBenchmarkTest {
             ChatMessageDTO originalUser,
             List<ChatMessageDTO> protocol,
             List<ChatMessageDTO> fixedPlanning,
-            ConversationContextCompressor.CurrentTaskWorkingState existingState) {
+            ConversationContextCompressor.ContinuationState existingState) {
     }
 
     private record Validation(boolean mergedValid,
-                              ConversationContextCompressor.CurrentTaskWorkingState state) {
+                              ConversationContextCompressor.ContinuationState state) {
         static Validation invalid() {
             return new Validation(false, null);
         }

@@ -11,8 +11,8 @@ public final class AgentToolProtocolInspector {
     }
 
     public static Inspection inspect(List<Message> messages) {
-        ProtocolAwareMessageWindowChatMemory.ProtocolValidation validation =
-                ProtocolAwareMessageWindowChatMemory.inspectProtocol(messages);
+        ProtocolAwareChatMemory.ProtocolValidation validation =
+                ProtocolAwareChatMemory.inspectProtocol(messages);
         return new Inspection(validation.orphanToolProtocolCount(),
                 validation.protocolValidationFailureCount(), validation.diagnostic());
     }

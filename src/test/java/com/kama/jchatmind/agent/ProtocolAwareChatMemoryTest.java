@@ -17,13 +17,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class ProtocolAwareMessageWindowChatMemoryTest {
+class ProtocolAwareChatMemoryTest {
 
     private static final String SESSION_ID = "session-1";
 
     @Test
     void messageLengthTenDoesNotEvictValidProtocolGroups() {
-        ProtocolAwareMessageWindowChatMemory memory = new ProtocolAwareMessageWindowChatMemory(10);
+        ProtocolAwareChatMemory memory = new ProtocolAwareChatMemory(10);
         List<Message> messages = new ArrayList<>();
         messages.add(new SystemMessage("system"));
         messages.add(assistant("previous"));
@@ -46,7 +46,7 @@ class ProtocolAwareMessageWindowChatMemoryTest {
 
     @Test
     void messageLengthDoesNotEvictOldToolBatch() {
-        ProtocolAwareMessageWindowChatMemory memory = new ProtocolAwareMessageWindowChatMemory(4);
+        ProtocolAwareChatMemory memory = new ProtocolAwareChatMemory(4);
         AssistantMessage oldAssistant = toolAssistant("A", "B");
         ToolResponseMessage oldResponse = toolResponse("A", "B");
         AssistantMessage latestAssistant = toolAssistant("C");
@@ -70,7 +70,7 @@ class ProtocolAwareMessageWindowChatMemoryTest {
 
     @Test
     void realFiveBatchShapeRemainsSafeForFinalSanitizer() {
-        ProtocolAwareMessageWindowChatMemory memory = new ProtocolAwareMessageWindowChatMemory(10);
+        ProtocolAwareChatMemory memory = new ProtocolAwareChatMemory(10);
         List<Message> messages = new ArrayList<>(List.of(
                 new SystemMessage("system"),
                 assistant("previous answer"),
@@ -92,7 +92,7 @@ class ProtocolAwareMessageWindowChatMemoryTest {
 
     @Test
     void ordinaryConversationDoesNotUseConfiguredLengthAsEvictionWindow() {
-        ProtocolAwareMessageWindowChatMemory memory = new ProtocolAwareMessageWindowChatMemory(4);
+        ProtocolAwareChatMemory memory = new ProtocolAwareChatMemory(4);
         UserMessage firstUser = new UserMessage("one");
         AssistantMessage firstAssistant = assistant("one answer");
         UserMessage secondUser = new UserMessage("two");
@@ -115,7 +115,7 @@ class ProtocolAwareMessageWindowChatMemoryTest {
 
     @Test
     void invalidInputHistoryFailsClosed() {
-        ProtocolAwareMessageWindowChatMemory memory = new ProtocolAwareMessageWindowChatMemory(10);
+        ProtocolAwareChatMemory memory = new ProtocolAwareChatMemory(10);
         assertThrows(IllegalStateException.class,
                 () -> memory.add(SESSION_ID, List.of(toolResponse("orphan"))));
         assertThrows(IllegalStateException.class,

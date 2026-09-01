@@ -82,10 +82,6 @@ public final class AgentLifecycleObservationPublisher {
         return !FINAL_PROVIDER_REQUEST_LISTENERS.isEmpty();
     }
 
-    public static boolean isFinalProjectionObservationEnabled() {
-        return !FINAL_PROJECTION_LISTENERS.isEmpty();
-    }
-
     public static boolean isSelectorProvenanceObservationEnabled() {
         return !SELECTOR_PROVENANCE_LISTENERS.isEmpty();
     }
@@ -298,14 +294,14 @@ public final class AgentLifecycleObservationPublisher {
             String taskId,
             String sessionId,
             String model,
-            List<Message> managedWorkingContext,
+            List<Message> workingContext,
             FinalSynthesisRequest finalRequest,
             String acceptedState,
             int coveredThroughLogicalGroup) {
 
         public FinalProjectionObservation {
-            managedWorkingContext = managedWorkingContext == null
-                    ? List.of() : List.copyOf(managedWorkingContext);
+            workingContext = workingContext == null
+                    ? List.of() : List.copyOf(workingContext);
         }
     }
 

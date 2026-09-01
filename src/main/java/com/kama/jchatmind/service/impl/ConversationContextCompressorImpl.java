@@ -40,15 +40,15 @@ import java.util.stream.Collectors;
 @Service
 public class ConversationContextCompressorImpl implements ConversationContextCompressor {
     private static final int MAX_MESSAGE_CHARS_IN_SUMMARY_PROMPT = 2000;
-    private static final String TASK_AWARE_SUMMARY_HEADER = "Conversation Context";
-    private static final List<String> TASK_AWARE_SUMMARY_SECTIONS = List.of(
+    private static final String COMPLETED_CONVERSATION_SUMMARY_HEADER = "Conversation Context";
+    private static final List<String> COMPLETED_CONVERSATION_SUMMARY_SECTIONS = List.of(
             "- User Goals / Requests",
             "- Confirmed Final Conclusions",
             "- Important Constraints / Exact Values",
             "- Decisions / Preferences Relevant to Future Turns",
             "- Open Conversation-level Follow-ups");
-    private static final String CURRENT_TASK_SUMMARY_HEADER = "Current Task Continuation State";
-    private static final List<String> CURRENT_TASK_SUMMARY_SECTIONS = List.of(
+    private static final String CONTINUATION_STATE_HEADER = "Current Task Continuation State";
+    private static final List<String> CONTINUATION_STATE_SECTIONS = List.of(
             "- Goal",
             "- Known",
             "- Constraints",
@@ -123,10 +123,10 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 .filter(pair -> pair.finalMessage().getId().equals(existingBoundary))
                 .findFirst()
                 .orElse(null);
-        boolean cacheUsable = isTaskAwareSummary(existingSummary) && boundaryPair != null;
+        boolean cacheUsable = isCompletedConversationSummary(existingSummary) && boundaryPair != null;
 
         if (unlinkedLegacyFinalCount > 0) {
-            log.info("Task-aware completed conversation ignored unlinked legacy finals: sessionId={}, count={}",
+            log.info("Completed conversation projection ignored unlinked legacy finals: sessionId={}, count={}",
                     sessionId, unlinkedLegacyFinalCount);
         }
 
@@ -165,8 +165,8 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                                              List<ChatMessageDTO> completedConversationMessages,
                                              List<ChatMessageDTO> currentTaskProtocolMessages,
                                              List<ChatMessageDTO> fixedPlanningMessages,
-                                             CurrentTaskWorkingState state) {
-        CurrentTaskWorkingState safeState = state == null ? CurrentTaskWorkingState.empty() : state;
+                                             ContinuationState state) {
+        ContinuationState safeState = state == null ? ContinuationState.empty() : state;
         CurrentTaskInputs inputs = currentTaskInputs(originalUser, conversationSummary,
                 completedConversationMessages, currentTaskProtocolMessages, safeState);
         ContextCompressionProperties.TokenThreshold threshold = properties.thresholdFor(model);
@@ -191,27 +191,28 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
     }
 
     @Override
-    public CurrentTaskCompression compressCurrentTaskIfNeeded(String sessionId,
-                                                               String model,
-                                                               ChatMessageDTO originalUser,
-                                                               String conversationSummary,
-                                                               List<ChatMessageDTO> completedConversationMessages,
-                                                               List<ChatMessageDTO> currentTaskProtocolMessages,
-                                                               List<ChatMessageDTO> fixedPlanningMessages,
-                                                               CurrentTaskWorkingState state) {
-        CurrentTaskWorkingState safeState = state == null ? CurrentTaskWorkingState.empty() : state;
+    public ContinuationStateCompression compressCurrentTaskIfNeeded(String sessionId,
+                                                                    String model,
+                                                                    ChatMessageDTO originalUser,
+                                                                    String conversationSummary,
+                                                                    List<ChatMessageDTO> completedConversationMessages,
+                                                                    List<ChatMessageDTO> currentTaskProtocolMessages,
+                                                                    List<ChatMessageDTO> fixedPlanningMessages,
+                                                                    ContinuationState state) {
+        ContinuationState safeState = state == null ? ContinuationState.empty() : state;
         CurrentTaskInputs inputs = currentTaskInputs(originalUser, conversationSummary,
                 completedConversationMessages, currentTaskProtocolMessages, safeState);
         CompressionCheck check = checkCurrentTask(model, originalUser, conversationSummary,
                 completedConversationMessages, currentTaskProtocolMessages, fixedPlanningMessages, safeState);
         if (!check.needed()) {
-            return new CurrentTaskCompression(safeState, inputs.uncoveredProtocolMessages(), check, false, 0);
+            return new ContinuationStateCompression(
+                    safeState, inputs.uncoveredProtocolMessages(), check, false, 0);
         }
 
         AssimilationSelection selection = selectAssimilation(model, originalUser, conversationSummary,
                 completedConversationMessages, fixedPlanningMessages, inputs,
                 check.effectiveContextTokens() >= check.maxContextTokens());
-        String prompt = buildCurrentTaskDeltaPrompt(originalUser, safeState.summary(),
+        String prompt = buildCurrentTaskDeltaPrompt(originalUser, safeState.content(),
                 selection.selectedProtocolMessages());
         long start = System.currentTimeMillis();
         int correctiveRetryCount = 0;
@@ -221,20 +222,20 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         String correctiveState = null;
         String acceptedState = null;
         try {
-            ContinuationState existingState = initializeCurrentTaskGoal(
-                    parseCurrentTaskState(safeState.summary()), originalUser);
+            ContinuationStateDocument existingState = initializeCurrentTaskGoal(
+                    parseCurrentTaskState(safeState.content()), originalUser);
             String generated = conversationSummaryClient.summarize(model, prompt);
             primaryState = generated == null ? null : generated.strip();
-            String summary;
+            String stateContent;
             boolean budgetCorrectiveInvoked = false;
             CandidateMeasurement primaryMeasurement;
             try {
                 ContinuationStateDelta delta = parseCurrentTaskDelta(primaryState);
-                summary = renderCurrentTaskState(mergeCurrentTaskState(existingState, delta));
-                validateCurrentTaskStateStructure(summary);
-                validateCurrentTaskStateReduction(model, summary, safeState.summary(),
+                stateContent = renderCurrentTaskState(mergeCurrentTaskState(existingState, delta));
+                validateCurrentTaskStateStructure(stateContent);
+                validateCurrentTaskStateReduction(model, stateContent, safeState.content(),
                         selection.selectedProtocolMessages());
-            } catch (RepairableCurrentTaskSummaryException repairable) {
+            } catch (RepairableContinuationStateException repairable) {
                 correctiveRetryCount = 1;
                 correctivePrompt = buildCurrentTaskDeltaStructureCorrectivePrompt(
                         originalUser, primaryState, repairable.getMessage(), selection.availableStateTokens());
@@ -243,13 +244,13 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 String corrected = conversationSummaryClient.summarize(model, correctivePrompt);
                 correctiveState = corrected == null ? null : corrected.strip();
                 ContinuationStateDelta correctedDelta = parseCurrentTaskDelta(correctiveState);
-                summary = renderCurrentTaskState(mergeCurrentTaskState(existingState, correctedDelta));
-                validateCurrentTaskStateStructure(summary);
-                validateCurrentTaskStateReduction(model, summary, safeState.summary(),
+                stateContent = renderCurrentTaskState(mergeCurrentTaskState(existingState, correctedDelta));
+                validateCurrentTaskStateStructure(stateContent);
+                validateCurrentTaskStateReduction(model, stateContent, safeState.content(),
                         selection.selectedProtocolMessages());
             }
             primaryMeasurement = measureCandidate(model, originalUser, conversationSummary,
-                    completedConversationMessages, fixedPlanningMessages, summary,
+                    completedConversationMessages, fixedPlanningMessages, stateContent,
                     selection.retainedProtocolMessages());
             if (primaryMeasurement.fullCandidateTokens() > check.maxContextTokens()) {
                 if (correctiveRetryCount > 0) {
@@ -260,7 +261,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 correctiveRetryCount = 1;
                 budgetCorrectiveInvoked = true;
                 correctivePrompt = buildCurrentTaskBudgetDeltaPrompt(
-                        originalUser, summary, selection.availableStateTokens());
+                        originalUser, stateContent, selection.availableStateTokens());
                 log.info("Current task state corrective retry: attemptId={}, type=budget, availableStateTokens={}, primaryStateTokens={}, primaryCandidateTokens={}",
                         attemptId, selection.availableStateTokens(), primaryMeasurement.stateTokens(),
                         primaryMeasurement.fullCandidateTokens());
@@ -269,63 +270,63 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 ContinuationStateDelta budgetDelta = parseCurrentTaskDelta(correctiveState);
                 validateBudgetCorrectiveDelta(budgetDelta);
                 String correctedState = renderCurrentTaskState(mergeCurrentTaskState(
-                        parseCurrentTaskState(summary), budgetDelta));
+                        parseCurrentTaskState(stateContent), budgetDelta));
                 validateCurrentTaskStateStructure(correctedState);
                 int correctedTokens = currentTaskStateBodyTokens(model, correctedState);
                 if (correctedTokens >= primaryMeasurement.stateTokens()) {
                     throw new IllegalStateException("Budget-corrected current task state did not reduce state tokens");
                 }
-                validateCurrentTaskStateReduction(model, correctedState, safeState.summary(),
+                validateCurrentTaskStateReduction(model, correctedState, safeState.content(),
                         selection.selectedProtocolMessages());
-                summary = correctedState;
+                stateContent = correctedState;
             }
             CandidateMeasurement finalMeasurement = measureCandidate(model, originalUser, conversationSummary,
-                    completedConversationMessages, fixedPlanningMessages, summary,
+                    completedConversationMessages, fixedPlanningMessages, stateContent,
                     selection.retainedProtocolMessages());
             if (finalMeasurement.fullCandidateTokens() > check.maxContextTokens()) {
                 throw new IllegalStateException("Current task continuation state leaves Planning request over budget: tokens="
                         + finalMeasurement.fullCandidateTokens() + ", maxContextTokens="
                         + check.maxContextTokens());
             }
-            CurrentTaskWorkingState updated = new CurrentTaskWorkingState(
-                    summary,
+            ContinuationState updated = new ContinuationState(
+                    stateContent,
                     safeState.coveredThroughLogicalGroup() + selection.selectedGroupCount(),
-                    safeState.summaryDepth() + 1,
+                    safeState.stateDepth() + 1,
                     safeState.compressionCount() + 1,
                     false);
-            acceptedState = summary;
+            acceptedState = stateContent;
             logCurrentTaskBudgetAttempt(attemptId, model, originalUser, conversationSummary,
-                    completedConversationMessages, fixedPlanningMessages, safeState.summary(), selection,
-                    primaryState, primaryMeasurement, budgetCorrectiveInvoked, summary, finalMeasurement, true);
-            publishCurrentTaskCompression(sessionId, model, check, prompt, safeState.summary(), summary,
+                    completedConversationMessages, fixedPlanningMessages, safeState.content(), selection,
+                    primaryState, primaryMeasurement, budgetCorrectiveInvoked, stateContent, finalMeasurement, true);
+            publishContinuationStateCompression(sessionId, model, check, prompt, safeState.content(), stateContent,
                     System.currentTimeMillis() - start, true, null, attemptId, primaryState,
                     correctivePrompt, correctiveState, acceptedState, true,
                     updated.coveredThroughLogicalGroup(), selection.selectedProtocolMessages(),
-                    selection.retainedProtocolMessages(), updated.summaryDepth(),
+                    selection.retainedProtocolMessages(), updated.stateDepth(),
                     updated.compressionCount(), correctiveRetryCount);
-            return new CurrentTaskCompression(updated, selection.retainedProtocolMessages(), check, true,
+            return new ContinuationStateCompression(updated, selection.retainedProtocolMessages(), check, true,
                     correctiveRetryCount);
         } catch (Exception error) {
             log.warn("Current task budget attempt rejected: attemptId={}, candidateBeforeTokens={}, selectedGroups={}, selectedRawTokens={}, retainedRawTokens={}, availableStateTokens={}, error={}",
                     attemptId, check.effectiveContextTokens(), selection.selectedGroupCount(),
                     selection.selectedRawTokens(), selection.retainedRawTokens(),
                     selection.availableStateTokens(), error.getMessage());
-            publishCurrentTaskCompression(sessionId, model, check, prompt, safeState.summary(), null,
+            publishContinuationStateCompression(sessionId, model, check, prompt, safeState.content(), null,
                     System.currentTimeMillis() - start, false,
                     error.getClass().getSimpleName() + ": " + error.getMessage(), attemptId,
                     primaryState, correctivePrompt, correctiveState, null, false,
                     safeState.coveredThroughLogicalGroup(), selection.selectedProtocolMessages(),
-                    inputs.uncoveredProtocolMessages(), safeState.summaryDepth(),
+                    inputs.uncoveredProtocolMessages(), safeState.stateDepth(),
                     safeState.compressionCount(), correctiveRetryCount);
             log.warn("Current task continuation state failed closed: sessionId={}, coveredGroups={}, error={}",
                     sessionId, safeState.coveredThroughLogicalGroup(), error.getMessage(), error);
-            CurrentTaskWorkingState suppressed = new CurrentTaskWorkingState(
-                    safeState.summary(),
+            ContinuationState suppressed = new ContinuationState(
+                    safeState.content(),
                     safeState.coveredThroughLogicalGroup(),
-                    safeState.summaryDepth(),
+                    safeState.stateDepth(),
                     safeState.compressionCount(),
                     true);
-            return new CurrentTaskCompression(suppressed, inputs.uncoveredProtocolMessages(), check, false,
+            return new ContinuationStateCompression(suppressed, inputs.uncoveredProtocolMessages(), check, false,
                     correctiveRetryCount);
         }
     }
@@ -567,7 +568,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         try {
             String summary = conversationSummaryClient.summarize(model, prompt);
             String normalizedSummary = summary == null ? null : summary.strip();
-            if (!isTaskAwareSummary(normalizedSummary)) {
+            if (!isCompletedConversationSummary(normalizedSummary)) {
                 throw new IllegalStateException("Completed conversation summary has invalid structure");
             }
             if (normalizedSummary.length() > properties.getMaxSummaryChars()) {
@@ -584,7 +585,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                     currentUser == null ? List.of() : List.of(currentUser),
                     boundaryMessageId, true, unlinkedLegacyFinalCount);
         } catch (Exception error) {
-            log.warn("Task-aware completed conversation summary failed closed: sessionId={}, error={}",
+            log.warn("Completed conversation summary failed closed: sessionId={}, error={}",
                     sessionId, error.getMessage(), error);
             if (StringUtils.hasText(safeFallbackSummary)) {
                 CompletedConversationPair fallbackBoundary = eligiblePairs.stream()
@@ -592,7 +593,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                                 metadata == null ? null : metadata.getContextSummaryLastMessageId()))
                         .findFirst()
                         .orElse(null);
-                if (fallbackBoundary != null && isTaskAwareSummary(safeFallbackSummary)) {
+                if (fallbackBoundary != null && isCompletedConversationSummary(safeFallbackSummary)) {
                     List<CompletedConversationPair> uncovered = eligiblePairs.stream()
                             .filter(pair -> pair.finalOrder() > fallbackBoundary.finalOrder())
                             .toList();
@@ -624,12 +625,12 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                                                 String conversationSummary,
                                                 List<ChatMessageDTO> completedConversationMessages,
                                                 List<ChatMessageDTO> currentTaskProtocolMessages,
-                                                CurrentTaskWorkingState state) {
+                                                ContinuationState state) {
         if (originalUser == null || originalUser.getRole() != ChatMessageDTO.RoleType.USER
                 || !StringUtils.hasText(originalUser.getContent())) {
             throw new IllegalStateException("Current task requires its explicitly linked original User message");
         }
-        CurrentTaskWorkingState safeState = state == null ? CurrentTaskWorkingState.empty() : state;
+        ContinuationState safeState = state == null ? ContinuationState.empty() : state;
         List<ChatMessageDTO> protocol = currentTaskProtocolMessages == null
                 ? List.of() : List.copyOf(currentTaskProtocolMessages);
         List<LogicalMessageGroup> groups = logicalMessageGroups(protocol);
@@ -640,7 +641,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         }
         if (safeState.coveredThroughLogicalGroup() < 0
                 || safeState.coveredThroughLogicalGroup() > groups.size()) {
-            throw new IllegalStateException("Current task working summary coverage boundary is invalid");
+            throw new IllegalStateException("Current task continuation state coverage boundary is invalid");
         }
         int uncoveredStart = safeState.coveredThroughLogicalGroup() == groups.size()
                 ? protocol.size()
@@ -651,8 +652,8 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
 
         List<ChatMessageDTO> effective = new ArrayList<>(baseCurrentTaskContext(
                 originalUser, conversationSummary, completedConversationMessages));
-        if (StringUtils.hasText(safeState.summary())) {
-            effective.add(currentTaskSummaryMessage(safeState.summary()));
+        if (StringUtils.hasText(safeState.content())) {
+            effective.add(continuationStateMessage(safeState.content()));
         }
         effective.addAll(uncovered);
         return new CurrentTaskInputs(protocol, List.copyOf(groups), List.copyOf(uncoveredGroups), uncovered,
@@ -729,7 +730,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 originalUser, conversationSummary, completedConversationMessages);
         List<ChatMessageDTO> candidate = new ArrayList<>(base);
         if (state != null) {
-            candidate.add(currentTaskSummaryMessage(state));
+            candidate.add(continuationStateMessage(state));
         }
         if (retainedProtocolMessages != null) {
             candidate.addAll(retainedProtocolMessages);
@@ -777,8 +778,8 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
     }
 
     private String minimumContinuationState() {
-        return CURRENT_TASK_SUMMARY_HEADER + "\n\n"
-                + CURRENT_TASK_SUMMARY_SECTIONS.stream()
+        return CONTINUATION_STATE_HEADER + "\n\n"
+                + CONTINUATION_STATE_SECTIONS.stream()
                 .map(section -> section + "\n  - none")
                 .collect(Collectors.joining("\n"));
     }
@@ -869,17 +870,17 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         }).collect(Collectors.joining("\n\n"));
     }
 
-    private ContinuationState parseCurrentTaskState(String state) {
+    private ContinuationStateDocument parseCurrentTaskState(String state) {
         if (!StringUtils.hasText(state)) {
-            return ContinuationState.empty();
+            return ContinuationStateDocument.empty();
         }
         Map<String, List<String>> sections = parseSectionedBody(
-                state, CURRENT_TASK_SUMMARY_HEADER, CURRENT_TASK_SUMMARY_SECTIONS);
+                state, CONTINUATION_STATE_HEADER, CONTINUATION_STATE_SECTIONS);
         List<String> goals = meaningfulItems(sections.get("- Goal"));
         if (goals.size() != 1) {
             throw new IllegalStateException("Current task continuation state requires exactly one Goal item");
         }
-        return new ContinuationState(goals.get(0),
+        return new ContinuationStateDocument(goals.get(0),
                 meaningfulItems(sections.get("- Known")),
                 meaningfulItems(sections.get("- Constraints")),
                 meaningfulItems(sections.get("- Refs")),
@@ -894,7 +895,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         Map<String, List<String>> sections = parseSparseDeltaBody(deltaBody);
         List<String> goalItems = meaningfulItems(sections.get("- Goal"));
         if (sections.containsKey("- Goal") && goalItems.size() != 1) {
-            throw new RepairableCurrentTaskSummaryException(
+            throw new RepairableContinuationStateException(
                     "Present Goal section requires exactly one Goal item");
         }
         String goalUpdate = goalItems.isEmpty() || KEEP.equalsIgnoreCase(goalItems.get(0))
@@ -914,7 +915,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         String normalized = nullToEmpty(body).replace("\r\n", "\n").strip();
         String[] lines = normalized.split("\n", -1);
         if (lines.length == 0 || !CURRENT_TASK_DELTA_HEADER.equals(lines[0].strip())) {
-            throw new RepairableCurrentTaskSummaryException(
+            throw new RepairableContinuationStateException(
                     "Invalid header: expected " + CURRENT_TASK_DELTA_HEADER);
         }
         Map<String, List<String>> values = new LinkedHashMap<>();
@@ -930,11 +931,11 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
             if (rootBullet) {
                 int sectionIndex = CURRENT_TASK_DELTA_SECTIONS.indexOf(stripped);
                 if (sectionIndex < 0) {
-                    throw new RepairableCurrentTaskSummaryException(
+                    throw new RepairableContinuationStateException(
                             "Unknown current task Delta section: " + stripped);
                 }
                 if (sectionIndex <= previousSectionIndex || values.containsKey(stripped)) {
-                    throw new RepairableCurrentTaskSummaryException(
+                    throw new RepairableContinuationStateException(
                             "Duplicate or out-of-order current task Delta section: " + stripped);
                 }
                 previousSectionIndex = sectionIndex;
@@ -943,7 +944,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 continue;
             }
             if (currentSection == null) {
-                throw new RepairableCurrentTaskSummaryException(
+                throw new RepairableContinuationStateException(
                         "Content appears before the first current task Delta section");
             }
             if (stripped.startsWith("- ") && !line.equals(line.stripLeading())) {
@@ -952,7 +953,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
             }
             List<String> items = values.get(currentSection);
             if (line.equals(line.stripLeading()) || items.isEmpty()) {
-                throw new RepairableCurrentTaskSummaryException(
+                throw new RepairableContinuationStateException(
                         "Section item must be an indented bullet: " + currentSection);
             }
             int last = items.size() - 1;
@@ -967,7 +968,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         String normalized = nullToEmpty(body).replace("\r\n", "\n").strip();
         String[] lines = normalized.split("\n", -1);
         if (lines.length == 0 || !header.equals(lines[0].strip())) {
-            throw new RepairableCurrentTaskSummaryException("Invalid header: expected " + header);
+            throw new RepairableContinuationStateException("Invalid header: expected " + header);
         }
         Map<String, List<String>> values = new LinkedHashMap<>();
         int sectionIndex = -1;
@@ -982,20 +983,20 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 continue;
             }
             if (expectedSections.contains(stripped)) {
-                throw new RepairableCurrentTaskSummaryException(
+                throw new RepairableContinuationStateException(
                         "Missing or out-of-order section before " + stripped);
             }
             if (stripped.isEmpty()) {
                 continue;
             }
             if (currentSection == null) {
-                throw new RepairableCurrentTaskSummaryException("Content appears before the first section");
+                throw new RepairableContinuationStateException("Content appears before the first section");
             }
             List<String> items = values.get(currentSection);
             if (stripped.startsWith("- ")) {
                 items.add(stripped.substring(2).strip());
             } else if (items.isEmpty()) {
-                throw new RepairableCurrentTaskSummaryException(
+                throw new RepairableContinuationStateException(
                         "Section item must be an indented bullet: " + currentSection);
             } else {
                 int last = items.size() - 1;
@@ -1003,7 +1004,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
             }
         }
         if (sectionIndex != expectedSections.size() - 1) {
-            throw new RepairableCurrentTaskSummaryException("Missing required ordered sections");
+            throw new RepairableContinuationStateException("Missing required ordered sections");
         }
         return values;
     }
@@ -1018,7 +1019,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 .filter(item -> !"none".equalsIgnoreCase(item))
                 .toList();
         if (meaningful.stream().anyMatch(item -> KEEP.equalsIgnoreCase(item)) && meaningful.size() > 1) {
-            throw new RepairableCurrentTaskSummaryException("KEEP cannot be combined with other section items");
+            throw new RepairableContinuationStateException("KEEP cannot be combined with other section items");
         }
         return meaningful;
     }
@@ -1047,7 +1048,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         }
         List<String> rawItems = sections.get(section);
         if (rawItems == null || rawItems.isEmpty()) {
-            throw new RepairableCurrentTaskSummaryException(
+            throw new RepairableContinuationStateException(
                     "Present dynamic section requires KEEP, none, or at least one item: " + section);
         }
         List<String> meaningful = meaningfulItems(rawItems);
@@ -1057,8 +1058,8 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         return new DynamicStateSection(false, meaningful);
     }
 
-    private ContinuationState initializeCurrentTaskGoal(ContinuationState existing,
-                                                        ChatMessageDTO originalUser) {
+    private ContinuationStateDocument initializeCurrentTaskGoal(ContinuationStateDocument existing,
+                                                                ChatMessageDTO originalUser) {
         if (StringUtils.hasText(existing.goal())) {
             return existing;
         }
@@ -1067,12 +1068,12 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
             throw new IllegalStateException(
                     "Current task original User is required to initialize Continuation State Goal");
         }
-        return new ContinuationState(INITIAL_GOAL_REFERENCE, existing.known(), existing.constraints(),
+        return new ContinuationStateDocument(INITIAL_GOAL_REFERENCE, existing.known(), existing.constraints(),
                 existing.refs(), existing.open(), existing.next());
     }
 
-    private ContinuationState mergeCurrentTaskState(ContinuationState existing,
-                                                    ContinuationStateDelta delta) {
+    private ContinuationStateDocument mergeCurrentTaskState(ContinuationStateDocument existing,
+                                                            ContinuationStateDelta delta) {
         String goal = StringUtils.hasText(delta.goalUpdate()) ? delta.goalUpdate() : existing.goal();
         if (!StringUtils.hasText(goal)) {
             throw new IllegalStateException("Current task continuation state Delta did not establish Goal");
@@ -1085,7 +1086,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 delta.refsAdd(), delta.refsRemove());
         List<String> open = delta.open().keep() ? existing.open() : delta.open().items();
         List<String> next = delta.next().keep() ? existing.next() : delta.next().items();
-        return new ContinuationState(goal, known, constraints, refs, open, next);
+        return new ContinuationStateDocument(goal, known, constraints, refs, open, next);
     }
 
     private List<String> mergeMonotonicSection(String section,
@@ -1102,8 +1103,8 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         return List.copyOf(merged);
     }
 
-    private String renderCurrentTaskState(ContinuationState state) {
-        return CURRENT_TASK_SUMMARY_HEADER + "\n\n"
+    private String renderCurrentTaskState(ContinuationStateDocument state) {
+        return CONTINUATION_STATE_HEADER + "\n\n"
                 + renderStateSection("- Goal", List.of(state.goal())) + "\n"
                 + renderStateSection("- Known", state.known()) + "\n"
                 + renderStateSection("- Constraints", state.constraints()) + "\n"
@@ -1129,53 +1130,53 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         }
     }
 
-    private void validateCurrentTaskStateStructure(String summary) {
-        if (!StringUtils.hasText(summary) || !summary.startsWith(CURRENT_TASK_SUMMARY_HEADER)) {
-            if (!StringUtils.hasText(summary)) {
+    private void validateCurrentTaskStateStructure(String stateContent) {
+        if (!StringUtils.hasText(stateContent) || !stateContent.startsWith(CONTINUATION_STATE_HEADER)) {
+            if (!StringUtils.hasText(stateContent)) {
                 throw new IllegalStateException("Current task continuation state is empty");
             }
-            throw new RepairableCurrentTaskSummaryException("Current task continuation state has invalid structure");
+            throw new RepairableContinuationStateException("Current task continuation state has invalid structure");
         }
         int previousIndex = -1;
-        for (String section : CURRENT_TASK_SUMMARY_SECTIONS) {
-            int index = summary.indexOf(section);
+        for (String section : CONTINUATION_STATE_SECTIONS) {
+            int index = stateContent.indexOf(section);
             if (index <= previousIndex) {
-                throw new RepairableCurrentTaskSummaryException(
+                throw new RepairableContinuationStateException(
                         "Current task continuation state is missing ordered section: " + section);
             }
             previousIndex = index;
         }
-        long repoIds = REPO_ID_ASSIGNMENT.matcher(summary).results().count();
-        long chunkIds = CHUNK_ID_ASSIGNMENT.matcher(summary).results().count();
+        long repoIds = REPO_ID_ASSIGNMENT.matcher(stateContent).results().count();
+        long chunkIds = CHUNK_ID_ASSIGNMENT.matcher(stateContent).results().count();
         if (repoIds != chunkIds) {
-            throw new RepairableCurrentTaskSummaryException(
+            throw new RepairableContinuationStateException(
                     "Current task continuation state contains an incomplete repoId/chunkId pair");
         }
-        parseCurrentTaskState(summary);
+        parseCurrentTaskState(stateContent);
     }
 
     private void validateCurrentTaskStateReduction(String model,
-                                                   String summary,
+                                                   String stateContent,
                                                    String existingSummary,
                                                    List<ChatMessageDTO> selectedProtocolMessages) {
         List<ChatMessageDTO> before = new ArrayList<>();
         if (StringUtils.hasText(existingSummary)) {
-            before.add(currentTaskSummaryMessage(existingSummary));
+            before.add(continuationStateMessage(existingSummary));
         }
         before.addAll(selectedProtocolMessages);
         int beforeTokens = planningContentTokens(model, List.of(), before).tokens();
-        int afterTokens = currentTaskStateMessageTokens(model, summary);
+        int afterTokens = currentTaskStateMessageTokens(model, stateContent);
         if (afterTokens >= beforeTokens) {
             throw new IllegalStateException("Current task continuation state did not reduce tokens");
         }
     }
 
-    private void publishCurrentTaskCompression(String sessionId,
+    private void publishContinuationStateCompression(String sessionId,
                                                String model,
                                                CompressionCheck check,
                                                String prompt,
-                                               String previousSummary,
-                                               String outputSummary,
+                                               String previousState,
+                                               String outputState,
                                                long latencyMs,
                                                boolean succeeded,
                                                String failure,
@@ -1188,7 +1189,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                                                int coveredThroughLogicalGroup,
                                                List<ChatMessageDTO> selectedProtocolMessages,
                                                List<ChatMessageDTO> remainingRawProtocolMessages,
-                                               int summaryDepth,
+                                               int stateDepth,
                                                int compressionCount,
                                                int correctiveRetryCount) {
         if (!AgentLifecycleObservationPublisher.isCompressionObservationEnabled()) {
@@ -1196,18 +1197,18 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         }
         int afterTokens = succeeded
                 ? tokenCounter.countText(model,
-                ConversationContextCompressor.currentTaskSummaryMessageContent(outputSummary)).tokens()
+                ConversationContextCompressor.continuationStateMessageContent(outputState)).tokens()
                 : check.effectiveContextTokens();
         AgentLifecycleObservationPublisher.publishCompression(
                 new AgentLifecycleObservationPublisher.CompressionObservation(
                         diagnosticTaskId(selectedProtocolMessages, remainingRawProtocolMessages),
                         sessionId, model, "current_task_" + check.reason(),
                         check.effectiveContextTokens(), afterTokens, check.rawHistoryTokens(),
-                        check.tokenSource(), prompt, previousSummary, outputSummary,
+                        check.tokenSource(), prompt, previousState, outputState,
                         latencyMs, succeeded, failure, compressionAttemptId, primaryState,
                         correctivePrompt, correctiveState, acceptedState, accepted,
                         coveredThroughLogicalGroup, selectedProtocolMessages,
-                        remainingRawProtocolMessages, summaryDepth, compressionCount,
+                        remainingRawProtocolMessages, stateDepth, compressionCount,
                         correctiveRetryCount));
     }
 
@@ -1226,11 +1227,11 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 .orElse(null);
     }
 
-    private ChatMessageDTO currentTaskSummaryMessage(String summary) {
+    private ChatMessageDTO continuationStateMessage(String state) {
         return ChatMessageDTO.builder()
-                .id("current-task-working-summary")
+                .id("current-task-continuation-state")
                 .role(ChatMessageDTO.RoleType.SYSTEM)
-                .content(ConversationContextCompressor.currentTaskSummaryMessageContent(summary))
+                .content(ConversationContextCompressor.continuationStateMessageContent(state))
                 .build();
     }
 
@@ -1257,8 +1258,8 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 + "输入只包含已经成功完成并具有可靠User/Final关联的会话。\n"
                 + "不要添加工具调用、工具结果、内部执行步骤或未确认事实。\n"
                 + "必须严格使用以下结构并保留所有五个section标题：\n\n"
-                + TASK_AWARE_SUMMARY_HEADER + "\n\n"
-                + String.join("\n", TASK_AWARE_SUMMARY_SECTIONS) + "\n\n"
+                + COMPLETED_CONVERSATION_SUMMARY_HEADER + "\n\n"
+                + String.join("\n", COMPLETED_CONVERSATION_SUMMARY_SECTIONS) + "\n\n"
                 + "在各section标题下使用简洁的缩进条目；没有内容时写 none。\n"
                 + "保留对未来轮次仍重要的精确数值、约束、决策和未解决事项。\n"
                 + "控制在 " + properties.getMaxSummaryChars() + " 字符以内。\n\n"
@@ -1266,12 +1267,12 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 + completedConversation;
     }
 
-    private boolean isTaskAwareSummary(String summary) {
-        if (!StringUtils.hasText(summary) || !summary.startsWith(TASK_AWARE_SUMMARY_HEADER)) {
+    private boolean isCompletedConversationSummary(String summary) {
+        if (!StringUtils.hasText(summary) || !summary.startsWith(COMPLETED_CONVERSATION_SUMMARY_HEADER)) {
             return false;
         }
         int previousIndex = -1;
-        for (String section : TASK_AWARE_SUMMARY_SECTIONS) {
+        for (String section : COMPLETED_CONVERSATION_SUMMARY_SECTIONS) {
             int index = summary.indexOf(section);
             if (index <= previousIndex) {
                 return false;
@@ -1550,7 +1551,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
 
     private int currentTaskStateMessageTokens(String model, String state) {
         return tokenCounter.countText(model,
-                ConversationContextCompressor.currentTaskSummaryMessageContent(nullToEmpty(state))).tokens();
+                ConversationContextCompressor.continuationStateMessageContent(nullToEmpty(state))).tokens();
     }
 
     private void logCurrentTaskBudgetAttempt(String attemptId,
@@ -1764,14 +1765,15 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                                         String tokenSource) {
     }
 
-    private record ContinuationState(String goal,
-                                     List<String> known,
-                                     List<String> constraints,
-                                     List<String> refs,
-                                     List<String> open,
-                                     List<String> next) {
-        private static ContinuationState empty() {
-            return new ContinuationState(null, List.of(), List.of(), List.of(), List.of(), List.of());
+    private record ContinuationStateDocument(String goal,
+                                             List<String> known,
+                                             List<String> constraints,
+                                             List<String> refs,
+                                             List<String> open,
+                                             List<String> next) {
+        private static ContinuationStateDocument empty() {
+            return new ContinuationStateDocument(
+                    null, List.of(), List.of(), List.of(), List.of(), List.of());
         }
     }
 
@@ -1795,8 +1797,8 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         }
     }
 
-    private static final class RepairableCurrentTaskSummaryException extends IllegalStateException {
-        private RepairableCurrentTaskSummaryException(String message) {
+    private static final class RepairableContinuationStateException extends IllegalStateException {
+        private RepairableContinuationStateException(String message) {
             super(message);
         }
     }

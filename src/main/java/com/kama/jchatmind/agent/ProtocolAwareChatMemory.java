@@ -19,17 +19,17 @@ import java.util.Set;
  * Runtime message storage that validates complete tool protocol batches.
  * Context pressure and lossy eviction are owned by ConversationContextCompressor.
  */
-final class ProtocolAwareMessageWindowChatMemory implements ChatMemory {
+final class ProtocolAwareChatMemory implements ChatMemory {
 
     private final ChatMemoryRepository repository;
 
-    ProtocolAwareMessageWindowChatMemory(int maxMessages) {
+    ProtocolAwareChatMemory(int maxMessages) {
         this(new InMemoryChatMemoryRepository(), maxMessages);
     }
 
-    ProtocolAwareMessageWindowChatMemory(ChatMemoryRepository repository, int maxMessages) {
+    ProtocolAwareChatMemory(ChatMemoryRepository repository, int maxMessages) {
         Assert.notNull(repository, "repository cannot be null");
-        // Retain the legacy setting as a validated compatibility input only. Context
+        // Retain maxMessages as a validated configuration input. Context
         // pressure is enforced by ConversationContextCompressor, never by this store.
         Assert.isTrue(maxMessages > 0, "maxMessages must be greater than 0");
         this.repository = repository;

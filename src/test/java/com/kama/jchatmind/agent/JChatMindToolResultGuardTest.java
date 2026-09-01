@@ -244,7 +244,7 @@ class JChatMindToolResultGuardTest {
             assertFalse(promptResult.contains("[TRUNCATED: originalChars="));
         }
         assertEquals(rawResult, storedToolResult);
-        assertEquals(promptResult, finalProjection.get().managedWorkingContext().stream()
+        assertEquals(promptResult, finalProjection.get().workingContext().stream()
                 .filter(ToolResponseMessage.class::isInstance)
                 .map(ToolResponseMessage.class::cast)
                 .findFirst()
@@ -252,7 +252,7 @@ class JChatMindToolResultGuardTest {
                 .getResponses().get(0).responseData());
         assertEquals(promptResult, finalProjection.get().finalRequest().evidenceBatches().get(0)
                 .evidence().get(0).content());
-        assertEquals(0, ProtocolAwareMessageWindowChatMemory.inspectProtocol(List.of(
+        assertEquals(0, ProtocolAwareChatMemory.inspectProtocol(List.of(
                 persistedAssistant.getValue(), persistedResponse.getValue())).protocolValidationFailureCount());
         verify(toolExecutionService).afterToolSuccess(any(), any(ToolExecutionRecord.class), eq(promptResult));
         org.mockito.InOrder persistenceBeforeProjection = inOrder(

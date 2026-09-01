@@ -140,17 +140,17 @@ final class ContextLifecycleResultAssembler {
         List<Message> lastProviderMessages = execution.capture().finalProviderRequests.isEmpty()
                 ? List.of() : execution.capture().finalProviderRequests.get(
                 execution.capture().finalProviderRequests.size() - 1).compiledProviderMessages();
-        List<Message> managedWorkingContext = projection == null
-                ? List.of() : projection.managedWorkingContext();
-        List<Message> managedFinalMessages = lastProviderMessages;
+        List<Message> workingContext = projection == null
+                ? List.of() : projection.workingContext();
+        List<Message> finalProviderMessages = lastProviderMessages;
         return new ContextLifecycleBenchmarkResult.FinalDiagnostic(
-                taskId, sessionId, diagnosticMessages(managedWorkingContext),
+                taskId, sessionId, diagnosticMessages(workingContext),
                 projection == null ? null : projection.finalRequest(), providerRequests,
                 requestMessageCount, measurer.measure(lastProviderMessages, null).tokens(),
-                diagnosticMessages(managedFinalMessages),
+                diagnosticMessages(finalProviderMessages),
                 projection == null ? null : projection.acceptedState(),
                 projection == null ? 0 : projection.coveredThroughLogicalGroup(),
-                measurer.measure(managedFinalMessages, null).tokens());
+                measurer.measure(finalProviderMessages, null).tokens());
     }
 
     private List<ContextLifecycleBenchmarkResult.DiagnosticMessage> diagnosticMessages(List<Message> messages) {
@@ -404,10 +404,10 @@ final class ContextLifecycleResultAssembler {
         AgentLifecycleObservationPublisher.FinalProjectionObservation projection =
                 execution.capture().finalProjection.get();
         if (projection != null) {
-            AgentToolProtocolInspector.Inspection managedInspection =
-                    AgentToolProtocolInspector.inspect(projection.managedWorkingContext());
-            orphan += managedInspection.orphanToolProtocolCount();
-            protocolFailure += managedInspection.protocolValidationFailureCount();
+            AgentToolProtocolInspector.Inspection workingContextInspection =
+                    AgentToolProtocolInspector.inspect(projection.workingContext());
+            orphan += workingContextInspection.orphanToolProtocolCount();
+            protocolFailure += workingContextInspection.protocolValidationFailureCount();
         }
         int compressionFailures = (int) execution.capture().compressions.stream()
                 .filter(value -> !value.succeeded()).count();
