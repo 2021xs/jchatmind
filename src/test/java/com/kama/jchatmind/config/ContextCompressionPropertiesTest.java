@@ -11,6 +11,7 @@ import org.springframework.mock.env.MockEnvironment;
 import java.io.IOException;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ContextCompressionPropertiesTest {
 
@@ -31,7 +32,21 @@ class ContextCompressionPropertiesTest {
 
         assertThat(properties.getMaxHistoryMessages()).isEqualTo(20);
         assertThat(properties.getMaxSummaryChars()).isEqualTo(1200);
-        assertThat(properties.thresholdFor("deepseek-chat").getMaxContextTokens())
-                .isEqualTo(30000);
+        ContextCompressionProperties.TokenThreshold threshold =
+                properties.thresholdFor("deepseek-chat");
+        assertThat(threshold.getCompressionTriggerTokens()).isEqualTo(200000);
+        assertThat(threshold.getWorkingContextHardLimitTokens()).isEqualTo(256000);
+        assertThat(threshold.getMaxSingleToolResultTokens()).isEqualTo(5000);
+    }
+
+    @Test
+    void hardLimitCannotBeLowerThanCompressionTrigger() {
+        ContextCompressionProperties properties = new ContextCompressionProperties();
+        properties.setCompressionTriggerTokens(200000);
+        properties.setWorkingContextHardLimitTokens(199999);
+
+        assertThatThrownBy(() -> properties.thresholdFor("deepseek-chat"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("workingContextHardLimitTokens");
     }
 }

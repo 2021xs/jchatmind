@@ -64,7 +64,8 @@ class CompletedConversationProjectionTest {
         ContextCompressionProperties properties = new ContextCompressionProperties();
         properties.setMaxSummaryChars(2000);
         properties.setMaxHistoryMessages(20);
-        properties.setMaxContextTokens(12000);
+        properties.setCompressionTriggerTokens(12000);
+        properties.setWorkingContextHardLimitTokens(12000);
         properties.setCharsPerToken(3);
         summaryClient = new RecordingSummaryClient();
         compressor = new ConversationContextCompressorImpl(

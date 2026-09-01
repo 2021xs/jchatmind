@@ -158,7 +158,7 @@ class JChatMindRealRunObservabilityTest {
         when(chatMessageFacadeService.getChatMessageDTOsBySessionId(anyString())).thenReturn(List.of());
         ConversationContextCompressor conversationContextCompressor = mock(ConversationContextCompressor.class);
         when(conversationContextCompressor.check(anyString(), anyString(), any()))
-                .thenReturn(new ConversationContextCompressor.CompressionCheck(false, "not_needed", 0, 0, 0, 0, "TEST", 0, 0));
+                .thenReturn(new ConversationContextCompressor.CompressionCheck(false, "not_needed", 0, 0, 0, 0, "TEST", 0, 0, 0));
 
         JChatMind agent = new JChatMind(
                 "22222222-2222-2222-2222-222222222222",

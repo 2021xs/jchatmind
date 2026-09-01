@@ -186,7 +186,7 @@ class JChatMindToolResultGuardTest {
         ConversationContextCompressor compressor = mock(ConversationContextCompressor.class);
         when(compressor.check(anyString(), anyString(), any()))
                 .thenReturn(new ConversationContextCompressor.CompressionCheck(
-                        false, "not_needed", 0, 0, 0, 0, "TEST", 0, 0));
+                        false, "not_needed", 0, 0, 0, 0, "TEST", 0, 0, 0));
 
         AtomicReference<AgentLifecycleObservationPublisher.FinalProjectionObservation> finalProjection =
                 new AtomicReference<>();

@@ -34,10 +34,10 @@ class ContextLifecycleBenchmarkSuiteTest {
     }
 
     @Test
-    void frozenSuiteAndProfileRetainExactGitBlobIdentity() throws Exception {
+    void frozenSuiteAndProductionProfileRetainExactGitBlobIdentity() throws Exception {
         assertEquals("82f65923f56fd9bbb19d5e68db16f874cf58c11a",
                 gitBlobSha1(new ClassPathResource("benchmark/context_lifecycle_benchmark_suite.json")));
-        assertEquals("2562cc2c295876c75a962cb362776749a2d1ce95",
+        assertEquals("7c33297e7c4b68c29210d9405cab3ba718a4b8d6",
                 gitBlobSha1(new ClassPathResource("application-benchmark.yaml")));
     }
 

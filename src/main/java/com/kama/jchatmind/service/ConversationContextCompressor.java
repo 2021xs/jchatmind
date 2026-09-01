@@ -56,7 +56,8 @@ public interface ConversationContextCompressor {
                             int maxSingleToolResultTokens,
                             int newCompressibleMessages,
                             String tokenSource,
-                            int maxContextTokens,
+                            int compressionTriggerTokens,
+                            int workingContextHardLimitTokens,
                             int maxSingleToolResultTokensThreshold) {
 
         public CompressionCheck(boolean needed,
@@ -66,11 +67,13 @@ public interface ConversationContextCompressor {
                                 int maxSingleToolResultTokens,
                                 int newCompressibleMessages,
                                 String tokenSource,
-                                int maxContextTokens,
+                                int compressionTriggerTokens,
+                                int workingContextHardLimitTokens,
                                 int maxSingleToolResultTokensThreshold) {
             this(needed, reason, messageCount, contextTokens, contextTokens,
                     maxSingleToolResultTokens, newCompressibleMessages, tokenSource,
-                    maxContextTokens, maxSingleToolResultTokensThreshold);
+                    compressionTriggerTokens, workingContextHardLimitTokens,
+                    maxSingleToolResultTokensThreshold);
         }
 
         public int effectiveContextTokens() {

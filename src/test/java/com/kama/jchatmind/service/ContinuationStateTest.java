@@ -113,7 +113,7 @@ class ContinuationStateTest {
     @BeforeEach
     void setUp() {
         properties = new ContextCompressionProperties();
-        properties.setMaxContextTokens(400);
+        setBudgets(400, 400);
         properties.setMaxSingleToolResultTokens(120);
         properties.setMaxHistoryMessages(50);
         properties.setMaxSummaryChars(1200);
@@ -127,7 +127,7 @@ class ContinuationStateTest {
 
     @Test
     void noPressureKeepsAllRawGroupsAndDoesNotSummarize() {
-        properties.setMaxContextTokens(20_000);
+        setBudgets(20_000, 20_000);
         properties.setMaxSingleToolResultTokens(20_000);
         properties.setMaxHistoryMessages(1);
         List<ChatMessageDTO> protocol = new ArrayList<>();
@@ -142,6 +142,86 @@ class ContinuationStateTest {
         assertThat(result.uncoveredProtocolMessages()).containsExactlyElementsOf(protocol);
         assertThat(summaryClient.callCount).isZero();
         assertThat(result.check().reason()).isEqualTo("not_needed");
+    }
+
+    @Test
+    void softTriggerAndHardLimitAreIndependent() {
+        setBudgets(200, 800);
+        List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
+                "repoId: repo-1\nchunkId: chunk-1\n" + "detail ".repeat(300));
+
+        ConversationContextCompressor.CompressionCheck check = compressor.checkCurrentTask(
+                MODEL, currentUser(), null, List.of(currentUser()), protocol, List.of(),
+                ConversationContextCompressor.ContinuationState.empty());
+
+        assertThat(check.needed()).isTrue();
+        assertThat(check.effectiveContextTokens()).isGreaterThanOrEqualTo(200);
+        assertThat(check.compressionTriggerTokens()).isEqualTo(200);
+        assertThat(check.workingContextHardLimitTokens()).isEqualTo(800);
+    }
+
+    @Test
+    void successfulCompressionMayReduceCandidateBelowSoftTrigger() {
+        setBudgets(300, 800);
+        List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
+                "repoId: repo-1\nchunkId: chunk-1\n" + "raw-evidence ".repeat(600));
+
+        ConversationContextCompressor.ContinuationStateCompression result = compress(
+                protocol, ConversationContextCompressor.ContinuationState.empty());
+        List<org.springframework.ai.chat.messages.Message> providerCandidate = List.of(
+                new UserMessage("Original current user question"),
+                new SystemMessage(ConversationContextCompressor.continuationStateMessageContent(
+                        result.state().content())));
+        int candidateTokens = candidateTokens(providerCandidate);
+
+        assertThat(result.check().effectiveContextTokens()).isGreaterThanOrEqualTo(300);
+        assertThat(result.compressed()).isTrue();
+        assertThat(result.correctiveRetryCount()).isZero();
+        assertThat(candidateTokens).isLessThan(300);
+        assertThatCode(() -> compressor.assertPlanningContextWithinBudget(MODEL, providerCandidate))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void compressedCandidateMayRemainAboveSoftTriggerWhenBelowHardLimit() {
+        setBudgets(200, 800);
+        List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
+                "repoId: repo-1\nchunkId: chunk-1\n" + "raw-evidence ".repeat(600));
+        summaryClient.nextSummary = deltaWithKnown("K".repeat(600));
+
+        ConversationContextCompressor.ContinuationStateCompression result = compress(
+                protocol, ConversationContextCompressor.ContinuationState.empty());
+        List<org.springframework.ai.chat.messages.Message> providerCandidate = List.of(
+                new UserMessage("Original current user question"),
+                new SystemMessage(ConversationContextCompressor.continuationStateMessageContent(
+                        result.state().content())));
+        int candidateTokens = candidateTokens(providerCandidate);
+
+        assertThat(result.compressed()).isTrue();
+        assertThat(result.correctiveRetryCount()).isZero();
+        assertThat(candidateTokens).isGreaterThanOrEqualTo(200).isLessThanOrEqualTo(800);
+        assertThatCode(() -> compressor.assertPlanningContextWithinBudget(MODEL, providerCandidate))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void rejectedCompressionBelowHardLimitRetainsContextAndSuppressesNoProgressRetry() {
+        setBudgets(100, 2_000);
+        List<ChatMessageDTO> protocol = group("g1", "knowledgeQuery", "detail ".repeat(180));
+        summaryClient.nextSummary = "invalid summary";
+
+        ConversationContextCompressor.ContinuationStateCompression first = compress(
+                protocol, ConversationContextCompressor.ContinuationState.empty());
+        ConversationContextCompressor.ContinuationStateCompression second = compress(protocol, first.state());
+
+        assertThat(first.check().effectiveContextTokens()).isGreaterThanOrEqualTo(100)
+                .isLessThanOrEqualTo(2_000);
+        assertThat(first.compressed()).isFalse();
+        assertThat(first.uncoveredProtocolMessages()).containsExactlyElementsOf(protocol);
+        assertThat(first.state().compressionSuppressed()).isTrue();
+        assertThat(second.compressed()).isFalse();
+        assertThat(second.check().reason()).isEqualTo("previous_failure");
+        assertThat(summaryClient.callCount).isEqualTo(2);
     }
 
     @Test
@@ -167,7 +247,7 @@ class ContinuationStateTest {
         assertThat(summaryClient.lastPrompt)
                 .contains("Original current user question", "PARTIAL", "hasMore=true", "repoId: repo-1")
                 .doesNotContain("completed-secret-tool-body");
-        properties.setMaxContextTokens(400);
+        setBudgets(400, 400);
         assertThatCode(() -> compressor.assertPlanningContextWithinBudget(MODEL, List.of(
                 new UserMessage("Original current user question"),
                 new SystemMessage(ConversationContextCompressor.continuationStateMessageContent(
@@ -233,7 +313,7 @@ class ContinuationStateTest {
 
     @Test
     void stateOverLegacyCharLimitIsAcceptedWhenFullRequestFits() {
-        properties.setMaxContextTokens(2_000);
+        setBudgets(2_000, 2_000);
         List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
                 "repoId: repo-1\nchunkId: chunk-1\n" + "raw-evidence ".repeat(800));
         String overLegacyLimit = deltaWithKnown("K".repeat(1_300));
@@ -252,7 +332,7 @@ class ContinuationStateTest {
 
     @Test
     void validPrimaryOverBudgetGetsOneStateOnlyCorrectiveAndFits() {
-        properties.setMaxContextTokens(300);
+        setBudgets(300, 300);
         String rawMarker = "RAW_TOOL_BODY_MUST_NOT_REENTER_CORRECTIVE";
         List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
                 rawMarker + "\n" + "detail ".repeat(600));
@@ -278,7 +358,7 @@ class ContinuationStateTest {
 
     @Test
     void benchmarkObservationCapturesActualCompressionBodiesWithoutChangingAcceptedState() {
-        properties.setMaxContextTokens(300);
+        setBudgets(300, 300);
         String rawMarker = "DIAGNOSTIC_RAW_TOOL_BODY";
         List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
                 rawMarker + "\n" + "detail ".repeat(600));
@@ -320,7 +400,7 @@ class ContinuationStateTest {
 
     @Test
     void budgetCorrectiveStillOverBudgetFailsClosedWithoutThirdCall() {
-        properties.setMaxContextTokens(350);
+        setBudgets(350, 350);
         List<ChatMessageDTO> protocol = group("g1", "knowledgeQuery",
                 "raw-marker\n" + "detail ".repeat(600));
         summaryClient.queuedResponses.add(deltaWithKnown("P".repeat(900)));
@@ -338,7 +418,7 @@ class ContinuationStateTest {
 
     @Test
     void structureCorrectiveConsumesOnlyRetryAndCannotTriggerThirdBudgetCall() {
-        properties.setMaxContextTokens(300);
+        setBudgets(300, 300);
         List<ChatMessageDTO> protocol = group("g1", "databaseQuery",
                 "raw-db-body\n" + "detail ".repeat(600));
         summaryClient.queuedResponses.add("invalid primary");
@@ -371,7 +451,7 @@ class ContinuationStateTest {
 
     @Test
     void planningBudgetGateUsesConfiguredTokenThreshold() {
-        properties.setMaxContextTokens(20);
+        setBudgets(20, 20);
 
         assertThatCode(() -> compressor.assertPlanningContextWithinBudget(
                 MODEL, List.of(new UserMessage("short"), new SystemMessage("prompt"))))
@@ -379,7 +459,7 @@ class ContinuationStateTest {
         assertThatThrownBy(() -> compressor.assertPlanningContextWithinBudget(
                 MODEL, List.of(new UserMessage("x".repeat(100)))))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("maxContextTokens=20");
+                .hasMessageContaining("workingContextHardLimitTokens=20");
         ToolResponseMessage oversizedToolResponse = ToolResponseMessage.builder()
                 .responses(List.of(new ToolResponseMessage.ToolResponse(
                         "call-budget", "searchProjectCode", "y".repeat(100))))
@@ -387,7 +467,7 @@ class ContinuationStateTest {
         assertThatThrownBy(() -> compressor.assertPlanningContextWithinBudget(
                 MODEL, List.of(oversizedToolResponse)))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("maxContextTokens=20");
+                .hasMessageContaining("workingContextHardLimitTokens=20");
     }
 
     @Test
@@ -413,7 +493,7 @@ class ContinuationStateTest {
 
     @Test
     void pressureAssimilatesOlderGroupsAndRetainsRecentRawTailWhenBudgetAllows() {
-        properties.setMaxContextTokens(5_000);
+        setBudgets(5_000, 5_000);
         List<ChatMessageDTO> protocol = new ArrayList<>();
         protocol.addAll(group("g1", "searchProjectCode", "old-one\n" + "detail ".repeat(180)));
         protocol.addAll(group("g2", "databaseQuery", "old-two\n" + "detail ".repeat(180)));
@@ -432,7 +512,7 @@ class ContinuationStateTest {
 
     @Test
     void cumulativeContextPressureSelectsMaximumEligiblePrefixBeforeCorrectiveCompaction() {
-        properties.setMaxContextTokens(700);
+        setBudgets(700, 700);
         List<ChatMessageDTO> protocol = new ArrayList<>();
         protocol.addAll(group("g1", "searchProjectCode", "OLD_RAW\n" + "detail ".repeat(180)));
         protocol.addAll(group("g2", "knowledgeQuery", "RECENT_RAW\n" + "detail ".repeat(180)));
@@ -449,7 +529,7 @@ class ContinuationStateTest {
 
     @Test
     void singleOverBudgetGroupCanBeAssimilated() {
-        properties.setMaxContextTokens(300);
+        setBudgets(300, 300);
         List<ChatMessageDTO> protocol = group("g1", "mcp.snapshot",
                 "ONLY_GROUP\n" + "detail ".repeat(600));
         summaryClient.nextSummary = DELTA_V1;
@@ -480,7 +560,7 @@ class ContinuationStateTest {
 
     @Test
     void fixedPlanningMaterialParticipatesInPressureAndDynamicBudget() {
-        properties.setMaxContextTokens(350);
+        setBudgets(350, 350);
         List<ChatMessageDTO> protocol = group("g1", "searchProjectCode",
                 "raw-fixed-marker\n" + "detail ".repeat(600));
         summaryClient.queuedResponses.add(deltaWithOpen("P".repeat(900), "N".repeat(300)));
@@ -500,7 +580,7 @@ class ContinuationStateTest {
 
     @Test
     void confirmedLuaMappingProducerConsumerRelationshipAndExactRefsSurviveFiveUnrelatedUpdates() {
-        properties.setMaxContextTokens(2_000);
+        setBudgets(2_000, 2_000);
         String luaRepoId = "bf4ef891-330b-4ce8-9002-ba4c43ffe210";
         String producerRepoId = "12ea4f96-8096-47ce-a230-d54ddb75042c";
         String consumerRepoId = "727834fa-2971-4625-a0ef-edf5f54eed93";
@@ -556,7 +636,7 @@ class ContinuationStateTest {
 
     @Test
     void additionsMergeWhileOpenAndNextReplaceDynamically() {
-        properties.setMaxContextTokens(2_000);
+        setBudgets(2_000, 2_000);
         ConversationContextCompressor.ContinuationState existing =
                 new ConversationContextCompressor.ContinuationState(SUMMARY_V1, 0, 1, 1);
         summaryClient.nextSummary = """
@@ -601,7 +681,7 @@ class ContinuationStateTest {
 
     @Test
     void explicitRemovalOfExistingKnownWithReasonIsApplied() {
-        properties.setMaxContextTokens(2_000);
+        setBudgets(2_000, 2_000);
         ConversationContextCompressor.ContinuationState existing =
                 new ConversationContextCompressor.ContinuationState(SUMMARY_V1, 0, 1, 1);
         summaryClient.nextSummary = deltaRemovingKnown(
@@ -618,7 +698,7 @@ class ContinuationStateTest {
 
     @Test
     void removalWithoutReasonFailsClosedAndKeepsOldStateAndRawGroup() {
-        properties.setMaxContextTokens(2_000);
+        setBudgets(2_000, 2_000);
         List<ChatMessageDTO> protocol = group("invalid-remove", "getCodeChunk",
                 longBody("contradicting exact source"));
         ConversationContextCompressor.ContinuationState existing =
@@ -635,7 +715,7 @@ class ContinuationStateTest {
 
     @Test
     void removalOfMissingTargetFailsClosedWithoutChangingOtherState() {
-        properties.setMaxContextTokens(2_000);
+        setBudgets(2_000, 2_000);
         List<ChatMessageDTO> protocol = group("missing-remove", "getCodeChunk",
                 longBody("unrelated exact source"));
         ConversationContextCompressor.ContinuationState existing =
@@ -653,7 +733,7 @@ class ContinuationStateTest {
 
     @Test
     void noNewConfirmedInformationKeepsProtectedStateUnchanged() {
-        properties.setMaxContextTokens(2_000);
+        setBudgets(2_000, 2_000);
         ConversationContextCompressor.ContinuationState existing =
                 new ConversationContextCompressor.ContinuationState(SUMMARY_V1, 0, 1, 1);
         summaryClient.nextSummary = KEEP_DELTA;
@@ -668,7 +748,7 @@ class ContinuationStateTest {
 
     @Test
     void sparseDeltaWithoutGoalKeepsExistingGoalWithoutCorrectiveRetry() {
-        properties.setMaxContextTokens(2_000);
+        setBudgets(2_000, 2_000);
         ConversationContextCompressor.ContinuationState existing =
                 new ConversationContextCompressor.ContinuationState(SUMMARY_V1, 0, 1, 1);
         summaryClient.nextSummary = SPARSE_ADD_DELTA;
@@ -687,7 +767,7 @@ class ContinuationStateTest {
 
     @Test
     void initialSparseDeltaWithoutGoalUsesDeterministicRawUserReference() {
-        properties.setMaxContextTokens(2_000);
+        setBudgets(2_000, 2_000);
         summaryClient.nextSummary = SPARSE_ADD_DELTA;
 
         ConversationContextCompressor.ContinuationStateCompression result = compress(
@@ -705,7 +785,7 @@ class ContinuationStateTest {
 
     @Test
     void omittedNoOpSectionsKeepMonotonicAndDynamicState() {
-        properties.setMaxContextTokens(2_000);
+        setBudgets(2_000, 2_000);
         ConversationContextCompressor.ContinuationState existing =
                 new ConversationContextCompressor.ContinuationState(SUMMARY_V1, 0, 1, 1);
         summaryClient.nextSummary = """
@@ -732,7 +812,7 @@ class ContinuationStateTest {
 
     @Test
     void headerOnlySparseDeltaIsNoOpAndCanAssimilateNoNewInformation() {
-        properties.setMaxContextTokens(2_000);
+        setBudgets(2_000, 2_000);
         ConversationContextCompressor.ContinuationState existing =
                 new ConversationContextCompressor.ContinuationState(SUMMARY_V1, 0, 1, 1);
         summaryClient.nextSummary = "Current Task Continuation State Delta";
@@ -748,7 +828,7 @@ class ContinuationStateTest {
 
     @Test
     void unknownSparseSectionFailsClosedWithoutChangingStateOrCoverage() {
-        properties.setMaxContextTokens(2_000);
+        setBudgets(2_000, 2_000);
         List<ChatMessageDTO> protocol = group(
                 "sparse-unknown", "knowledgeQuery", longBody("unrecognized patch"));
         ConversationContextCompressor.ContinuationState existing =
@@ -808,6 +888,31 @@ class ContinuationStateTest {
         return compressor.compressCurrentTaskIfNeeded(
                 "session-1", MODEL, currentUser, "Conversation Context\ncompleted summary",
                 List.of(currentUser), protocol, fixedPlanningMessages, state);
+    }
+
+    private ChatMessageDTO currentUser() {
+        return ChatMessageDTO.builder()
+                .id("current-user").role(ChatMessageDTO.RoleType.USER)
+                .content("Original current user question").build();
+    }
+
+    private ChatMessageDTO measurementMessage(org.springframework.ai.chat.messages.Message message) {
+        return ChatMessageDTO.builder()
+                .role(message instanceof UserMessage
+                        ? ChatMessageDTO.RoleType.USER : ChatMessageDTO.RoleType.SYSTEM)
+                .content(message.getText())
+                .build();
+    }
+
+    private int candidateTokens(List<org.springframework.ai.chat.messages.Message> messages) {
+        return new EstimatedTokenCounter(properties)
+                .countMessages(MODEL, messages.stream().map(this::measurementMessage).toList())
+                .tokens();
+    }
+
+    private void setBudgets(int compressionTriggerTokens, int workingContextHardLimitTokens) {
+        properties.setCompressionTriggerTokens(compressionTriggerTokens);
+        properties.setWorkingContextHardLimitTokens(workingContextHardLimitTokens);
     }
 
     private List<ChatMessageDTO> group(String id, String toolName, String body) {

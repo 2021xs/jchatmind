@@ -111,7 +111,7 @@ class CodeSearchToolsAgentIntegrationTest {
         ConversationContextCompressor compressor = mock(ConversationContextCompressor.class);
         when(compressor.check(anyString(), anyString(), any()))
                 .thenReturn(new ConversationContextCompressor.CompressionCheck(
-                        false, "not_needed", 0, 0, 0, 0, "TEST", 0, 0));
+                        false, "not_needed", 0, 0, 0, 0, "TEST", 0, 0, 0));
 
         try (ToolCallBatchExecutorFixture fixture = new ToolCallBatchExecutorFixture(toolExecutionService, toolRegistry)) {
             JChatMind agent = new JChatMind(
@@ -189,7 +189,7 @@ class CodeSearchToolsAgentIntegrationTest {
         ConversationContextCompressor compressor = mock(ConversationContextCompressor.class);
         when(compressor.check(anyString(), anyString(), any()))
                 .thenReturn(new ConversationContextCompressor.CompressionCheck(
-                        false, "not_needed", 0, 0, 0, 0, "TEST", 0, 0));
+                        false, "not_needed", 0, 0, 0, 0, "TEST", 0, 0, 0));
 
         try (ToolCallBatchExecutorFixture fixture = new ToolCallBatchExecutorFixture(
                 toolExecutionService, toolRegistry)) {

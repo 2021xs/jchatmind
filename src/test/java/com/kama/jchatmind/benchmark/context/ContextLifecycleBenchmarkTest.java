@@ -160,7 +160,8 @@ class ContextLifecycleBenchmarkTest {
         selector.put("timeoutMs", codeRagProperties.getLlmSelector().getTimeoutMs());
         Map<String, Object> compression = new LinkedHashMap<>();
         compression.put("enabled", compressionProperties.isEnabled());
-        compression.put("maxContextTokens", threshold.getMaxContextTokens());
+        compression.put("compressionTriggerTokens", threshold.getCompressionTriggerTokens());
+        compression.put("workingContextHardLimitTokens", threshold.getWorkingContextHardLimitTokens());
         compression.put("maxSingleToolResultTokens", threshold.getMaxSingleToolResultTokens());
         compression.put("keepRecentRounds", compressionProperties.getKeepRecentRounds());
         compression.put("maxHistoryMessages", compressionProperties.getMaxHistoryMessages());
@@ -358,7 +359,8 @@ class ContextLifecycleBenchmarkTest {
         System.out.println("benchmark suite version: " + suite.benchmarkSuiteVersion);
         System.out.println("number of cases: " + cases.size());
         System.out.println("repeats: " + repeats);
-        System.out.println("context config: max=" + threshold.getMaxContextTokens()
+        System.out.println("context config: trigger=" + threshold.getCompressionTriggerTokens()
+                + ", hardLimit=" + threshold.getWorkingContextHardLimitTokens()
                 + ", maxTool=" + threshold.getMaxSingleToolResultTokens()
                 + ", keepRecentRounds=" + compressionProperties.getKeepRecentRounds()
                 + ", maxHistoryMessages=" + compressionProperties.getMaxHistoryMessages());

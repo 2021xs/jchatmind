@@ -61,7 +61,7 @@ class ConversationContextCompressorTest {
         properties.setKeepRecentRounds(2);
         properties.setMaxHistoryMessages(4);
         properties.setMaxSummaryChars(40);
-        properties.setMaxContextTokens(12000);
+        setBudgets(12000, 12000);
         properties.setMaxSingleToolResultTokens(2000);
         properties.setCharsPerToken(3);
 
@@ -88,7 +88,7 @@ class ConversationContextCompressorTest {
 
     @Test
     void shouldReportCompressionNeededWhenContextTokensExceedThreshold() {
-        properties.setMaxContextTokens(40);
+        setBudgets(40, 40);
         List<ChatMessageDTO> messages = messages(8);
         when(chatSessionMapper.selectById(SESSION_ID)).thenReturn(chatSessionUnchecked(null));
 
@@ -99,12 +99,13 @@ class ConversationContextCompressorTest {
         assertEquals(8, check.messageCount());
         assertEquals(4, check.newCompressibleMessages());
         assertEquals("ESTIMATED_CHARS", check.tokenSource());
-        assertEquals(40, check.maxContextTokens());
+        assertEquals(40, check.compressionTriggerTokens());
+        assertEquals(40, check.workingContextHardLimitTokens());
     }
 
     @Test
     void shouldCompressWhenSingleToolResultExceedsThresholdEvenBelowMessageTrigger() {
-        properties.setMaxContextTokens(12000);
+        setBudgets(12000, 12000);
         properties.setMaxSingleToolResultTokens(10);
         List<ChatMessageDTO> messages = messages(8);
         messages.set(0, assistantToolCall("msg-1", 1, "call-1"));
@@ -123,7 +124,7 @@ class ConversationContextCompressorTest {
 
     @Test
     void shouldPublishCompressionMeasurementsWithoutChangingCompressedContext() {
-        properties.setMaxContextTokens(40);
+        setBudgets(40, 40);
         List<ChatMessageDTO> messages = messages(8);
         when(chatSessionMapper.selectById(SESSION_ID)).thenReturn(chatSessionUnchecked(null));
         AtomicReference<AgentLifecycleObservationPublisher.CompressionObservation> observed =
@@ -147,7 +148,7 @@ class ConversationContextCompressorTest {
 
     @Test
     void shouldNotApplyRecentWindowWithoutTokenPressure() {
-        properties.setMaxContextTokens(12000);
+        setBudgets(12000, 12000);
         properties.setMaxHistoryMessages(4);
         List<ChatMessageDTO> messages = List.of(
                 normalMessage("msg-1", 1, ChatMessageDTO.RoleType.USER, "question"),
@@ -172,7 +173,7 @@ class ConversationContextCompressorTest {
     void shouldKeepAllToolBatchesWithoutTokenPressure() {
         properties.setKeepRecentRounds(1);
         properties.setMaxHistoryMessages(5);
-        properties.setMaxContextTokens(12000);
+        setBudgets(12000, 12000);
         List<ChatMessageDTO> messages = List.of(
                 normalMessage("msg-1", 1, ChatMessageDTO.RoleType.USER, "question"),
                 assistantToolCall("msg-2", 2, "call-a", "call-b"),
@@ -210,7 +211,7 @@ class ConversationContextCompressorTest {
 
     @Test
     void shouldUseEffectiveContextAfterCompressionAndEventuallyRetrigger() throws Exception {
-        properties.setMaxContextTokens(80);
+        setBudgets(80, 80);
         properties.setMaxHistoryMessages(4);
         summaryClient.nextSummary = "short summary";
         List<ChatMessageDTO> messages = messages(8);
@@ -240,8 +241,8 @@ class ConversationContextCompressorTest {
         ConversationContextCompressor.CompressionCheck nextCheck =
                 compressor.check(SESSION_ID, MODEL, nextRound);
 
-        assertTrue(nextCheck.rawHistoryTokens() > properties.getMaxContextTokens());
-        assertTrue(nextCheck.effectiveContextTokens() < properties.getMaxContextTokens());
+        assertTrue(nextCheck.rawHistoryTokens() > properties.getCompressionTriggerTokens());
+        assertTrue(nextCheck.effectiveContextTokens() < properties.getCompressionTriggerTokens());
         assertFalse(nextCheck.needed());
         ConversationContextCompressor.CompressedContext nextResult =
                 compressor.compressIfNeeded(SESSION_ID, MODEL, nextRound);
@@ -256,14 +257,14 @@ class ConversationContextCompressorTest {
         ConversationContextCompressor.CompressionCheck retrigger =
                 compressor.check(SESSION_ID, MODEL, grownTail);
 
-        assertTrue(retrigger.effectiveContextTokens() >= properties.getMaxContextTokens());
+        assertTrue(retrigger.effectiveContextTokens() >= properties.getCompressionTriggerTokens());
         assertTrue(retrigger.newCompressibleMessages() > 0);
         assertTrue(retrigger.needed());
     }
 
     @Test
     void shouldIgnoreAndReplaceSummaryWhoseBoundarySplitsToolBatch() throws Exception {
-        properties.setMaxContextTokens(40);
+        setBudgets(40, 40);
         properties.setMaxHistoryMessages(4);
         ChatSessionDTO.MetaData metadata = new ChatSessionDTO.MetaData();
         metadata.setContextSummary("unsafe old summary");
@@ -293,7 +294,7 @@ class ConversationContextCompressorTest {
 
     @Test
     void shouldCompressOldMessagesAndPersistSummaryWhenTokenThresholdExceeded() throws Exception {
-        properties.setMaxContextTokens(40);
+        setBudgets(40, 40);
         List<ChatMessageDTO> messages = messages(8);
         when(chatSessionMapper.selectById(SESSION_ID)).thenReturn(chatSession(null));
         summaryClient.nextSummary = "summary-user-goal-key-files";
@@ -321,7 +322,7 @@ class ConversationContextCompressorTest {
 
     @Test
     void shouldNotCompressSameHistoryAgainWhenLastCompressedMessageIsStillLatestCandidate() throws Exception {
-        properties.setMaxContextTokens(40);
+        setBudgets(40, 40);
         ChatSessionDTO.MetaData metadata = new ChatSessionDTO.MetaData();
         metadata.setContextSummary("old summary");
         metadata.setContextSummaryLastMessageId("msg-4");
@@ -341,7 +342,7 @@ class ConversationContextCompressorTest {
 
     @Test
     void shouldFallbackToRecentMessagesWhenSummaryGenerationFails() throws Exception {
-        properties.setMaxContextTokens(40);
+        setBudgets(40, 40);
         ChatSessionDTO.MetaData metadata = new ChatSessionDTO.MetaData();
         metadata.setContextSummary("old summary");
         metadata.setContextSummaryLastMessageId("msg-2");
@@ -363,7 +364,7 @@ class ConversationContextCompressorTest {
 
     @Test
     void shouldLimitPersistedSummaryLength() throws Exception {
-        properties.setMaxContextTokens(40);
+        setBudgets(40, 40);
         List<ChatMessageDTO> messages = messages(8);
         when(chatSessionMapper.selectById(SESSION_ID)).thenReturn(chatSession(null));
         summaryClient.nextSummary = "01234567890123456789012345678901234567890123456789";
@@ -384,7 +385,7 @@ class ConversationContextCompressorTest {
     @Test
     void shouldUseModelSpecificTokenThresholds() {
         ContextCompressionProperties.TokenThreshold modelThreshold =
-                new ContextCompressionProperties.TokenThreshold(40, 10);
+                new ContextCompressionProperties.TokenThreshold(40, 40, 10);
         properties.getModelThresholds().put(MODEL, modelThreshold);
 
         List<ChatMessageDTO> messages = messages(8);
@@ -393,8 +394,14 @@ class ConversationContextCompressorTest {
         ConversationContextCompressor.CompressionCheck check = compressor.check(SESSION_ID, MODEL, messages);
 
         assertTrue(check.needed());
-        assertEquals(40, check.maxContextTokens());
+        assertEquals(40, check.compressionTriggerTokens());
+        assertEquals(40, check.workingContextHardLimitTokens());
         assertEquals(10, check.maxSingleToolResultTokensThreshold());
+    }
+
+    private void setBudgets(int compressionTriggerTokens, int workingContextHardLimitTokens) {
+        properties.setCompressionTriggerTokens(compressionTriggerTokens);
+        properties.setWorkingContextHardLimitTokens(workingContextHardLimitTokens);
     }
 
     private ChatSession chatSession(ChatSessionDTO.MetaData metadata) throws Exception {

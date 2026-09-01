@@ -172,7 +172,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         ContextCompressionProperties.TokenThreshold threshold = properties.thresholdFor(model);
         TokenCount effective = planningContentTokens(model, fixedPlanningMessages, inputs.effectiveMessages());
         MaxToolResultTokenCount maxTool = maxSingleToolResultTokens(model, inputs.effectiveMessages());
-        boolean overContext = effective.tokens() >= threshold.getMaxContextTokens();
+        boolean overContext = effective.tokens() >= threshold.getCompressionTriggerTokens();
         boolean overSingleResult = maxTool.tokens() >= threshold.getMaxSingleToolResultTokens();
         boolean needed = properties.isEnabled() && !inputs.uncoveredGroups().isEmpty()
                 && !safeState.compressionSuppressed()
@@ -187,7 +187,9 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 effective.tokens(), effective.tokens(), maxTool.tokens(),
                 inputs.uncoveredProtocolMessages().size(),
                 combineSources(effective.source(), maxTool.source()),
-                threshold.getMaxContextTokens(), threshold.getMaxSingleToolResultTokens());
+                threshold.getCompressionTriggerTokens(),
+                threshold.getWorkingContextHardLimitTokens(),
+                threshold.getMaxSingleToolResultTokens());
     }
 
     @Override
@@ -211,7 +213,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
 
         AssimilationSelection selection = selectAssimilation(model, originalUser, conversationSummary,
                 completedConversationMessages, fixedPlanningMessages, inputs,
-                check.effectiveContextTokens() >= check.maxContextTokens());
+                check.effectiveContextTokens() >= check.compressionTriggerTokens());
         String prompt = buildCurrentTaskDeltaPrompt(originalUser, safeState.content(),
                 selection.selectedProtocolMessages());
         long start = System.currentTimeMillis();
@@ -252,11 +254,11 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
             primaryMeasurement = measureCandidate(model, originalUser, conversationSummary,
                     completedConversationMessages, fixedPlanningMessages, stateContent,
                     selection.retainedProtocolMessages());
-            if (primaryMeasurement.fullCandidateTokens() > check.maxContextTokens()) {
+            if (primaryMeasurement.fullCandidateTokens() > check.workingContextHardLimitTokens()) {
                 if (correctiveRetryCount > 0) {
-                    throw new IllegalStateException("Corrected current task state leaves Planning request over budget: tokens="
-                            + primaryMeasurement.fullCandidateTokens() + ", maxContextTokens="
-                            + check.maxContextTokens());
+                    throw new IllegalStateException("Corrected current task state leaves Planning request over hard limit: tokens="
+                            + primaryMeasurement.fullCandidateTokens() + ", workingContextHardLimitTokens="
+                            + check.workingContextHardLimitTokens());
                 }
                 correctiveRetryCount = 1;
                 budgetCorrectiveInvoked = true;
@@ -283,10 +285,10 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
             CandidateMeasurement finalMeasurement = measureCandidate(model, originalUser, conversationSummary,
                     completedConversationMessages, fixedPlanningMessages, stateContent,
                     selection.retainedProtocolMessages());
-            if (finalMeasurement.fullCandidateTokens() > check.maxContextTokens()) {
-                throw new IllegalStateException("Current task continuation state leaves Planning request over budget: tokens="
-                        + finalMeasurement.fullCandidateTokens() + ", maxContextTokens="
-                        + check.maxContextTokens());
+            if (finalMeasurement.fullCandidateTokens() > check.workingContextHardLimitTokens()) {
+                throw new IllegalStateException("Current task continuation state leaves Planning request over hard limit: tokens="
+                        + finalMeasurement.fullCandidateTokens() + ", workingContextHardLimitTokens="
+                        + check.workingContextHardLimitTokens());
             }
             ContinuationState updated = new ContinuationState(
                     stateContent,
@@ -338,10 +340,10 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 .map(this::toTokenMeasurementMessage)
                 .toList();
         TokenCount measured = tokenCounter.countMessages(model, measurableMessages);
-        int hardBudget = properties.thresholdFor(model).getMaxContextTokens();
+        int hardBudget = properties.thresholdFor(model).getWorkingContextHardLimitTokens();
         if (measured.tokens() > hardBudget) {
             throw new IllegalStateException("Planning working context exceeds hard token budget: tokens="
-                    + measured.tokens() + ", maxContextTokens=" + hardBudget
+                    + measured.tokens() + ", workingContextHardLimitTokens=" + hardBudget
                     + ", tokenSource=" + measured.source());
         }
     }
@@ -397,7 +399,9 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                     rawHistoryTokenCount.tokens(), rawHistoryTokenCount.tokens(),
                     maxToolResultTokenCount.tokens(), 0,
                     combineSources(rawHistoryTokenCount.source(), maxToolResultTokenCount.source()),
-                    threshold.getMaxContextTokens(), threshold.getMaxSingleToolResultTokens());
+                    threshold.getCompressionTriggerTokens(),
+                    threshold.getWorkingContextHardLimitTokens(),
+                    threshold.getMaxSingleToolResultTokens());
         }
 
         ChatSessionDTO.MetaData metadata = loadMetadata(sessionId);
@@ -418,11 +422,12 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         ContextState state = buildContextState(sessionId, model, sortedMessages, metadata);
         CompressionCheck check = compressionCheck(sortedMessages.size(), threshold, state);
         if (!check.needed()) {
-            log.info("Context compression skipped: sessionId={}, reason={}, historyMessages={}, rawHistoryTokens={}, effectiveContextTokens={}, maxToolResultTokens={}, tokenSource={}, maxContextTokens={}, maxSingleToolResultTokens={}",
+            log.info("Context compression skipped: sessionId={}, reason={}, historyMessages={}, rawHistoryTokens={}, effectiveContextTokens={}, maxToolResultTokens={}, tokenSource={}, compressionTriggerTokens={}, workingContextHardLimitTokens={}, maxSingleToolResultTokens={}",
                     sessionId, check.reason(), sortedMessages.size(), check.rawHistoryTokens(),
                     check.effectiveContextTokens(),
                     check.maxSingleToolResultTokens(), check.tokenSource(),
-                    check.maxContextTokens(), check.maxSingleToolResultTokensThreshold());
+                    check.compressionTriggerTokens(), check.workingContextHardLimitTokens(),
+                    check.maxSingleToolResultTokensThreshold());
             List<ChatMessageDTO> currentMessages = state.summaryUsable()
                     ? state.effectiveTail()
                     : sortedMessages;
@@ -710,7 +715,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 completedConversationMessages, fixedPlanningMessages, "", retained);
         int stateWrapperTokens = Math.max(0,
                 withEmptyState.fullCandidateTokens() - withoutState.fullCandidateTokens());
-        int hardBudget = properties.thresholdFor(model).getMaxContextTokens();
+        int hardBudget = properties.thresholdFor(model).getWorkingContextHardLimitTokens();
         int availableStateTokens = Math.max(0,
                 hardBudget - withoutState.fullCandidateTokens() - stateWrapperTokens);
         return new AssimilationSelection(selectedGroupCount, selected, retained,
@@ -1244,7 +1249,7 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
         List<ChatMessageDTO> effective = new ArrayList<>();
         effective.add(summaryMessage(summary));
         effective.addAll(uncoveredMessages);
-        int tokenLimit = properties.thresholdFor(model).getMaxContextTokens();
+        int tokenLimit = properties.thresholdFor(model).getCompressionTriggerTokens();
         return totalContentTokens(model, effective).tokens() >= tokenLimit;
     }
 
@@ -1363,7 +1368,8 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
     private CompressionCheck compressionCheck(int messageCount,
                                               ContextCompressionProperties.TokenThreshold threshold,
                                               ContextState state) {
-        boolean overContextTokens = state.effectiveContextTokens() >= threshold.getMaxContextTokens();
+        boolean overContextTokens = state.effectiveContextTokens()
+                >= threshold.getCompressionTriggerTokens();
         boolean overToolResultTokens = state.maxSingleToolResultTokens()
                 >= threshold.getMaxSingleToolResultTokens();
         boolean needed = !state.messagesToCompress().isEmpty()
@@ -1379,7 +1385,8 @@ public class ConversationContextCompressorImpl implements ConversationContextCom
                 state.maxSingleToolResultTokens(),
                 state.messagesToCompress().size(),
                 state.tokenSource(),
-                threshold.getMaxContextTokens(),
+                threshold.getCompressionTriggerTokens(),
+                threshold.getWorkingContextHardLimitTokens(),
                 threshold.getMaxSingleToolResultTokens());
     }
 

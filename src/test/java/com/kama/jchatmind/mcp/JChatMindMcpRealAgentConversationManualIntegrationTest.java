@@ -102,7 +102,7 @@ class JChatMindMcpRealAgentConversationManualIntegrationTest {
             when(chatMessageFacadeService.getChatMessageDTOsBySessionId(anyString())).thenReturn(List.of());
             ConversationContextCompressor compressor = mock(ConversationContextCompressor.class);
             when(compressor.check(anyString(), anyString(), any()))
-                    .thenReturn(new ConversationContextCompressor.CompressionCheck(false, "not_needed", 0, 0, 0, 0, "TEST", 0, 0));
+                    .thenReturn(new ConversationContextCompressor.CompressionCheck(false, "not_needed", 0, 0, 0, 0, "TEST", 0, 0, 0));
 
             ToolExecutionServiceImpl executionService = new ToolExecutionServiceImpl(
                     new NoLocalToolRegistry(),

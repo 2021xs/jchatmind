@@ -228,7 +228,7 @@ class JChatMindDuplicateToolCallTest {
             ConversationContextCompressor compressor = mock(ConversationContextCompressor.class);
             when(compressor.check(anyString(), anyString(), any()))
                     .thenReturn(new ConversationContextCompressor.CompressionCheck(
-                            false, "not_needed", 0, 0, 0, 0, "TEST", 0, 0));
+                            false, "not_needed", 0, 0, 0, 0, "TEST", 0, 0, 0));
 
             agent = new JChatMind(
                     "agent-1", "test-model", "test-agent", "test", "system", chatClient, 20,

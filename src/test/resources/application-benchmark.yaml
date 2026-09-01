@@ -11,16 +11,19 @@ jchatmind:
       include-selector-debug: true
   context-compression:
     enabled: true
-    keep-recent-rounds: 2
-    max-history-messages: 8
+    keep-recent-rounds: 8
+    max-history-messages: 20
     max-summary-chars: 1200
-    max-context-tokens: 3500
-    max-single-tool-result-tokens: 1500
+    compression-trigger-tokens: 200000
+    working-context-hard-limit-tokens: 256000
+    max-single-tool-result-tokens: 8000
     chars-per-token: 3
     model-thresholds:
       default:
-        max-context-tokens: 3500
-        max-single-tool-result-tokens: 1500
+        compression-trigger-tokens: 200000
+        working-context-hard-limit-tokens: 256000
+        max-single-tool-result-tokens: 8000
       gpt-5.5:
-        max-context-tokens: 3500
-        max-single-tool-result-tokens: 1500
+        compression-trigger-tokens: 200000
+        working-context-hard-limit-tokens: 256000
+        max-single-tool-result-tokens: 8000

@@ -597,7 +597,8 @@ class CompressionModelReplayBenchmarkTest {
     private ContextCompressionProperties properties(int hardBudget, int maxSingleToolTokens) {
         ContextCompressionProperties properties = new ContextCompressionProperties();
         properties.setEnabled(true);
-        properties.setMaxContextTokens(hardBudget);
+        properties.setCompressionTriggerTokens(hardBudget);
+        properties.setWorkingContextHardLimitTokens(hardBudget);
         properties.setMaxSingleToolResultTokens(maxSingleToolTokens);
         properties.setMaxHistoryMessages(50);
         properties.setMaxSummaryChars(1_200);

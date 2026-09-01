@@ -32,7 +32,8 @@ class ContextCompressionToolProtocolIntegrationTest {
         properties.setEnabled(true);
         properties.setKeepRecentRounds(1);
         properties.setMaxHistoryMessages(4);
-        properties.setMaxContextTokens(40);
+        properties.setCompressionTriggerTokens(40);
+        properties.setWorkingContextHardLimitTokens(40);
         properties.setMaxSingleToolResultTokens(2000);
         properties.setCharsPerToken(3);
         properties.setMaxSummaryChars(1200);
