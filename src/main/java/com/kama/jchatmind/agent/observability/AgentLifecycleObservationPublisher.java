@@ -82,6 +82,10 @@ public final class AgentLifecycleObservationPublisher {
         return !FINAL_PROVIDER_REQUEST_LISTENERS.isEmpty();
     }
 
+    public static boolean isFinalProjectionObservationEnabled() {
+        return !FINAL_PROJECTION_LISTENERS.isEmpty();
+    }
+
     public static boolean isSelectorProvenanceObservationEnabled() {
         return !SELECTOR_PROVENANCE_LISTENERS.isEmpty();
     }
@@ -298,12 +302,37 @@ public final class AgentLifecycleObservationPublisher {
             List<Message> currentTaskToolTranscript,
             FinalSynthesisRequest finalRequest,
             int transcriptBatchCount,
-            int transcriptToolCallCount) {
+            int transcriptToolCallCount,
+            List<Message> managedWorkingContext,
+            FinalSynthesisRequest managedFinalShadowRequest,
+            List<Message> managedFinalShadowProviderMessages,
+            String managedFinalShadowFailure,
+            String acceptedState,
+            int coveredThroughLogicalGroup,
+            int shadowTranscriptReadCount) {
 
         public FinalProjectionObservation {
             executionTranscript = executionTranscript == null ? List.of() : List.copyOf(executionTranscript);
             currentTaskToolTranscript = currentTaskToolTranscript == null
                     ? List.of() : List.copyOf(currentTaskToolTranscript);
+            managedWorkingContext = managedWorkingContext == null
+                    ? List.of() : List.copyOf(managedWorkingContext);
+            managedFinalShadowProviderMessages = managedFinalShadowProviderMessages == null
+                    ? List.of() : List.copyOf(managedFinalShadowProviderMessages);
+        }
+
+        public FinalProjectionObservation(
+                String taskId,
+                String sessionId,
+                String model,
+                List<Message> executionTranscript,
+                List<Message> currentTaskToolTranscript,
+                FinalSynthesisRequest finalRequest,
+                int transcriptBatchCount,
+                int transcriptToolCallCount) {
+            this(taskId, sessionId, model, executionTranscript, currentTaskToolTranscript,
+                    finalRequest, transcriptBatchCount, transcriptToolCallCount,
+                    List.of(), null, List.of(), null, null, 0, 0);
         }
     }
 

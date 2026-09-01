@@ -150,13 +150,25 @@ final class ContextLifecycleResultAssembler {
         List<Message> lastProviderMessages = execution.capture().finalProviderRequests.isEmpty()
                 ? List.of() : execution.capture().finalProviderRequests.get(
                 execution.capture().finalProviderRequests.size() - 1).compiledProviderMessages();
+        List<Message> managedWorkingContext = projection == null
+                ? List.of() : projection.managedWorkingContext();
+        List<Message> managedShadowMessages = projection == null
+                ? List.of() : projection.managedFinalShadowProviderMessages();
         return new ContextLifecycleBenchmarkResult.FinalDiagnostic(
                 taskId, sessionId, executionContext, transcript,
                 projection == null ? null : projection.finalRequest(), providerRequests,
                 requestMessageCount, transcript.size(),
                 projection == null ? 0 : measurer.measure(projection.executionTranscript(), null).tokens(),
                 projection == null ? 0 : measurer.measure(projection.currentTaskToolTranscript(), null).tokens(),
-                measurer.measure(lastProviderMessages, null).tokens());
+                measurer.measure(lastProviderMessages, null).tokens(),
+                diagnosticMessages(managedWorkingContext),
+                projection == null ? null : projection.managedFinalShadowRequest(),
+                diagnosticMessages(managedShadowMessages),
+                projection == null ? null : projection.managedFinalShadowFailure(),
+                projection == null ? null : projection.acceptedState(),
+                projection == null ? 0 : projection.coveredThroughLogicalGroup(),
+                projection == null ? 0 : projection.shadowTranscriptReadCount(),
+                measurer.measure(managedShadowMessages, null).tokens());
     }
 
     private List<ContextLifecycleBenchmarkResult.DiagnosticMessage> diagnosticMessages(List<Message> messages) {

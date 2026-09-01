@@ -675,6 +675,20 @@ public class JChatMind {
         }
 
         List<Message> executionTranscript = this.chatMemory.get(this.chatSessionId);
+        FinalSynthesisRequest managedFinalShadowRequest = null;
+        List<Message> managedFinalShadowProviderMessages = List.of();
+        String managedFinalShadowFailure = null;
+        if (AgentLifecycleObservationPublisher.isFinalProjectionObservationEnabled()) {
+            try {
+                managedFinalShadowRequest = finalSynthesisRequestFactory.createManagedShadow(
+                        executionTranscript, originalUserQuestion);
+                managedFinalShadowProviderMessages = finalContextCompiler.compile(managedFinalShadowRequest);
+            } catch (RuntimeException error) {
+                managedFinalShadowFailure = error.getClass().getSimpleName() + ": " + error.getMessage();
+                log.warn("Managed Final shadow construction failed closed: taskId={}, error={}",
+                        currentTaskId, managedFinalShadowFailure);
+            }
+        }
         List<Message> currentTaskToolTranscript = taskToolTranscript.snapshot();
         FinalSynthesisRequest finalRequest = finalSynthesisRequestFactory.create(
                 executionTranscript, currentTaskToolTranscript, originalUserQuestion);
@@ -682,7 +696,11 @@ public class JChatMind {
                 new AgentLifecycleObservationPublisher.FinalProjectionObservation(
                         currentTaskId, chatSessionId, model, executionTranscript,
                         currentTaskToolTranscript, finalRequest,
-                        taskToolTranscript.batchCount(), taskToolTranscript.toolCallCount()));
+                        taskToolTranscript.batchCount(), taskToolTranscript.toolCallCount(),
+                        executionTranscript, managedFinalShadowRequest,
+                        managedFinalShadowProviderMessages, managedFinalShadowFailure,
+                        currentTaskWorkingState.summary(),
+                        currentTaskWorkingState.coveredThroughLogicalGroup(), 0));
         int evidenceCount = finalRequest.evidenceBatches().stream()
                 .mapToInt(batch -> batch.evidence().size())
                 .sum();

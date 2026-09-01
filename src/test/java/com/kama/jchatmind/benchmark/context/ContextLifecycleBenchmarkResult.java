@@ -383,12 +383,41 @@ record ContextLifecycleBenchmarkResult(
             int transcriptMessageCount,
             int preTranscriptEstimatedTokens,
             int transcriptEstimatedTokens,
-            int finalProviderEstimatedTokens) {
+            int finalProviderEstimatedTokens,
+            List<DiagnosticMessage> managedWorkingContext,
+            FinalSynthesisRequest managedFinalShadowRequest,
+            List<DiagnosticMessage> managedFinalShadowProviderMessages,
+            String managedFinalShadowFailure,
+            String acceptedState,
+            int coveredThroughLogicalGroup,
+            int shadowTranscriptReadCount,
+            int managedFinalShadowEstimatedTokens) {
 
         FinalDiagnostic {
             preTranscriptExecutionContext = immutable(preTranscriptExecutionContext);
             taskToolTranscript = immutable(taskToolTranscript);
             compiledProviderRequests = immutable(compiledProviderRequests);
+            managedWorkingContext = immutable(managedWorkingContext);
+            managedFinalShadowProviderMessages = immutable(managedFinalShadowProviderMessages);
+        }
+
+        FinalDiagnostic(
+                String taskId,
+                String sessionId,
+                List<DiagnosticMessage> preTranscriptExecutionContext,
+                List<DiagnosticMessage> taskToolTranscript,
+                FinalSynthesisRequest postTranscriptFinalRequest,
+                List<ProviderRequestDiagnostic> compiledProviderRequests,
+                int requestMessageCount,
+                int transcriptMessageCount,
+                int preTranscriptEstimatedTokens,
+                int transcriptEstimatedTokens,
+                int finalProviderEstimatedTokens) {
+            this(taskId, sessionId, preTranscriptExecutionContext, taskToolTranscript,
+                    postTranscriptFinalRequest, compiledProviderRequests, requestMessageCount,
+                    transcriptMessageCount, preTranscriptEstimatedTokens, transcriptEstimatedTokens,
+                    finalProviderEstimatedTokens, List.of(), null, List.of(), null,
+                    null, 0, 0, 0);
         }
     }
 
