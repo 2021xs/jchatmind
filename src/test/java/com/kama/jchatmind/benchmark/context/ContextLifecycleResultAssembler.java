@@ -108,8 +108,34 @@ final class ContextLifecycleResultAssembler {
                                 measurer.measureText(value.compressionPrompt()),
                                 measurer.measureText(value.acceptedState()), value.latencyMs(), value.failure()))
                         .toList();
+        List<ContextLifecycleBenchmarkResult.FinalStreamDiagnostic> finalStreams =
+                execution.capture().finalStreams.stream()
+                        .map(value -> new ContextLifecycleBenchmarkResult.FinalStreamDiagnostic(
+                                value.taskId(), value.sessionId(), value.provider(), value.model(), value.attempt(),
+                                value.streamId(), value.stepId(), value.requestStartedAtEpochMs(),
+                                value.providerMessageCount(), value.providerRequestId(),
+                                value.providerResponseModel(), value.totalChunkCount(),
+                                value.contentBearingChunkCount(), value.rawContentCharCount(),
+                                value.reasoningChunkCount(), value.reasoningCharCount(),
+                                value.metadataOnlyChunkCount(), value.terminalState(),
+                                value.streamCompletedNormally(), value.finishReason(), value.errorType(),
+                                value.errorMessage(), value.assembledFinalCharCount(),
+                                value.assembledFinalBlank(), value.failureClassification()))
+                        .toList();
+        List<ContextLifecycleBenchmarkResult.FinalDeliveryDiagnostic> finalDeliveries =
+                execution.capture().finalDeliveries.stream()
+                        .map(value -> new ContextLifecycleBenchmarkResult.FinalDeliveryDiagnostic(
+                                value.taskId(), value.sessionId(), value.provider(), value.model(), value.attempt(),
+                                value.streamId(), value.stepId(), value.messageId(),
+                                value.assembledFinalCharCount(), value.persistedFinalCharCount(),
+                                value.sseDeltaCount(), value.sseDeltaCharCount(),
+                                value.deliveredFinalCharCount(), value.persistenceCompleted(),
+                                value.deliveryCompleted(), value.failureStage(), value.errorType(),
+                                value.errorMessage(), value.failureClassification()))
+                        .toList();
         return new ContextLifecycleBenchmarkResult.EvidenceLifecycleDiagnostics(
-                toolResults, selectorProvenance, compressions, finalDiagnostic(execution));
+                toolResults, selectorProvenance, compressions, finalStreams, finalDeliveries,
+                finalDiagnostic(execution));
     }
 
     private List<ContextLifecycleBenchmarkResult.EvidenceIdentity> evidenceIdentities(

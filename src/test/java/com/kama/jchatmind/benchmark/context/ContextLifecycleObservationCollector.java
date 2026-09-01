@@ -18,6 +18,8 @@ final class ContextLifecycleObservationCollector implements AutoCloseable {
                 AgentLifecycleObservationPublisher.registerCompression(this::onCompression),
                 AgentLifecycleObservationPublisher.registerFinalProjection(this::onFinalProjection),
                 AgentLifecycleObservationPublisher.registerFinalProviderRequest(this::onFinalProviderRequest),
+                AgentLifecycleObservationPublisher.registerFinalStream(this::onFinalStream),
+                AgentLifecycleObservationPublisher.registerFinalDelivery(this::onFinalDelivery),
                 AgentLifecycleObservationPublisher.registerSelectorProvenance(this::onSelectorProvenance));
     }
 
@@ -79,6 +81,20 @@ final class ContextLifecycleObservationCollector implements AutoCloseable {
         }
     }
 
+    private void onFinalStream(AgentLifecycleObservationPublisher.FinalStreamObservation observation) {
+        CaseCapture capture = matching(observation.sessionId(), observation.taskId());
+        if (capture != null) {
+            capture.finalStreams.add(observation);
+        }
+    }
+
+    private void onFinalDelivery(AgentLifecycleObservationPublisher.FinalDeliveryObservation observation) {
+        CaseCapture capture = matching(observation.sessionId(), observation.taskId());
+        if (capture != null) {
+            capture.finalDeliveries.add(observation);
+        }
+    }
+
     private void onSelectorProvenance(
             AgentLifecycleObservationPublisher.SelectorProvenanceObservation observation) {
         CaseCapture capture = matching(observation.sessionId(), observation.taskId());
@@ -131,6 +147,10 @@ final class ContextLifecycleObservationCollector implements AutoCloseable {
         final AtomicReference<AgentLifecycleObservationPublisher.FinalProjectionObservation> finalProjection =
                 new AtomicReference<>();
         final List<AgentLifecycleObservationPublisher.FinalProviderRequestObservation> finalProviderRequests =
+                new CopyOnWriteArrayList<>();
+        final List<AgentLifecycleObservationPublisher.FinalStreamObservation> finalStreams =
+                new CopyOnWriteArrayList<>();
+        final List<AgentLifecycleObservationPublisher.FinalDeliveryObservation> finalDeliveries =
                 new CopyOnWriteArrayList<>();
         final List<AgentLifecycleObservationPublisher.SelectorProvenanceObservation> selectorProvenance =
                 new CopyOnWriteArrayList<>();

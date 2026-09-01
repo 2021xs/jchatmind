@@ -143,6 +143,8 @@ class ContextLifecycleBenchmarkOutputTest {
                         "session-1:1", "task-1", "session-1", "actual compression input",
                         "primary state", null, null, "accepted continuation state body", true, 1,
                         List.of(selected), List.of(), 1, 1, 0, 100, 20, 10, null)),
+                List.of(),
+                List.of(),
                 new ContextLifecycleBenchmarkResult.FinalDiagnostic(
                         "task-1", "session-1", List.of(diagnosticMessage("USER", "managed context")),
                         finalRequest,

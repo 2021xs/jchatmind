@@ -2,12 +2,14 @@ package com.kama.jchatmind.agent;
 
 import com.kama.jchatmind.config.ToolCorrectionProperties;
 import com.kama.jchatmind.converter.ChatMessageConverter;
+import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.message.AgentSseEvent;
 import com.kama.jchatmind.message.SseMessage;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
 import com.kama.jchatmind.model.entity.AgentStep;
 import com.kama.jchatmind.model.entity.AgentTask;
 import com.kama.jchatmind.model.response.CreateChatMessageResponse;
+import com.kama.jchatmind.model.vo.ChatMessageVO;
 import com.kama.jchatmind.service.AgentTaskLogService;
 import com.kama.jchatmind.service.ChatMessageFacadeService;
 import com.kama.jchatmind.service.ConversationContextCompressor;
@@ -62,6 +64,46 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class JChatMindFinalStreamingTest {
+
+    @Test
+    void observesNormalFinalStreamAssemblyPersistenceAndDelivery() {
+        Harness harness = new Harness(List.of(answerResponse("ready")),
+                List.of(Flux.just(answerResponse("hello "), answerResponse("world"))));
+        harness.agent.setFinalStreamingEnabled(true);
+        List<AgentLifecycleObservationPublisher.FinalStreamObservation> streams =
+                new CopyOnWriteArrayList<>();
+        List<AgentLifecycleObservationPublisher.FinalDeliveryObservation> deliveries =
+                new CopyOnWriteArrayList<>();
+
+        try (AgentLifecycleObservationPublisher.Registration streamRegistration =
+                     AgentLifecycleObservationPublisher.registerFinalStream(streams::add);
+             AgentLifecycleObservationPublisher.Registration deliveryRegistration =
+                     AgentLifecycleObservationPublisher.registerFinalDelivery(deliveries::add)) {
+            harness.agent.run();
+        }
+
+        assertThat(streams).singleElement().satisfies(observation -> {
+            assertThat(observation.totalChunkCount()).isEqualTo(2);
+            assertThat(observation.contentBearingChunkCount()).isEqualTo(2);
+            assertThat(observation.rawContentCharCount()).isEqualTo(11);
+            assertThat(observation.metadataOnlyChunkCount()).isZero();
+            assertThat(observation.terminalState()).isEqualTo("COMPLETED");
+            assertThat(observation.streamCompletedNormally()).isTrue();
+            assertThat(observation.assembledFinalCharCount()).isEqualTo(11);
+            assertThat(observation.assembledFinalBlank()).isFalse();
+            assertThat(observation.failureClassification()).isEqualTo("NONE");
+        });
+        assertThat(deliveries).singleElement().satisfies(observation -> {
+            assertThat(observation.assembledFinalCharCount()).isEqualTo(11);
+            assertThat(observation.persistedFinalCharCount()).isEqualTo(11);
+            assertThat(observation.sseDeltaCount()).isEqualTo(2);
+            assertThat(observation.sseDeltaCharCount()).isEqualTo(11);
+            assertThat(observation.deliveredFinalCharCount()).isEqualTo(11);
+            assertThat(observation.persistenceCompleted()).isTrue();
+            assertThat(observation.deliveryCompleted()).isTrue();
+            assertThat(observation.failureClassification()).isEqualTo("NONE");
+        });
+    }
 
     @Test
     void featureDisabledKeepsValidatedDurableFinalizationAndOnlyDisablesTokenReplay() {
@@ -379,8 +421,13 @@ class JChatMindFinalStreamingTest {
                 List.of(Flux.concat(Flux.just(answerResponse("A"), answerResponse("B")),
                         Flux.error(new IllegalStateException("provider disconnected")))));
         harness.agent.setFinalStreamingEnabled(true);
+        List<AgentLifecycleObservationPublisher.FinalStreamObservation> streams =
+                new CopyOnWriteArrayList<>();
 
-        assertThrows(RuntimeException.class, harness.agent::run);
+        try (AgentLifecycleObservationPublisher.Registration registration =
+                     AgentLifecycleObservationPublisher.registerFinalStream(streams::add)) {
+            assertThrows(RuntimeException.class, harness.agent::run);
+        }
 
         assertThat(harness.persistedMessages).isEmpty();
         assertThat(harness.eventTypes()).containsSubsequence(
@@ -392,17 +439,32 @@ class JChatMindFinalStreamingTest {
                 AgentSseEvent.Type.DONE);
         verify(harness.requestSpec, times(1)).stream();
         verify(harness.logService).failStepAndTask(anyString(), eq("task-1"), anyString(), anyInt(), anyInt());
+        assertThat(streams).singleElement().satisfies(observation -> {
+            assertThat(observation.totalChunkCount()).isEqualTo(2);
+            assertThat(observation.contentBearingChunkCount()).isEqualTo(2);
+            assertThat(observation.rawContentCharCount()).isEqualTo(2);
+            assertThat(observation.assembledFinalCharCount()).isEqualTo(2);
+            assertThat(observation.terminalState()).isEqualTo("ERROR");
+            assertThat(observation.streamCompletedNormally()).isFalse();
+            assertThat(observation.errorType()).isEqualTo("IllegalStateException");
+            assertThat(observation.errorMessage()).contains("provider disconnected");
+            assertThat(observation.failureClassification()).isEqualTo("PROVIDER_FINAL_STREAM_FAILURE");
+        });
     }
 
     @Test
     void emptyVisibleStreamAbortsWithoutPersistence() {
-        Flux<ChatResponse> emptyAttempt = Flux.just(
-                response(DeepSeekAssistantMessage.prefixAssistantMessage("", "reasoning-only")));
+        Flux<ChatResponse> emptyAttempt = Flux.just(answerResponse(""));
         Harness harness = new Harness(List.of(answerResponse("ready")),
                 List.of(emptyAttempt, emptyAttempt));
         harness.agent.setFinalStreamingEnabled(true);
+        List<AgentLifecycleObservationPublisher.FinalStreamObservation> streams =
+                new CopyOnWriteArrayList<>();
 
-        assertThrows(RuntimeException.class, harness.agent::run);
+        try (AgentLifecycleObservationPublisher.Registration registration =
+                     AgentLifecycleObservationPublisher.registerFinalStream(streams::add)) {
+            assertThrows(RuntimeException.class, harness.agent::run);
+        }
 
         assertThat(harness.persistedMessages).isEmpty();
         assertThat(harness.eventTypes()).contains(AgentSseEvent.Type.FINAL_MESSAGE_ABORT,
@@ -410,6 +472,18 @@ class JChatMindFinalStreamingTest {
         assertThat(harness.eventTypes()).doesNotContain(AgentSseEvent.Type.TOKEN,
                 AgentSseEvent.Type.FINAL_MESSAGE_DONE, AgentSseEvent.Type.DONE);
         verify(harness.requestSpec, times(2)).stream();
+        assertThat(streams).hasSize(2).allSatisfy(observation -> {
+            assertThat(observation.totalChunkCount()).isEqualTo(1);
+            assertThat(observation.contentBearingChunkCount()).isZero();
+            assertThat(observation.rawContentCharCount()).isZero();
+            assertThat(observation.metadataOnlyChunkCount()).isEqualTo(1);
+            assertThat(observation.terminalState()).isEqualTo("COMPLETED");
+            assertThat(observation.streamCompletedNormally()).isTrue();
+            assertThat(observation.finishReason()).isEqualTo("STOP");
+            assertThat(observation.assembledFinalCharCount()).isZero();
+            assertThat(observation.assembledFinalBlank()).isTrue();
+            assertThat(observation.failureClassification()).isEqualTo("PROVIDER_FINAL_OUTPUT_FAILURE");
+        });
     }
 
     @Test
@@ -649,8 +723,13 @@ class JChatMindFinalStreamingTest {
         doThrow(new IllegalStateException("database unavailable"))
                 .when(harness.finalCompletionService).complete(any());
         harness.agent.setFinalStreamingEnabled(true);
+        List<AgentLifecycleObservationPublisher.FinalDeliveryObservation> deliveries =
+                new CopyOnWriteArrayList<>();
 
-        assertThrows(RuntimeException.class, harness.agent::run);
+        try (AgentLifecycleObservationPublisher.Registration registration =
+                     AgentLifecycleObservationPublisher.registerFinalDelivery(deliveries::add)) {
+            assertThrows(RuntimeException.class, harness.agent::run);
+        }
 
         assertThat(harness.persistedMessages).isEmpty();
         assertThat(harness.timeline).doesNotContain("message:full");
@@ -664,6 +743,15 @@ class JChatMindFinalStreamingTest {
                 && ("FINAL_SYNTHESIS".equals(event.payload().get("stepType"))
                 || "FINISH".equals(event.payload().get("stepType"))));
         verify(harness.logService, never()).finishTask(anyString(), anyString(), anyInt(), anyInt());
+        assertThat(deliveries).singleElement().satisfies(observation -> {
+            assertThat(observation.assembledFinalCharCount()).isEqualTo(24);
+            assertThat(observation.persistedFinalCharCount()).isZero();
+            assertThat(observation.deliveredFinalCharCount()).isZero();
+            assertThat(observation.persistenceCompleted()).isFalse();
+            assertThat(observation.deliveryCompleted()).isFalse();
+            assertThat(observation.failureStage()).isEqualTo("PERSISTENCE");
+            assertThat(observation.failureClassification()).isEqualTo("FINAL_PERSISTENCE_FAILURE");
+        });
     }
 
     @Test
@@ -698,13 +786,27 @@ class JChatMindFinalStreamingTest {
                 List.of(Flux.just(answerResponse("background answer"))));
         harness.replacePublisher(new AgentEventPublisher(disconnectedSse));
         harness.agent.setFinalStreamingEnabled(true);
+        List<AgentLifecycleObservationPublisher.FinalDeliveryObservation> deliveries =
+                new CopyOnWriteArrayList<>();
 
-        harness.agent.run();
+        try (AgentLifecycleObservationPublisher.Registration registration =
+                     AgentLifecycleObservationPublisher.registerFinalDelivery(deliveries::add)) {
+            harness.agent.run();
+        }
 
         assertThat(harness.persistedMessages).extracting(ChatMessageDTO::getContent)
                 .containsExactly("background answer");
         verify(harness.finalCompletionService).complete(any());
         verify(harness.logService, never()).failStepAndTask(any(), anyString(), anyString(), anyInt(), anyInt());
+        assertThat(deliveries).singleElement().satisfies(observation -> {
+            assertThat(observation.assembledFinalCharCount()).isEqualTo(17);
+            assertThat(observation.persistedFinalCharCount()).isEqualTo(17);
+            assertThat(observation.deliveredFinalCharCount()).isZero();
+            assertThat(observation.persistenceCompleted()).isTrue();
+            assertThat(observation.deliveryCompleted()).isFalse();
+            assertThat(observation.failureStage()).isEqualTo("SSE_DELIVERY");
+            assertThat(observation.failureClassification()).isEqualTo("FINAL_DELIVERY_FAILURE");
+        });
     }
 
     private static final class Harness {
@@ -714,6 +816,7 @@ class JChatMindFinalStreamingTest {
         private final ChatClient.StreamResponseSpec streamSpec = mock(ChatClient.StreamResponseSpec.class);
         private final AgentTaskLogService logService = mock(AgentTaskLogService.class);
         private final ChatMessageFacadeService messageService = mock(ChatMessageFacadeService.class);
+        private final ChatMessageConverter chatMessageConverter = mock(ChatMessageConverter.class);
         private final FinalCompletionService finalCompletionService = mock(FinalCompletionService.class);
         private final ToolCallBatchExecutor batchExecutor = mock(ToolCallBatchExecutor.class);
         private final List<ChatMessageDTO> persistedMessages = new CopyOnWriteArrayList<>();
@@ -795,6 +898,16 @@ class JChatMindFinalStreamingTest {
             }).when(messageService).createToolProtocolBatch(
                     anyString(), anyString(), any(AssistantMessage.class), any(ToolResponseMessage.class));
             when(messageService.getChatMessageDTOsBySessionId(anyString())).thenReturn(List.of());
+            when(chatMessageConverter.toVO(any(ChatMessageDTO.class))).thenAnswer(invocation -> {
+                ChatMessageDTO message = invocation.getArgument(0);
+                return ChatMessageVO.builder()
+                        .id(message.getId())
+                        .sessionId(message.getSessionId())
+                        .role(message.getRole())
+                        .content(message.getContent())
+                        .metadata(message.getMetadata())
+                        .build();
+            });
             when(batchExecutor.projectForContext(any(), any(), any())).thenAnswer(invocation -> {
                 ToolCallBatchResult batch = invocation.getArgument(1);
                 ToolResponseMessage response = invocation.getArgument(2);
@@ -840,7 +953,7 @@ class JChatMindFinalStreamingTest {
                     "agent-1", "test-model", "test-agent", "test", "system", chatClient, 20,
                     List.of(new UserMessage("question")), callbacks, List.of(), "session-1",
                     mock(SseService.class), publisher, mock(ToolExecutionService.class), messageService,
-                    mock(ChatMessageConverter.class), logService, compressor, "user-message-1",
+                    chatMessageConverter, logService, compressor, "user-message-1",
                     callbacks.stream().map(callback -> callback.getToolDefinition().name()).toList(),
                     new ToolCorrectionProperties(), new ToolFailureClassifier(), null, batchExecutor);
             agent.setFinalCompletionService(finalCompletionService);
@@ -856,11 +969,11 @@ class JChatMindFinalStreamingTest {
                 if (type == AgentSseEvent.Type.FINAL_MESSAGE_START) {
                     finalStarted.countDown();
                 }
-                return null;
+                return true;
             }).when(mock).publish(anyString(), anyString(), any(AgentSseEvent.Type.class), any());
             doAnswer(invocation -> {
                 timeline.add("message:full");
-                return null;
+                return true;
             }).when(mock).sendMessage(anyString(), any(SseMessage.class));
             return mock;
         }

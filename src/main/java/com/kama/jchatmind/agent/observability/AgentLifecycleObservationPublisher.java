@@ -27,6 +27,10 @@ public final class AgentLifecycleObservationPublisher {
             new CopyOnWriteArrayList<>();
     private static final CopyOnWriteArrayList<FinalProviderRequestListener> FINAL_PROVIDER_REQUEST_LISTENERS =
             new CopyOnWriteArrayList<>();
+    private static final CopyOnWriteArrayList<FinalStreamListener> FINAL_STREAM_LISTENERS =
+            new CopyOnWriteArrayList<>();
+    private static final CopyOnWriteArrayList<FinalDeliveryListener> FINAL_DELIVERY_LISTENERS =
+            new CopyOnWriteArrayList<>();
     private static final CopyOnWriteArrayList<SelectorProvenanceListener> SELECTOR_PROVENANCE_LISTENERS =
             new CopyOnWriteArrayList<>();
 
@@ -66,6 +70,18 @@ public final class AgentLifecycleObservationPublisher {
         FinalProviderRequestListener required = Objects.requireNonNull(listener, "listener cannot be null");
         FINAL_PROVIDER_REQUEST_LISTENERS.add(required);
         return () -> FINAL_PROVIDER_REQUEST_LISTENERS.remove(required);
+    }
+
+    public static Registration registerFinalStream(FinalStreamListener listener) {
+        FinalStreamListener required = Objects.requireNonNull(listener, "listener cannot be null");
+        FINAL_STREAM_LISTENERS.add(required);
+        return () -> FINAL_STREAM_LISTENERS.remove(required);
+    }
+
+    public static Registration registerFinalDelivery(FinalDeliveryListener listener) {
+        FinalDeliveryListener required = Objects.requireNonNull(listener, "listener cannot be null");
+        FINAL_DELIVERY_LISTENERS.add(required);
+        return () -> FINAL_DELIVERY_LISTENERS.remove(required);
     }
 
     public static Registration registerSelectorProvenance(SelectorProvenanceListener listener) {
@@ -123,6 +139,18 @@ public final class AgentLifecycleObservationPublisher {
                 observation == null ? null : observation.taskId());
     }
 
+    public static void publishFinalStream(FinalStreamObservation observation) {
+        publishSafely(FINAL_STREAM_LISTENERS, observation,
+                (listener, value) -> listener.onFinalStream(value), "final_stream",
+                observation == null ? null : observation.taskId());
+    }
+
+    public static void publishFinalDelivery(FinalDeliveryObservation observation) {
+        publishSafely(FINAL_DELIVERY_LISTENERS, observation,
+                (listener, value) -> listener.onFinalDelivery(value), "final_delivery",
+                observation == null ? null : observation.taskId());
+    }
+
     public static void publishSelectorProvenance(SelectorProvenanceObservation observation) {
         publishSafely(SELECTOR_PROVENANCE_LISTENERS, observation,
                 (listener, value) -> listener.onSelectorProvenance(value), "selector_provenance",
@@ -170,6 +198,16 @@ public final class AgentLifecycleObservationPublisher {
     @FunctionalInterface
     public interface FinalProviderRequestListener {
         void onFinalProviderRequest(FinalProviderRequestObservation observation);
+    }
+
+    @FunctionalInterface
+    public interface FinalStreamListener {
+        void onFinalStream(FinalStreamObservation observation);
+    }
+
+    @FunctionalInterface
+    public interface FinalDeliveryListener {
+        void onFinalDelivery(FinalDeliveryObservation observation);
     }
 
     @FunctionalInterface
@@ -317,6 +355,56 @@ public final class AgentLifecycleObservationPublisher {
             compiledProviderMessages = compiledProviderMessages == null
                     ? List.of() : List.copyOf(compiledProviderMessages);
         }
+    }
+
+    public record FinalStreamObservation(
+            String taskId,
+            String sessionId,
+            String provider,
+            String model,
+            int attempt,
+            String streamId,
+            String stepId,
+            long requestStartedAtEpochMs,
+            int providerMessageCount,
+            String providerRequestId,
+            String providerResponseModel,
+            int totalChunkCount,
+            int contentBearingChunkCount,
+            int rawContentCharCount,
+            int reasoningChunkCount,
+            int reasoningCharCount,
+            int metadataOnlyChunkCount,
+            String terminalState,
+            boolean streamCompletedNormally,
+            String finishReason,
+            String errorType,
+            String errorMessage,
+            int assembledFinalCharCount,
+            boolean assembledFinalBlank,
+            String failureClassification) {
+    }
+
+    public record FinalDeliveryObservation(
+            String taskId,
+            String sessionId,
+            String provider,
+            String model,
+            int attempt,
+            String streamId,
+            String stepId,
+            String messageId,
+            int assembledFinalCharCount,
+            int persistedFinalCharCount,
+            int sseDeltaCount,
+            int sseDeltaCharCount,
+            int deliveredFinalCharCount,
+            boolean persistenceCompleted,
+            boolean deliveryCompleted,
+            String failureStage,
+            String errorType,
+            String errorMessage,
+            String failureClassification) {
     }
 
     public record CodeEvidenceIdentity(

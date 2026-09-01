@@ -63,6 +63,7 @@ public class JChatMind {
     private static final Integer MAX_STEPS = 20;
     private static final Integer DEFAULT_MAX_MESSAGES = 20;
     private static final int MAX_FINAL_ATTEMPTS = 2;
+    private static final String FINAL_PROVIDER_UNAVAILABLE = "UNAVAILABLE";
 
     private String agentId;
     private String model;
@@ -245,8 +246,8 @@ public class JChatMind {
         log.info("\n\n========== Tool Calling ==========\n{}\n=================================\n", logMessage);
     }
 
-    private void sendAgentEvent(AgentSseEvent.Type type, Map<String, Object> payload) {
-        agentEventPublisher.publish(currentTaskId, this.chatSessionId, type, payload);
+    private boolean sendAgentEvent(AgentSseEvent.Type type, Map<String, Object> payload) {
+        return agentEventPublisher.publish(currentTaskId, this.chatSessionId, type, payload);
     }
 
     private String truncate(String value) {
@@ -714,7 +715,14 @@ public class JChatMind {
                         .messages(finalMessages)
                         .build();
                 long providerAttemptStartedAtMs = System.currentTimeMillis();
-                FinalStreamResult result = runFinalSynthesisAttempt(prompt, providerAttemptStartedAtMs);
+                log.info("event=FinalStreamStarted taskId={} streamId={} stepId={} finalAttempt={} "
+                                + "provider={} model={} requestStartedAtEpochMs={} providerMessageCount={} "
+                                + "inputTokens={}",
+                        currentTaskId, activeFinalStreamId, pendingFinalSynthesisStep.getId(), attempt,
+                        FINAL_PROVIDER_UNAVAILABLE, model, providerAttemptStartedAtMs, finalMessages.size(),
+                        FINAL_PROVIDER_UNAVAILABLE);
+                FinalStreamResult result = runFinalSynthesisAttempt(
+                        prompt, providerAttemptStartedAtMs, attempt, finalMessages.size());
                 publishFinalModelCallObservation(
                         attempt, finalMessages, providerAttemptStartedAtMs, result);
                 accumulatedReasoningEventCount += result.metrics().reasoningEventCount();
@@ -760,14 +768,24 @@ public class JChatMind {
                 pendingFinalDeltas = result.deltas();
                 FinalStreamMetrics attemptMetrics = result.metrics();
                 finalStreamMetrics = new FinalStreamMetrics(
+                        attemptMetrics.requestStartedAtEpochMs(),
                         attemptMetrics.finalTtftMs(),
                         attemptMetrics.finalTtltMs(),
                         attemptMetrics.finalStreamDurationMs(),
                         attemptMetrics.streamEventCount(),
                         attemptMetrics.finalAnswerChars(),
                         null,
+                        attemptMetrics.providerRequestId(),
+                        attemptMetrics.providerResponseModel(),
                         attemptMetrics.providerFinishReason(),
                         attemptMetrics.usage(),
+                        attemptMetrics.totalChunkCount(),
+                        attemptMetrics.contentBearingChunkCount(),
+                        attemptMetrics.rawContentCharCount(),
+                        attemptMetrics.metadataOnlyChunkCount(),
+                        attemptMetrics.terminalState(),
+                        attemptMetrics.streamCompletedNormally(),
+                        attemptMetrics.assembledFinalBlank(),
                         accumulatedReasoningEventCount,
                         accumulatedReasoningChars,
                         finalAttemptCount,
@@ -815,7 +833,10 @@ public class JChatMind {
         }
     }
 
-    private FinalStreamResult runFinalSynthesisAttempt(Prompt prompt, long logicalRequestStartedAtMs) {
+    private FinalStreamResult runFinalSynthesisAttempt(Prompt prompt,
+                                                       long logicalRequestStartedAtMs,
+                                                       int attempt,
+                                                       int providerMessageCount) {
         FinalStreamSubscriber subscriber = new FinalStreamSubscriber(
                 activeFinalStreamId, pendingFinalSynthesisStep.getId(), logicalRequestStartedAtMs);
         try {
@@ -825,12 +846,90 @@ public class JChatMind {
                     .chatResponse();
             Assert.notNull(responseFlux, "Final synthesis response stream cannot be null");
             responseFlux.subscribe(subscriber);
-            return subscriber.awaitResult();
+            FinalStreamResult result = subscriber.awaitResult();
+            publishFinalStreamObservation(attempt, providerMessageCount, result);
+            return result;
+        } catch (RuntimeException e) {
+            FinalStreamResult result = subscriber.snapshotResult(e);
+            publishFinalStreamObservation(attempt, providerMessageCount, result);
+            throw e;
         } finally {
             if (taskControl != null) {
                 taskControl.detachActiveStream(subscriber);
             }
         }
+    }
+
+    private void publishFinalStreamObservation(int attempt,
+                                               int providerMessageCount,
+                                               FinalStreamResult result) {
+        FinalStreamMetrics metrics = result.metrics();
+        String errorType = result.error() == null ? null : result.error().getClass().getSimpleName();
+        String errorMessage = summarizeError(result.error());
+        String failureClassification = finalStreamFailureClassification(metrics);
+        AgentLifecycleObservationPublisher.publishFinalStream(
+                new AgentLifecycleObservationPublisher.FinalStreamObservation(
+                        currentTaskId, chatSessionId, FINAL_PROVIDER_UNAVAILABLE, model,
+                        attempt, activeFinalStreamId,
+                        pendingFinalSynthesisStep == null ? null : pendingFinalSynthesisStep.getId(),
+                        metrics.requestStartedAtEpochMs(), providerMessageCount,
+                        metrics.providerRequestId(), metrics.providerResponseModel(),
+                        metrics.totalChunkCount(), metrics.contentBearingChunkCount(),
+                        metrics.rawContentCharCount(), metrics.reasoningEventCount(), metrics.reasoningChars(),
+                        metrics.metadataOnlyChunkCount(), metrics.terminalState(),
+                        metrics.streamCompletedNormally(), metrics.providerFinishReason(), errorType, errorMessage,
+                        metrics.finalAnswerChars(), metrics.assembledFinalBlank(), failureClassification));
+        String event = metrics.streamCompletedNormally() && result.error() == null
+                ? "FinalStreamCompleted" : "FinalStreamFailed";
+        if ("FinalStreamCompleted".equals(event)) {
+            log.info("event={} taskId={} streamId={} stepId={} finalAttempt={} provider={} model={} "
+                            + "providerRequestId={} providerResponseModel={} totalChunkCount={} "
+                            + "contentBearingChunkCount={} rawContentCharCount={} reasoningChunkCount={} "
+                            + "reasoningCharCount={} metadataOnlyChunkCount={} terminalState={} "
+                            + "streamCompletedNormally={} finishReason={} assembledFinalCharCount={} "
+                            + "assembledFinalBlank={} failureClassification={}",
+                    event, currentTaskId, activeFinalStreamId,
+                    pendingFinalSynthesisStep == null ? null : pendingFinalSynthesisStep.getId(), attempt,
+                    FINAL_PROVIDER_UNAVAILABLE, model, metrics.providerRequestId(),
+                    metrics.providerResponseModel(), metrics.totalChunkCount(),
+                    metrics.contentBearingChunkCount(), metrics.rawContentCharCount(),
+                    metrics.reasoningEventCount(), metrics.reasoningChars(), metrics.metadataOnlyChunkCount(),
+                    metrics.terminalState(), metrics.streamCompletedNormally(), metrics.providerFinishReason(),
+                    metrics.finalAnswerChars(), metrics.assembledFinalBlank(), failureClassification);
+        } else {
+            log.warn("event={} taskId={} streamId={} stepId={} finalAttempt={} provider={} model={} "
+                            + "providerRequestId={} totalChunkCount={} contentBearingChunkCount={} "
+                            + "rawContentCharCount={} terminalState={} streamCompletedNormally={} "
+                            + "finishReason={} errorType={} errorMessage={} assembledFinalCharCount={} "
+                            + "assembledFinalBlank={} failureClassification={}",
+                    event, currentTaskId, activeFinalStreamId,
+                    pendingFinalSynthesisStep == null ? null : pendingFinalSynthesisStep.getId(), attempt,
+                    FINAL_PROVIDER_UNAVAILABLE, model, metrics.providerRequestId(), metrics.totalChunkCount(),
+                    metrics.contentBearingChunkCount(), metrics.rawContentCharCount(), metrics.terminalState(),
+                    metrics.streamCompletedNormally(), metrics.providerFinishReason(), errorType, errorMessage,
+                    metrics.finalAnswerChars(), metrics.assembledFinalBlank(), failureClassification);
+        }
+    }
+
+    private String finalStreamFailureClassification(FinalStreamMetrics metrics) {
+        if (!metrics.streamCompletedNormally()) {
+            return "PROVIDER_FINAL_STREAM_FAILURE";
+        }
+        if (metrics.rawContentCharCount() == 0 && metrics.finalAnswerChars() == 0) {
+            return "PROVIDER_FINAL_OUTPUT_FAILURE";
+        }
+        if (metrics.rawContentCharCount() > 0 && metrics.finalAnswerChars() == 0) {
+            return "FINAL_STREAM_ASSEMBLY_FAILURE";
+        }
+        return "NONE";
+    }
+
+    private String summarizeError(Throwable error) {
+        if (error == null || !StringUtils.hasText(error.getMessage())) {
+            return null;
+        }
+        String message = error.getMessage().replace('\n', ' ').replace('\r', ' ');
+        return message.length() <= 512 ? message : message.substring(0, 512) + "...[truncated]";
     }
 
     private void publishModelCallObservation(
@@ -884,17 +983,24 @@ public class JChatMind {
                                 : result.error().getClass().getSimpleName() + ": " + result.error().getMessage()));
     }
 
-    private void publishValidatedFinalDeltas(List<String> deltas) {
+    private FinalDeltaDeliveryStats publishValidatedFinalDeltas(List<String> deltas) {
         int sequence = 0;
+        int deliveredCount = 0;
+        int deliveredChars = 0;
         for (String delta : deltas) {
             throwIfCancellationRequested();
-            sendAgentEvent(AgentSseEvent.Type.TOKEN, payload(
+            boolean delivered = sendAgentEvent(AgentSseEvent.Type.TOKEN, payload(
                     "streamId", activeFinalStreamId,
                     "stepId", pendingFinalSynthesisStep.getId(),
                     "sequence", ++sequence,
                     "delta", delta
             ));
+            if (delivered) {
+                deliveredCount++;
+                deliveredChars += delta.length();
+            }
         }
+        return new FinalDeltaDeliveryStats(deliveredCount, deliveredChars);
     }
 
     private String findLastUserQuestion(List<Message> messages) {
@@ -1291,83 +1397,126 @@ public class JChatMind {
                 ? AgentTaskLogService.FINISH_REASON_NO_TOOL_CALLS
                 : finishReason;
         Runnable completion = () -> {
+            String finalAnswer = pendingFinalAssistantMessage.getText();
+            int assembledFinalCharCount = finalAnswer == null ? 0 : finalAnswer.length();
+            int persistedFinalCharCount = 0;
+            int deliveredFinalCharCount = 0;
+            FinalDeltaDeliveryStats deltaDelivery = FinalDeltaDeliveryStats.empty();
+            String messageId = null;
+            String failureStage = "PERSISTENCE";
             long durableStartedAtMs = System.currentTimeMillis();
-            FinalCompletionService.FinalCompletionResult durable = finalCompletionService.complete(
-                    new FinalCompletionService.FinalCompletionCommand(
-                            chatSessionId,
-                            currentTaskId,
-                            pendingFinalAssistantMessage.getText(),
-                            pendingFinalSynthesisStep.getId(),
-                            pendingFinalSynthesisStep.getStepNo(),
-                            finalStreamSummary(),
-                            finalStreamMetrics.finalTtltMs(),
-                            nextStepNo,
-                            finalFinishReason,
-                            model,
-                            nextStepNo,
-                            toolCallCount));
-            long durableFinishedAtMs = System.currentTimeMillis();
+            try {
+                FinalCompletionService.FinalCompletionResult durable = finalCompletionService.complete(
+                        new FinalCompletionService.FinalCompletionCommand(
+                                chatSessionId,
+                                currentTaskId,
+                                finalAnswer,
+                                pendingFinalSynthesisStep.getId(),
+                                pendingFinalSynthesisStep.getStepNo(),
+                                finalStreamSummary(),
+                                finalStreamMetrics.finalTtltMs(),
+                                nextStepNo,
+                                finalFinishReason,
+                                model,
+                                nextStepNo,
+                                toolCallCount));
+                long durableFinishedAtMs = System.currentTimeMillis();
+                messageId = durable.messageId();
+                persistedFinalCharCount = assembledFinalCharCount;
 
-            AgentStep finishStep = AgentStep.builder()
-                    .id(durable.finishStepId())
-                    .taskId(currentTaskId)
-                    .stepNo(durable.finishStepNo())
-                    .stepType("FINISH")
-                    .status(AgentTaskLogService.STATUS_SUCCESS)
-                    .build();
-            currentStep = finishStep;
-            nextStepNo = durable.finishStepNo() + 1;
-            if (agentExecutionContext != null) {
-                agentExecutionContext.setCurrentStepId(finishStep.getId());
-                agentExecutionContext.setStepNo(finishStep.getStepNo());
-            }
+                AgentStep finishStep = AgentStep.builder()
+                        .id(durable.finishStepId())
+                        .taskId(currentTaskId)
+                        .stepNo(durable.finishStepNo())
+                        .stepType("FINISH")
+                        .status(AgentTaskLogService.STATUS_SUCCESS)
+                        .build();
+                currentStep = finishStep;
+                nextStepNo = durable.finishStepNo() + 1;
+                if (agentExecutionContext != null) {
+                    agentExecutionContext.setCurrentStepId(finishStep.getId());
+                    agentExecutionContext.setStepNo(finishStep.getStepNo());
+                }
 
-            long userVisibleStartedAtMs = System.currentTimeMillis();
-            boolean hasVisibleDeltas = finalStreamingEnabled && !pendingFinalDeltas.isEmpty();
-            if (finalStreamingEnabled) {
-                publishValidatedFinalDeltas(pendingFinalDeltas);
-            }
-            Long userVisibleTtftMs = !hasVisibleDeltas || finalLogicalRequestStartedAtMs == 0
-                    ? null
-                    : Math.max(0, userVisibleStartedAtMs - finalLogicalRequestStartedAtMs);
-            Long taskToFirstVisibleTokenMs = !hasVisibleDeltas || taskStartedAtMs == 0
-                    ? null
-                    : Math.max(0, userVisibleStartedAtMs - taskStartedAtMs);
-            finalStreamMetrics = withVisibleTiming(finalStreamMetrics, userVisibleTtftMs,
-                    taskToFirstVisibleTokenMs);
-            publishPersistedFinalMessage(durable.messageId(), pendingFinalAssistantMessage.getText());
-            pendingFinalAssistantMessage = null;
-            pendingFinalDeltas = List.of();
+                failureStage = "SSE_DELIVERY";
+                long userVisibleStartedAtMs = System.currentTimeMillis();
+                boolean hasVisibleDeltas = finalStreamingEnabled && !pendingFinalDeltas.isEmpty();
+                if (finalStreamingEnabled) {
+                    deltaDelivery = publishValidatedFinalDeltas(pendingFinalDeltas);
+                }
+                Long userVisibleTtftMs = !hasVisibleDeltas || finalLogicalRequestStartedAtMs == 0
+                        ? null
+                        : Math.max(0, userVisibleStartedAtMs - finalLogicalRequestStartedAtMs);
+                Long taskToFirstVisibleTokenMs = !hasVisibleDeltas || taskStartedAtMs == 0
+                        ? null
+                        : Math.max(0, userVisibleStartedAtMs - taskStartedAtMs);
+                finalStreamMetrics = withVisibleTiming(finalStreamMetrics, userVisibleTtftMs,
+                        taskToFirstVisibleTokenMs);
+                FinalMessageDeliveryResult messageDelivery = publishPersistedFinalMessage(
+                        durable.messageId(), finalAnswer);
+                deliveredFinalCharCount = messageDelivery.delivered()
+                        ? messageDelivery.contentCharCount() : 0;
+                boolean deliveryCompleted = messageDelivery.delivered();
 
-            sendAgentEvent(AgentSseEvent.Type.STEP_DONE, payload(
-                    "stepId", durable.finalStepId(),
-                    "stepNo", durable.finalStepNo(),
-                    "stepType", "FINAL_SYNTHESIS",
-                    "status", AgentTaskLogService.STATUS_SUCCESS
-            ));
-            sendAgentEvent(AgentSseEvent.Type.STEP_DONE, payload(
-                    "stepId", durable.finishStepId(),
-                    "stepNo", durable.finishStepNo(),
-                    "stepType", "FINISH",
-                    "status", AgentTaskLogService.STATUS_SUCCESS
-            ));
+                pendingFinalAssistantMessage = null;
+                pendingFinalDeltas = List.of();
 
-            if (finalStreamingEnabled) {
-                finalMessageDonePublished = true;
-                sendAgentEvent(AgentSseEvent.Type.FINAL_MESSAGE_DONE, payload(
-                        "streamId", activeFinalStreamId,
-                        "stepId", pendingFinalSynthesisStep.getId(),
-                        "messageId", durable.messageId()
+                sendAgentEvent(AgentSseEvent.Type.STEP_DONE, payload(
+                        "stepId", durable.finalStepId(),
+                        "stepNo", durable.finalStepNo(),
+                        "stepType", "FINAL_SYNTHESIS",
+                        "status", AgentTaskLogService.STATUS_SUCCESS
                 ));
+                sendAgentEvent(AgentSseEvent.Type.STEP_DONE, payload(
+                        "stepId", durable.finishStepId(),
+                        "stepNo", durable.finishStepNo(),
+                        "stepType", "FINISH",
+                        "status", AgentTaskLogService.STATUS_SUCCESS
+                ));
+
+                if (finalStreamingEnabled) {
+                    finalMessageDonePublished = true;
+                    sendAgentEvent(AgentSseEvent.Type.FINAL_MESSAGE_DONE, payload(
+                            "streamId", activeFinalStreamId,
+                            "stepId", pendingFinalSynthesisStep.getId(),
+                            "messageId", durable.messageId()
+                    ));
+                }
+                sendAgentEvent(AgentSseEvent.Type.DONE, payload(
+                        "status", AgentTaskLogService.STATUS_SUCCESS,
+                        "finishReason", finalFinishReason
+                ));
+                String deliveryClassification = deliveryCompleted ? "NONE" : "FINAL_DELIVERY_FAILURE";
+                publishFinalDeliveryObservation(messageId, assembledFinalCharCount, persistedFinalCharCount,
+                        deltaDelivery, deliveredFinalCharCount, true, deliveryCompleted,
+                        deliveryCompleted ? "NONE" : "SSE_DELIVERY", null, null, deliveryClassification);
+                String deliveryEvent = deliveryCompleted ? "FinalDeliveryCompleted" : "FinalDeliveryFailed";
+                log.info("event={} taskId={} streamId={} stepId={} finalAttempt={} messageId={} "
+                                + "assembledFinalCharCount={} persistedFinalCharCount={} sseDeltaCount={} "
+                                + "sseDeltaCharCount={} deliveredFinalCharCount={} persistenceCompleted={} "
+                                + "deliveryCompleted={} failureClassification={} durableStartedAtMs={} "
+                                + "durableFinishedAtMs={} firstTokenEmittedAtMs={}",
+                        deliveryEvent, currentTaskId, activeFinalStreamId, pendingFinalSynthesisStep.getId(),
+                        finalAttemptCount, messageId, assembledFinalCharCount, persistedFinalCharCount,
+                        deltaDelivery.count(), deltaDelivery.charCount(), deliveredFinalCharCount,
+                        true, deliveryCompleted, deliveryClassification, durableStartedAtMs, durableFinishedAtMs,
+                        hasVisibleDeltas ? userVisibleStartedAtMs : null);
+            } catch (RuntimeException e) {
+                String classification = persistedFinalCharCount == 0
+                        ? "FINAL_PERSISTENCE_FAILURE" : "FINAL_DELIVERY_FAILURE";
+                publishFinalDeliveryObservation(messageId, assembledFinalCharCount, persistedFinalCharCount,
+                        deltaDelivery, deliveredFinalCharCount, persistedFinalCharCount > 0, false,
+                        failureStage, e.getClass().getSimpleName(), summarizeError(e), classification);
+                log.warn("event=FinalDeliveryFailed taskId={} streamId={} stepId={} finalAttempt={} "
+                                + "messageId={} assembledFinalCharCount={} persistedFinalCharCount={} "
+                                + "sseDeltaCount={} sseDeltaCharCount={} deliveredFinalCharCount={} "
+                                + "failureStage={} errorType={} errorMessage={} failureClassification={}",
+                        currentTaskId, activeFinalStreamId, pendingFinalSynthesisStep.getId(), finalAttemptCount,
+                        messageId, assembledFinalCharCount, persistedFinalCharCount,
+                        deltaDelivery.count(), deltaDelivery.charCount(), deliveredFinalCharCount,
+                        failureStage, e.getClass().getSimpleName(), summarizeError(e), classification);
+                throw e;
             }
-            sendAgentEvent(AgentSseEvent.Type.DONE, payload(
-                    "status", AgentTaskLogService.STATUS_SUCCESS,
-                    "finishReason", finalFinishReason
-            ));
-            log.info("Final durable completion published: taskId={}, streamId={}, durableStartedAtMs={}, "
-                            + "durableFinishedAtMs={}, firstTokenEmittedAtMs={}, messageId={}",
-                    currentTaskId, activeFinalStreamId, durableStartedAtMs, durableFinishedAtMs,
-                    hasVisibleDeltas ? userVisibleStartedAtMs : null, durable.messageId());
         };
         if (taskControl != null && !taskControl.completeIfActive(completion)) {
             throw new AgentTaskCancelledException(currentTaskId);
@@ -1377,7 +1526,7 @@ public class JChatMind {
         }
     }
 
-    private void publishPersistedFinalMessage(String messageId, String content) {
+    private FinalMessageDeliveryResult publishPersistedFinalMessage(String messageId, String content) {
         ChatMessageDTO message = ChatMessageDTO.builder()
                 .id(messageId)
                 .role(ChatMessageDTO.RoleType.ASSISTANT)
@@ -1386,19 +1535,46 @@ public class JChatMind {
                 .metadata(ChatMessageDTO.MetaData.builder().toolCalls(List.of()).build())
                 .build();
         ChatMessageVO vo = chatMessageConverter.toVO(message);
-        agentEventPublisher.sendMessage(chatSessionId, SseMessage.builder()
+        boolean delivered = agentEventPublisher.sendMessage(chatSessionId, SseMessage.builder()
                 .type(SseMessage.Type.AI_GENERATED_CONTENT)
                 .payload(SseMessage.Payload.builder().message(vo).build())
                 .metadata(SseMessage.Metadata.builder().chatMessageId(messageId).build())
                 .build());
+        int contentCharCount = vo == null || vo.getContent() == null ? 0 : vo.getContent().length();
+        return new FinalMessageDeliveryResult(delivered, contentCharCount);
+    }
+
+    private void publishFinalDeliveryObservation(String messageId,
+                                                 int assembledFinalCharCount,
+                                                 int persistedFinalCharCount,
+                                                 FinalDeltaDeliveryStats deltaDelivery,
+                                                 int deliveredFinalCharCount,
+                                                 boolean persistenceCompleted,
+                                                 boolean deliveryCompleted,
+                                                 String failureStage,
+                                                 String errorType,
+                                                 String errorMessage,
+                                                 String failureClassification) {
+        AgentLifecycleObservationPublisher.publishFinalDelivery(
+                new AgentLifecycleObservationPublisher.FinalDeliveryObservation(
+                        currentTaskId, chatSessionId, FINAL_PROVIDER_UNAVAILABLE, model,
+                        finalAttemptCount, activeFinalStreamId,
+                        pendingFinalSynthesisStep == null ? null : pendingFinalSynthesisStep.getId(), messageId,
+                        assembledFinalCharCount, persistedFinalCharCount, deltaDelivery.count(),
+                        deltaDelivery.charCount(), deliveredFinalCharCount, persistenceCompleted,
+                        deliveryCompleted, failureStage, errorType, errorMessage, failureClassification));
     }
 
     private FinalStreamMetrics withVisibleTiming(FinalStreamMetrics metrics,
                                                  Long userVisibleTtftMs,
                                                  Long taskToFirstVisibleTokenMs) {
-        return new FinalStreamMetrics(metrics.finalTtftMs(), metrics.finalTtltMs(),
+        return new FinalStreamMetrics(metrics.requestStartedAtEpochMs(), metrics.finalTtftMs(),
+                metrics.finalTtltMs(),
                 metrics.finalStreamDurationMs(), metrics.streamEventCount(), metrics.finalAnswerChars(),
-                taskToFirstVisibleTokenMs, metrics.providerFinishReason(), metrics.usage(),
+                taskToFirstVisibleTokenMs, metrics.providerRequestId(), metrics.providerResponseModel(),
+                metrics.providerFinishReason(), metrics.usage(), metrics.totalChunkCount(),
+                metrics.contentBearingChunkCount(), metrics.rawContentCharCount(), metrics.metadataOnlyChunkCount(),
+                metrics.terminalState(), metrics.streamCompletedNormally(), metrics.assembledFinalBlank(),
                 metrics.reasoningEventCount(), metrics.reasoningChars(), metrics.finalAttemptCount(),
                 metrics.unexpectedFinalToolCallCount(), metrics.unexpectedFinalToolCallRetryCount(),
                 metrics.unexpectedFinalToolCallRetrySucceeded(), metrics.validationLatencyMs(),
@@ -1412,8 +1588,13 @@ public class JChatMind {
                 + ", finalTtltMs=" + finalStreamMetrics.finalTtltMs()
                 + ", finalStreamDurationMs=" + finalStreamMetrics.finalStreamDurationMs()
                 + ", streamEventCount=" + finalStreamMetrics.streamEventCount()
+                + ", totalChunkCount=" + finalStreamMetrics.totalChunkCount()
+                + ", contentBearingChunkCount=" + finalStreamMetrics.contentBearingChunkCount()
+                + ", rawContentCharCount=" + finalStreamMetrics.rawContentCharCount()
                 + ", finalAnswerChars=" + finalStreamMetrics.finalAnswerChars()
+                + ", assembledFinalBlank=" + finalStreamMetrics.assembledFinalBlank()
                 + ", taskToFirstVisibleTokenMs=" + finalStreamMetrics.taskToFirstVisibleTokenMs()
+                + ", providerRequestId=" + finalStreamMetrics.providerRequestId()
                 + ", providerFinishReason=" + finalStreamMetrics.providerFinishReason()
                 + ", usage=" + finalStreamMetrics.usageSummary()
                 + ", reasoningEventCount=" + finalStreamMetrics.reasoningEventCount()
@@ -1468,10 +1649,16 @@ public class JChatMind {
         private long completedAtMs;
         private Throwable error;
         private String providerFinishReason;
+        private String providerRequestId;
+        private String providerResponseModel;
         private Usage usage;
+        private int totalChunkCount;
+        private int rawContentCharCount;
+        private int metadataOnlyChunkCount;
         private int reasoningEventCount;
         private int reasoningChars;
         private boolean unexpectedToolCall;
+        private SignalType terminalSignalType;
 
         private FinalStreamSubscriber(String streamId, String stepId, long requestStartedAtMs) {
             this.streamId = streamId;
@@ -1491,7 +1678,10 @@ public class JChatMind {
 
         @Override
         protected void hookOnNext(ChatResponse response) {
+            totalChunkCount++;
+            captureProviderMetadata(response);
             if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
+                metadataOnlyChunkCount++;
                 return;
             }
             AssistantMessage output = response.getResult().getOutput();
@@ -1505,8 +1695,10 @@ public class JChatMind {
             if (hasAvailableUsage(chunkUsage)) {
                 usage = chunkUsage;
             }
-            if (output instanceof DeepSeekAssistantMessage deepSeekMessage
-                    && StringUtils.hasLength(deepSeekMessage.getReasoningContent())) {
+            boolean reasoningBearing = output instanceof DeepSeekAssistantMessage deepSeekMessage
+                    && StringUtils.hasLength(deepSeekMessage.getReasoningContent());
+            if (reasoningBearing) {
+                DeepSeekAssistantMessage deepSeekMessage = (DeepSeekAssistantMessage) output;
                 reasoningEventCount++;
                 reasoningChars += deepSeekMessage.getReasoningContent().length();
             }
@@ -1518,8 +1710,12 @@ public class JChatMind {
             }
             String delta = output.getText();
             if (delta == null || delta.isEmpty()) {
+                if (!reasoningBearing && (output.getToolCalls() == null || output.getToolCalls().isEmpty())) {
+                    metadataOnlyChunkCount++;
+                }
                 return;
             }
+            rawContentCharCount += delta.length();
             long now = System.currentTimeMillis();
             if (firstVisibleAtMs == 0) {
                 firstVisibleAtMs = now;
@@ -1538,6 +1734,7 @@ public class JChatMind {
 
         @Override
         protected void hookFinally(SignalType type) {
+            terminalSignalType = type;
             completedAtMs = System.currentTimeMillis();
             if (taskControl != null) {
                 taskControl.detachActiveStream(this);
@@ -1555,6 +1752,10 @@ public class JChatMind {
                 throw new IllegalStateException("Interrupted while waiting for final synthesis stream", e);
             }
             throwIfCancellationRequested();
+            return snapshotResult(null);
+        }
+
+        private FinalStreamResult snapshotResult(Throwable fallbackError) {
             long effectiveCompletedAtMs = completedAtMs == 0 ? System.currentTimeMillis() : completedAtMs;
             Long ttftMs = firstVisibleAtMs == 0 ? null : Math.max(0, firstVisibleAtMs - requestStartedAtMs);
             Long streamDurationMs = firstVisibleAtMs == 0
@@ -1564,14 +1765,24 @@ public class JChatMind {
                     ? null
                     : Math.max(0, firstVisibleAtMs - taskStartedAtMs);
             FinalStreamMetrics metrics = new FinalStreamMetrics(
+                    requestStartedAtMs,
                     ttftMs,
                     Math.max(0, effectiveCompletedAtMs - requestStartedAtMs),
                     streamDurationMs,
                     sequence,
                     answerBuffer.length(),
                     taskToFirstVisibleTokenMs,
+                    providerRequestId,
+                    providerResponseModel,
                     providerFinishReason,
                     usage,
+                    totalChunkCount,
+                    sequence,
+                    rawContentCharCount,
+                    metadataOnlyChunkCount,
+                    terminalState(fallbackError),
+                    terminalSignalType == SignalType.ON_COMPLETE && error == null && fallbackError == null,
+                    !StringUtils.hasText(answerBuffer),
                     reasoningEventCount,
                     reasoningChars,
                     0,
@@ -1585,7 +1796,34 @@ public class JChatMind {
                     false
             );
             return new FinalStreamResult(answerBuffer.toString(), List.copyOf(deltas),
-                    error, unexpectedToolCall, metrics);
+                    error == null ? fallbackError : error, unexpectedToolCall, metrics);
+        }
+
+        private void captureProviderMetadata(ChatResponse response) {
+            if (response == null || response.getMetadata() == null) {
+                return;
+            }
+            if (!StringUtils.hasText(providerRequestId)
+                    && StringUtils.hasText(response.getMetadata().getId())) {
+                providerRequestId = response.getMetadata().getId();
+            }
+            if (!StringUtils.hasText(providerResponseModel)
+                    && StringUtils.hasText(response.getMetadata().getModel())) {
+                providerResponseModel = response.getMetadata().getModel();
+            }
+        }
+
+        private String terminalState(Throwable fallbackError) {
+            if (error != null || fallbackError != null || terminalSignalType == SignalType.ON_ERROR) {
+                return "ERROR";
+            }
+            if (terminalSignalType == SignalType.ON_COMPLETE) {
+                return "COMPLETED";
+            }
+            if (terminalSignalType == SignalType.CANCEL) {
+                return "CANCELLED";
+            }
+            return terminalSignalType == null ? "UNKNOWN" : terminalSignalType.name();
         }
 
         private boolean hasAvailableUsage(Usage chunkUsage) {
@@ -1607,14 +1845,33 @@ public class JChatMind {
                                      FinalStreamMetrics metrics) {
     }
 
-    private record FinalStreamMetrics(Long finalTtftMs,
+    private record FinalDeltaDeliveryStats(int count, int charCount) {
+        private static FinalDeltaDeliveryStats empty() {
+            return new FinalDeltaDeliveryStats(0, 0);
+        }
+    }
+
+    private record FinalMessageDeliveryResult(boolean delivered, int contentCharCount) {
+    }
+
+    private record FinalStreamMetrics(long requestStartedAtEpochMs,
+                                      Long finalTtftMs,
                                       Long finalTtltMs,
                                       Long finalStreamDurationMs,
                                       int streamEventCount,
                                       int finalAnswerChars,
                                       Long taskToFirstVisibleTokenMs,
+                                      String providerRequestId,
+                                      String providerResponseModel,
                                       String providerFinishReason,
                                       Usage usage,
+                                      int totalChunkCount,
+                                      int contentBearingChunkCount,
+                                      int rawContentCharCount,
+                                      int metadataOnlyChunkCount,
+                                      String terminalState,
+                                      boolean streamCompletedNormally,
+                                      boolean assembledFinalBlank,
                                       int reasoningEventCount,
                                       int reasoningChars,
                                       int finalAttemptCount,

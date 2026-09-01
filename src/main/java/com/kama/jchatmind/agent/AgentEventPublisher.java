@@ -15,26 +15,30 @@ import java.util.Map;
 public class AgentEventPublisher {
     private final SseService sseService;
 
-    public void sendMessage(String sessionId, SseMessage message) {
+    public boolean sendMessage(String sessionId, SseMessage message) {
         if (sessionId == null || message == null) {
-            return;
+            return false;
         }
         try {
             sseService.send(sessionId, message);
+            return true;
         } catch (Exception e) {
             log.warn("Failed to send chat SSE message: sessionId={}, error={}", sessionId, e.getMessage());
+            return false;
         }
     }
 
-    public void publish(String taskId, String sessionId, AgentSseEvent.Type type, Map<String, Object> payload) {
+    public boolean publish(String taskId, String sessionId, AgentSseEvent.Type type, Map<String, Object> payload) {
         if (taskId == null || sessionId == null || type == null) {
-            return;
+            return false;
         }
         try {
             sseService.sendEvent(sessionId, AgentSseEvent.of(taskId, sessionId, type, payload));
+            return true;
         } catch (Exception e) {
             log.warn("Failed to send Agent SSE event: type={}, taskId={}, error={}",
                     type, taskId, e.getMessage());
+            return false;
         }
     }
 

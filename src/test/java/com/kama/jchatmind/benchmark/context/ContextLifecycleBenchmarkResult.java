@@ -294,17 +294,72 @@ record ContextLifecycleBenchmarkResult(
             List<ToolResultDiagnostic> toolResults,
             List<SelectorProvenanceDiagnostic> selectorProvenance,
             List<CompressionDiagnostic> compressions,
+            List<FinalStreamDiagnostic> finalStreams,
+            List<FinalDeliveryDiagnostic> finalDeliveries,
             FinalDiagnostic finalRequest) {
 
         EvidenceLifecycleDiagnostics {
             toolResults = immutable(toolResults);
             selectorProvenance = immutable(selectorProvenance);
             compressions = immutable(compressions);
+            finalStreams = immutable(finalStreams);
+            finalDeliveries = immutable(finalDeliveries);
         }
 
         static EvidenceLifecycleDiagnostics empty() {
-            return new EvidenceLifecycleDiagnostics(List.of(), List.of(), List.of(), null);
+            return new EvidenceLifecycleDiagnostics(
+                    List.of(), List.of(), List.of(), List.of(), List.of(), null);
         }
+    }
+
+    record FinalStreamDiagnostic(
+            String taskId,
+            String sessionId,
+            String provider,
+            String model,
+            int attempt,
+            String streamId,
+            String stepId,
+            long requestStartedAtEpochMs,
+            int providerMessageCount,
+            String providerRequestId,
+            String providerResponseModel,
+            int totalChunkCount,
+            int contentBearingChunkCount,
+            int rawContentCharCount,
+            int reasoningChunkCount,
+            int reasoningCharCount,
+            int metadataOnlyChunkCount,
+            String terminalState,
+            boolean streamCompletedNormally,
+            String finishReason,
+            String errorType,
+            String errorMessage,
+            int assembledFinalCharCount,
+            boolean assembledFinalBlank,
+            String failureClassification) {
+    }
+
+    record FinalDeliveryDiagnostic(
+            String taskId,
+            String sessionId,
+            String provider,
+            String model,
+            int attempt,
+            String streamId,
+            String stepId,
+            String messageId,
+            int assembledFinalCharCount,
+            int persistedFinalCharCount,
+            int sseDeltaCount,
+            int sseDeltaCharCount,
+            int deliveredFinalCharCount,
+            boolean persistenceCompleted,
+            boolean deliveryCompleted,
+            String failureStage,
+            String errorType,
+            String errorMessage,
+            String failureClassification) {
     }
 
     record ToolResultDiagnostic(
