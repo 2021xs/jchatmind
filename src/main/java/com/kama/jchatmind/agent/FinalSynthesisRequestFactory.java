@@ -36,12 +36,9 @@ public final class FinalSynthesisRequestFactory {
         return create(executionTranscript, List.of(), originalUserQuestion);
     }
 
-    /**
-     * Builds the Final request exclusively from the managed Working Context.
-     * This path deliberately has no TaskToolTranscript input.
-     */
-    public FinalSynthesisRequest createManagedShadow(List<Message> managedWorkingContext,
-                                                     String originalUserQuestion) {
+    /** Builds the Final request exclusively from the managed Working Context. */
+    public FinalSynthesisRequest createFromManagedContext(List<Message> managedWorkingContext,
+                                                          String originalUserQuestion) {
         return create(managedWorkingContext, List.of(), originalUserQuestion);
     }
 

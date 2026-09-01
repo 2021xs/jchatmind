@@ -152,8 +152,7 @@ final class ContextLifecycleResultAssembler {
                 execution.capture().finalProviderRequests.size() - 1).compiledProviderMessages();
         List<Message> managedWorkingContext = projection == null
                 ? List.of() : projection.managedWorkingContext();
-        List<Message> managedShadowMessages = projection == null
-                ? List.of() : projection.managedFinalShadowProviderMessages();
+        List<Message> managedFinalMessages = lastProviderMessages;
         return new ContextLifecycleBenchmarkResult.FinalDiagnostic(
                 taskId, sessionId, executionContext, transcript,
                 projection == null ? null : projection.finalRequest(), providerRequests,
@@ -162,13 +161,14 @@ final class ContextLifecycleResultAssembler {
                 projection == null ? 0 : measurer.measure(projection.currentTaskToolTranscript(), null).tokens(),
                 measurer.measure(lastProviderMessages, null).tokens(),
                 diagnosticMessages(managedWorkingContext),
-                projection == null ? null : projection.managedFinalShadowRequest(),
-                diagnosticMessages(managedShadowMessages),
-                projection == null ? null : projection.managedFinalShadowFailure(),
+                projection == null ? null : projection.managedFinalRequest(),
+                diagnosticMessages(managedFinalMessages),
                 projection == null ? null : projection.acceptedState(),
                 projection == null ? 0 : projection.coveredThroughLogicalGroup(),
-                projection == null ? 0 : projection.shadowTranscriptReadCount(),
-                measurer.measure(managedShadowMessages, null).tokens());
+                projection == null ? 0 : projection.finalTranscriptReadCount(),
+                projection == null ? 0 : projection.transcriptBatchCount(),
+                projection == null ? 0 : projection.transcriptToolCallCount(),
+                measurer.measure(managedFinalMessages, null).tokens());
     }
 
     private List<ContextLifecycleBenchmarkResult.DiagnosticMessage> diagnosticMessages(List<Message> messages) {

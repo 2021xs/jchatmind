@@ -97,12 +97,10 @@ class ContextLifecycleResultAssemblerTest {
                 "canonical body", "projected body", 14, 14, false, "SUCCESS"));
         FinalSynthesisRequest finalRequest = finalRequest();
         List<Message> managedWorkingContext = List.of(new UserMessage("managed context"));
-        List<Message> managedShadowProvider = List.of(new UserMessage("managed provider request"));
         capture.finalProjection.set(new AgentLifecycleObservationPublisher.FinalProjectionObservation(
                 "task-1", "session-1", "model", List.of(new UserMessage("pre merge")),
-                List.of(new UserMessage("transcript snapshot")), finalRequest, 1, 1,
-                managedWorkingContext, finalRequest, managedShadowProvider, null,
-                "accepted state", 2, 0));
+                List.of(), finalRequest, 1, 1,
+                managedWorkingContext, finalRequest, "accepted state", 2, 0));
         capture.finalProviderRequests.add(
                 new AgentLifecycleObservationPublisher.FinalProviderRequestObservation(
                         "task-1", "session-1", "model", 1,
@@ -126,16 +124,18 @@ class ContextLifecycleResultAssemblerTest {
         assertTrue(compression.accepted());
         assertEquals(finalRequest, diagnostics.finalRequest().postTranscriptFinalRequest());
         assertEquals("pre merge", diagnostics.finalRequest().preTranscriptExecutionContext().get(0).text());
-        assertEquals("transcript snapshot", diagnostics.finalRequest().taskToolTranscript().get(0).text());
+        assertTrue(diagnostics.finalRequest().taskToolTranscript().isEmpty());
         assertEquals("actual provider request",
                 diagnostics.finalRequest().compiledProviderRequests().get(0).messages().get(0).text());
         assertEquals("managed context", diagnostics.finalRequest().managedWorkingContext().get(0).text());
-        assertEquals(finalRequest, diagnostics.finalRequest().managedFinalShadowRequest());
-        assertEquals("managed provider request",
-                diagnostics.finalRequest().managedFinalShadowProviderMessages().get(0).text());
+        assertEquals(finalRequest, diagnostics.finalRequest().managedFinalRequest());
+        assertEquals("actual provider request",
+                diagnostics.finalRequest().managedFinalProviderMessages().get(0).text());
         assertEquals("accepted state", diagnostics.finalRequest().acceptedState());
         assertEquals(2, diagnostics.finalRequest().coveredThroughLogicalGroup());
-        assertEquals(0, diagnostics.finalRequest().shadowTranscriptReadCount());
+        assertEquals(0, diagnostics.finalRequest().finalTranscriptReadCount());
+        assertEquals(1, diagnostics.finalRequest().transcriptBatchWriteCount());
+        assertEquals(1, diagnostics.finalRequest().transcriptToolCallWriteCount());
     }
 
     private ContextLifecycleCaseExecution execution() {

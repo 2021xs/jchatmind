@@ -674,33 +674,18 @@ public class JChatMind {
             ));
         }
 
-        List<Message> executionTranscript = this.chatMemory.get(this.chatSessionId);
-        FinalSynthesisRequest managedFinalShadowRequest = null;
-        List<Message> managedFinalShadowProviderMessages = List.of();
-        String managedFinalShadowFailure = null;
-        if (AgentLifecycleObservationPublisher.isFinalProjectionObservationEnabled()) {
-            try {
-                managedFinalShadowRequest = finalSynthesisRequestFactory.createManagedShadow(
-                        executionTranscript, originalUserQuestion);
-                managedFinalShadowProviderMessages = finalContextCompiler.compile(managedFinalShadowRequest);
-            } catch (RuntimeException error) {
-                managedFinalShadowFailure = error.getClass().getSimpleName() + ": " + error.getMessage();
-                log.warn("Managed Final shadow construction failed closed: taskId={}, error={}",
-                        currentTaskId, managedFinalShadowFailure);
-            }
-        }
-        List<Message> currentTaskToolTranscript = taskToolTranscript.snapshot();
-        FinalSynthesisRequest finalRequest = finalSynthesisRequestFactory.create(
-                executionTranscript, currentTaskToolTranscript, originalUserQuestion);
+        List<Message> managedWorkingContext = this.chatMemory.get(this.chatSessionId);
+        FinalSynthesisRequest finalRequest = finalSynthesisRequestFactory.createFromManagedContext(
+                managedWorkingContext, originalUserQuestion);
         AgentLifecycleObservationPublisher.publishFinalProjection(
                 new AgentLifecycleObservationPublisher.FinalProjectionObservation(
-                        currentTaskId, chatSessionId, model, executionTranscript,
-                        currentTaskToolTranscript, finalRequest,
+                        currentTaskId, chatSessionId, model, managedWorkingContext,
+                        List.of(), finalRequest,
                         taskToolTranscript.batchCount(), taskToolTranscript.toolCallCount(),
-                        executionTranscript, managedFinalShadowRequest,
-                        managedFinalShadowProviderMessages, managedFinalShadowFailure,
+                        managedWorkingContext, finalRequest,
                         currentTaskWorkingState.summary(),
-                        currentTaskWorkingState.coveredThroughLogicalGroup(), 0));
+                        currentTaskWorkingState.coveredThroughLogicalGroup(),
+                        taskToolTranscript.readCount()));
         int evidenceCount = finalRequest.evidenceBatches().stream()
                 .mapToInt(batch -> batch.evidence().size())
                 .sum();
@@ -709,11 +694,12 @@ public class JChatMind {
                 .mapToInt(evidence -> evidence.content().length())
                 .sum();
         log.info("Final synthesis request projected: conversationMessages={}, evidenceBatches={}, "
-                        + "evidenceCount={}, evidenceChars={}, transcriptMessages={}, "
-                        + "currentTaskEvidenceBatches={}, currentTaskToolCalls={}, transcriptMutated=false",
+                        + "evidenceCount={}, evidenceChars={}, managedContextMessages={}, "
+                        + "transcriptWriteBatches={}, transcriptWriteToolCalls={}, transcriptReads={}",
                 finalRequest.conversationContext().size(), finalRequest.evidenceBatches().size(),
-                evidenceCount, evidenceChars, executionTranscript.size(),
-                taskToolTranscript.batchCount(), taskToolTranscript.toolCallCount());
+                evidenceCount, evidenceChars, managedWorkingContext.size(),
+                taskToolTranscript.batchCount(), taskToolTranscript.toolCallCount(),
+                taskToolTranscript.readCount());
         finalLogicalRequestStartedAtMs = System.currentTimeMillis();
         int accumulatedReasoningEventCount = 0;
         int accumulatedReasoningChars = 0;

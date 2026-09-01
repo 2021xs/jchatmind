@@ -385,20 +385,21 @@ record ContextLifecycleBenchmarkResult(
             int transcriptEstimatedTokens,
             int finalProviderEstimatedTokens,
             List<DiagnosticMessage> managedWorkingContext,
-            FinalSynthesisRequest managedFinalShadowRequest,
-            List<DiagnosticMessage> managedFinalShadowProviderMessages,
-            String managedFinalShadowFailure,
+            FinalSynthesisRequest managedFinalRequest,
+            List<DiagnosticMessage> managedFinalProviderMessages,
             String acceptedState,
             int coveredThroughLogicalGroup,
-            int shadowTranscriptReadCount,
-            int managedFinalShadowEstimatedTokens) {
+            int finalTranscriptReadCount,
+            int transcriptBatchWriteCount,
+            int transcriptToolCallWriteCount,
+            int managedFinalEstimatedTokens) {
 
         FinalDiagnostic {
             preTranscriptExecutionContext = immutable(preTranscriptExecutionContext);
             taskToolTranscript = immutable(taskToolTranscript);
             compiledProviderRequests = immutable(compiledProviderRequests);
             managedWorkingContext = immutable(managedWorkingContext);
-            managedFinalShadowProviderMessages = immutable(managedFinalShadowProviderMessages);
+            managedFinalProviderMessages = immutable(managedFinalProviderMessages);
         }
 
         FinalDiagnostic(
@@ -416,8 +417,8 @@ record ContextLifecycleBenchmarkResult(
             this(taskId, sessionId, preTranscriptExecutionContext, taskToolTranscript,
                     postTranscriptFinalRequest, compiledProviderRequests, requestMessageCount,
                     transcriptMessageCount, preTranscriptEstimatedTokens, transcriptEstimatedTokens,
-                    finalProviderEstimatedTokens, List.of(), null, List.of(), null,
-                    null, 0, 0, 0);
+                    finalProviderEstimatedTokens, List.of(), null, List.of(),
+                    null, 0, 0, 0, 0, 0);
         }
     }
 

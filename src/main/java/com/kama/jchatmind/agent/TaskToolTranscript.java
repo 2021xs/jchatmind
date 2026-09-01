@@ -14,14 +14,15 @@ import java.util.Set;
 /**
  * Task-local, append-only copy of complete tool protocol batches.
  *
- * <p>The bounded planning memory may evict older batches. Final synthesis uses
- * this transcript to recover every successful tool result from the current task.</p>
+ * <p>Managed Final no longer reads this transcript. Writes remain temporarily
+ * enabled for rollback and attribution validation until transcript removal.</p>
  */
 final class TaskToolTranscript {
 
     private final List<Message> protocolMessages = new ArrayList<>();
     private final Set<String> toolCallIds = new HashSet<>();
     private int batchCount;
+    private int readCount;
 
     void append(AssistantMessage assistant, ToolResponseMessage responseMessage) {
         if (assistant == null || responseMessage == null) {
@@ -67,7 +68,12 @@ final class TaskToolTranscript {
     }
 
     List<Message> snapshot() {
+        readCount++;
         return List.copyOf(protocolMessages);
+    }
+
+    int readCount() {
+        return readCount;
     }
 
     int batchCount() {
@@ -82,5 +88,6 @@ final class TaskToolTranscript {
         protocolMessages.clear();
         toolCallIds.clear();
         batchCount = 0;
+        readCount = 0;
     }
 }

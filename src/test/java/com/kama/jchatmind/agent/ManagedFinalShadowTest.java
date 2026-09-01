@@ -19,7 +19,7 @@ class ManagedFinalShadowTest {
 
     @Test
     void noToolRetainsEligibleHistoryAndCurrentUser() {
-        FinalSynthesisRequest shadow = factory.createManagedShadow(List.of(
+        FinalSynthesisRequest shadow = factory.createFromManagedContext(List.of(
                 new SystemMessage("agent system"),
                 new UserMessage("historical user"),
                 assistant("historical final"),
@@ -33,7 +33,7 @@ class ManagedFinalShadowTest {
 
     @Test
     void smallToolModelViewIsRetainedWithoutTranscript() {
-        FinalSynthesisRequest shadow = factory.createManagedShadow(List.of(
+        FinalSynthesisRequest shadow = factory.createFromManagedContext(List.of(
                 new UserMessage("question"),
                 toolCalls("call-small", "databaseQuery"),
                 toolResponses("call-small", "databaseQuery", "small projected result")), "question");
@@ -51,7 +51,7 @@ class ManagedFinalShadowTest {
                 symbol: VoucherOrderController#seckillVoucher
                 """;
 
-        FinalSynthesisRequest shadow = factory.createManagedShadow(List.of(
+        FinalSynthesisRequest shadow = factory.createFromManagedContext(List.of(
                 new UserMessage("where is the endpoint"),
                 toolCalls("call-search", "searchProjectCode"),
                 toolResponses("call-search", "searchProjectCode", projected)), "where is the endpoint");
@@ -64,7 +64,7 @@ class ManagedFinalShadowTest {
     void exactChunkDetailRemainsAvailableFromActiveRawGroup() {
         String exactChunk = "Exact code chunk:\nrepoId: repo-1\nchunkId: chunk-lua\nreturn 3";
 
-        FinalSynthesisRequest shadow = factory.createManagedShadow(List.of(
+        FinalSynthesisRequest shadow = factory.createFromManagedContext(List.of(
                 new UserMessage("list exact return codes"),
                 toolCalls("call-chunk", "getCodeChunk"),
                 toolResponses("call-chunk", "getCodeChunk", exactChunk)), "list exact return codes");
@@ -78,7 +78,7 @@ class ManagedFinalShadowTest {
                 + "Refs:\n- repoId=repo-1 chunkId=chunk-lua";
         String stateMessage = ConversationContextCompressor.currentTaskSummaryMessageContent(state);
 
-        FinalSynthesisRequest shadow = factory.createManagedShadow(List.of(
+        FinalSynthesisRequest shadow = factory.createFromManagedContext(List.of(
                 new SystemMessage(stateMessage),
                 new UserMessage("explain flow")), "explain flow");
 
@@ -91,7 +91,7 @@ class ManagedFinalShadowTest {
         String state = ConversationContextCompressor.currentTaskSummaryMessageContent(
                 "Goal:\n- explain flow\nKnown:\n- producer sends the order");
 
-        FinalSynthesisRequest shadow = factory.createManagedShadow(List.of(
+        FinalSynthesisRequest shadow = factory.createFromManagedContext(List.of(
                 new SystemMessage(state),
                 new UserMessage("explain flow"),
                 toolCalls("call-uncovered", "getCodeChunk"),
@@ -103,7 +103,7 @@ class ManagedFinalShadowTest {
 
     @Test
     void crossTaskUsesHistoricalUserFinalProjectionWithoutRawToolLeakage() {
-        FinalSynthesisRequest shadow = factory.createManagedShadow(List.of(
+        FinalSynthesisRequest shadow = factory.createFromManagedContext(List.of(
                 new UserMessage("historical question"),
                 assistant("historical final answer"),
                 new UserMessage("current question")), "current question");
@@ -120,21 +120,21 @@ class ManagedFinalShadowTest {
                 new UserMessage("question"),
                 toolCalls("call-managed", "searchProjectCode"),
                 toolResponses("call-managed", "searchProjectCode", "managed evidence"));
-        FinalSynthesisRequest before = factory.createManagedShadow(managed, "question");
+        FinalSynthesisRequest before = factory.createFromManagedContext(managed, "question");
 
         TaskToolTranscript unrelated = new TaskToolTranscript();
         unrelated.append(toolCalls("call-unrelated", "databaseQuery"),
                 toolResponses("call-unrelated", "databaseQuery", "UNRELATED_TRANSCRIPT_GARBAGE"));
         assertThat(unrelated.snapshot()).isNotEmpty();
 
-        FinalSynthesisRequest after = factory.createManagedShadow(managed, "question");
+        FinalSynthesisRequest after = factory.createFromManagedContext(managed, "question");
         assertThat(after).isEqualTo(before);
         assertThat(evidenceContents(after)).doesNotContain("UNRELATED_TRANSCRIPT_GARBAGE");
     }
 
     @Test
     void protocolIntegrityFailsClosedForOrphanToolMessage() {
-        assertThatThrownBy(() -> factory.createManagedShadow(List.of(
+        assertThatThrownBy(() -> factory.createFromManagedContext(List.of(
                 new UserMessage("question"),
                 toolResponses("orphan", "searchProjectCode", "evidence")), "question"))
                 .isInstanceOf(IllegalStateException.class)
@@ -145,7 +145,7 @@ class ManagedFinalShadowTest {
     void currentUserIsPreservedExactlyAsOriginalQuestion() {
         String raw = "Current user with exact value 36000 and spacing  ";
 
-        FinalSynthesisRequest shadow = factory.createManagedShadow(
+        FinalSynthesisRequest shadow = factory.createFromManagedContext(
                 List.of(new UserMessage(raw)), raw);
 
         assertThat(shadow.originalUserQuestion()).isEqualTo(raw);

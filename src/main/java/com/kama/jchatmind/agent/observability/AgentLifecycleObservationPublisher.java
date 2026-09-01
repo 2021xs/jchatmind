@@ -304,12 +304,10 @@ public final class AgentLifecycleObservationPublisher {
             int transcriptBatchCount,
             int transcriptToolCallCount,
             List<Message> managedWorkingContext,
-            FinalSynthesisRequest managedFinalShadowRequest,
-            List<Message> managedFinalShadowProviderMessages,
-            String managedFinalShadowFailure,
+            FinalSynthesisRequest managedFinalRequest,
             String acceptedState,
             int coveredThroughLogicalGroup,
-            int shadowTranscriptReadCount) {
+            int finalTranscriptReadCount) {
 
         public FinalProjectionObservation {
             executionTranscript = executionTranscript == null ? List.of() : List.copyOf(executionTranscript);
@@ -317,8 +315,6 @@ public final class AgentLifecycleObservationPublisher {
                     ? List.of() : List.copyOf(currentTaskToolTranscript);
             managedWorkingContext = managedWorkingContext == null
                     ? List.of() : List.copyOf(managedWorkingContext);
-            managedFinalShadowProviderMessages = managedFinalShadowProviderMessages == null
-                    ? List.of() : List.copyOf(managedFinalShadowProviderMessages);
         }
 
         public FinalProjectionObservation(
@@ -332,7 +328,7 @@ public final class AgentLifecycleObservationPublisher {
                 int transcriptToolCallCount) {
             this(taskId, sessionId, model, executionTranscript, currentTaskToolTranscript,
                     finalRequest, transcriptBatchCount, transcriptToolCallCount,
-                    List.of(), null, List.of(), null, null, 0, 0);
+                    executionTranscript, finalRequest, null, 0, 0);
         }
     }
 
