@@ -37,6 +37,7 @@ import com.kama.jchatmind.tool.ToolExecutionRecord;
 import com.kama.jchatmind.tool.ToolFailureClassifier;
 import com.kama.jchatmind.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientResponse;
@@ -51,6 +52,8 @@ import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.ArrayList;
@@ -61,6 +64,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -68,6 +72,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
@@ -76,6 +81,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+@ExtendWith(OutputCaptureExtension.class)
 class McpFakeEndToEndIntegrationTest {
 
     @Test
@@ -186,9 +192,12 @@ class McpFakeEndToEndIntegrationTest {
     }
 
     @Test
-    void fakeAgentConversationRunsExternalMcpToolThroughJChatMindRuntime() {
+    void fakeAgentConversationRunsExternalMcpToolThroughJChatMindRuntime(CapturedOutput output) {
         String tailMarker = "_MCP_CANONICAL_TAIL";
-        String canonical = "x".repeat(9_000) + tailMarker;
+        String argumentSentinel = "TOOL_ARGUMENT_SENTINEL_67890";
+        String resultSentinel = "TOOL_RESULT_SENTINEL_78901";
+        String toolArguments = "{\"query\":\"" + argumentSentinel + "\"}";
+        String canonical = resultSentinel + "-" + "x".repeat(9_000) + tailMarker;
         McpClientProperties properties = new McpClientProperties();
         properties.setMaxResultLength(80);
         properties.setAuditEnabled(true);
@@ -210,11 +219,11 @@ class McpFakeEndToEndIntegrationTest {
                 AssistantMessage.builder()
                         .content("")
                         .toolCalls(List.of(new AssistantMessage.ToolCall(
-                                "call-1",
-                                "function",
-                                runtimeNames.get(0),
-                                "{\"query\":\"spring ai\"}"
-                        )))
+                                 "call-1",
+                                 "function",
+                                 runtimeNames.get(0),
+                                 toolArguments
+                         )))
                         .build()
         )));
         ChatResponse finalResponse = new ChatResponse(List.of(new Generation(
@@ -305,11 +314,18 @@ class McpFakeEndToEndIntegrationTest {
             assertEquals(canonical, terminalResponse.responseData());
             assertTrue(terminalResponse.responseData().endsWith(tailMarker));
             assertEquals(List.of("start:search_docs", "success:search_docs:false"), auditLogger.events);
+            assertFalse(output.getAll().contains(argumentSentinel));
+            assertFalse(output.getAll().contains(resultSentinel));
+            assertTrue(output.getAll().contains("name=" + runtimeNames.get(0)));
+            assertTrue(output.getAll().contains("argumentCharCount="));
+            assertTrue(output.getAll().contains("resultCharCount="));
         }
     }
 
     @Test
-    void fakeAgentConversationMcpFailureReachesUnifiedFailureTrace() {
+    void fakeAgentConversationMcpFailureReachesUnifiedFailureTrace(CapturedOutput output) {
+        String exceptionSentinel = "EXCEPTION_SECRET_SENTINEL_56789";
+        String argumentSentinel = "TOOL_ARGUMENT_SENTINEL_67890";
         McpClientProperties properties = new McpClientProperties();
         properties.setMaxResultLength(80);
         properties.setAuditEnabled(true);
@@ -322,7 +338,8 @@ class McpFakeEndToEndIntegrationTest {
         McpToolCallbackAdapter adapter = new McpToolCallbackAdapter(
                 externalRegistry,
                 (tool, argumentsJson) -> {
-                    throw new IllegalStateException("credential=secret-token command=/private/path");
+                    throw new IllegalStateException(exceptionSentinel,
+                            new IllegalArgumentException("cause-" + exceptionSentinel));
                 },
                 auditLogger);
         List<ToolCallback> callbacks = adapter.toolCallbacks();
@@ -331,7 +348,8 @@ class McpFakeEndToEndIntegrationTest {
         ChatClient chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
         ChatResponse toolCallResponse = new ChatResponse(List.of(new Generation(
                 AssistantMessage.builder().content("").toolCalls(List.of(new AssistantMessage.ToolCall(
-                        "call-1", "function", runtimeNames.get(0), "{\"query\":\"spring ai\"}"))).build())));
+                        "call-1", "function", runtimeNames.get(0),
+                        "{\"query\":\"" + argumentSentinel + "\"}"))).build())));
         when(chatClient.prompt(any(Prompt.class)).system(anyString())
                 .toolCallbacks(any(ToolCallback[].class)).call().chatClientResponse())
                 .thenReturn(new ChatClientResponse(toolCallResponse, Map.of()));
@@ -347,16 +365,18 @@ class McpFakeEndToEndIntegrationTest {
         ToolExecutionServiceImpl executionService = new ToolExecutionServiceImpl(
                 new NoLocalToolRegistry(), logService, mock(AgentEventPublisher.class),
                 new ToolFailureClassifier(), provider(externalRegistry), provider(auditLogger));
+        AgentEventPublisher eventPublisher = mock(AgentEventPublisher.class);
+        AgentRunFailureHandler failureHandler = new AgentRunFailureHandler(logService, eventPublisher);
 
         try (ToolCallBatchExecutorFixture toolRuntime =
                      new ToolCallBatchExecutorFixture(executionService, new NoLocalToolRegistry())) {
             JChatMind agent = new JChatMind(
                     "agent-1", "test-model", "test-agent", "test", "system", chatClient, 20,
                     List.of(new UserMessage("use external docs")), callbacks, List.of(), "session-1",
-                    mock(SseService.class), mock(AgentEventPublisher.class), executionService, chatMessageFacadeService,
+                    mock(SseService.class), eventPublisher, executionService, chatMessageFacadeService,
                     mock(ChatMessageConverter.class), logService, compressor, "user-message-1", runtimeNames,
                     new ToolCorrectionProperties(), new ToolFailureClassifier(),
-                    mock(AgentRunFailureHandler.class), toolRuntime.batchExecutor());
+                    failureHandler, toolRuntime.batchExecutor());
             ReflectionTestUtils.setField(agent, "toolCallingManager", new FakeToolCallingManager(callbacks));
 
             assertThrows(RuntimeException.class, agent::run);
@@ -365,8 +385,14 @@ class McpFakeEndToEndIntegrationTest {
         verify(logService, atLeastOnce()).failToolCall(anyString(),
                 org.mockito.ArgumentMatchers.contains("MCP_TOOL_CALL_FAILED"), anyLong(),
                 eq("MCP_TOOL_CALL_FAILED"), eq(false));
+        verify(logService).failStepAndTask(anyString(), eq("task-1"),
+                contains("MCP_TOOL_CALL_FAILED"), anyInt(), anyInt());
         verify(logService, never()).finishToolCall(anyString(), anyString(), anyLong(), anyBoolean());
         assertEquals(List.of("start:search_docs", "failure:MCP_TOOL_CALL_FAILED"), auditLogger.events);
+        assertFalse(output.getAll().contains(exceptionSentinel));
+        assertFalse(output.getAll().contains(argumentSentinel));
+        assertTrue(output.getAll().contains("exceptionClass=" + McpToolCallException.class.getName()));
+        assertTrue(output.getAll().contains("failureClassification=MCP_TOOL_CALL_FAILED"));
     }
 
     private ExternalMcpServerProperties server() {

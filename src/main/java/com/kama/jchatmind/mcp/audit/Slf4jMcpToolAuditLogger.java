@@ -6,9 +6,6 @@ import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 public class Slf4jMcpToolAuditLogger implements McpToolAuditLogger {
-    private static final int MAX_ARGUMENT_PREVIEW = 2000;
-    private static final int MAX_RESULT_SUMMARY = 2000;
-
     private final McpClientProperties properties;
 
     public Slf4jMcpToolAuditLogger(McpClientProperties properties) {
@@ -21,11 +18,11 @@ public class Slf4jMcpToolAuditLogger implements McpToolAuditLogger {
             return;
         }
         try {
-            log.info("external mcp tool start: traceId={}, serverName={}, serverType={}, toolName={}, riskLevel={}, allowed={}, argumentsPreview={}",
+            log.info("external mcp tool start: traceId={}, serverName={}, serverType={}, toolName={}, riskLevel={}, allowed={}, argumentsPresent={}, argumentCharCount={}",
                     traceId, tool.getServerName(), tool.getServerType(), tool.getToolName(), tool.getRiskLevel(),
-                    tool.isAutoInvokeAllowed(), truncate(argumentsJson, MAX_ARGUMENT_PREVIEW));
+                    tool.isAutoInvokeAllowed(), hasContent(argumentsJson), charCount(argumentsJson));
         } catch (RuntimeException e) {
-            log.debug("external mcp audit start failed: {}", e.getMessage());
+            log.debug("external mcp audit start failed: exceptionClass={}", e.getClass().getName());
         }
     }
 
@@ -36,11 +33,11 @@ public class Slf4jMcpToolAuditLogger implements McpToolAuditLogger {
             return;
         }
         try {
-            log.info("external mcp tool success: traceId={}, serverName={}, serverType={}, toolName={}, riskLevel={}, allowed=true, latencyMs={}, truncated={}, resultSummary={}",
+            log.info("external mcp tool success: traceId={}, serverName={}, serverType={}, toolName={}, riskLevel={}, allowed=true, status=SUCCESS, latencyMs={}, truncated={}, resultPresent={}, resultCharCount={}",
                     traceId, tool.getServerName(), tool.getServerType(), tool.getToolName(), tool.getRiskLevel(),
-                    latencyMs, truncated, truncate(resultSummary, MAX_RESULT_SUMMARY));
+                    latencyMs, truncated, hasContent(resultSummary), charCount(resultSummary));
         } catch (RuntimeException e) {
-            log.debug("external mcp audit success failed: {}", e.getMessage());
+            log.debug("external mcp audit success failed: exceptionClass={}", e.getClass().getName());
         }
     }
 
@@ -51,11 +48,11 @@ public class Slf4jMcpToolAuditLogger implements McpToolAuditLogger {
             return;
         }
         try {
-            log.warn("external mcp tool failure: traceId={}, serverName={}, serverType={}, toolName={}, riskLevel={}, allowed=true, latencyMs={}, errorCode={}, errorMessage={}",
+            log.warn("external mcp tool failure: traceId={}, serverName={}, serverType={}, toolName={}, riskLevel={}, allowed=true, status=FAILED, latencyMs={}, errorCode={}, failureDetailPresent={}, failureDetailCharCount={}",
                     traceId, tool.getServerName(), tool.getServerType(), tool.getToolName(), tool.getRiskLevel(),
-                    latencyMs, errorCode, truncate(errorMessage, MAX_RESULT_SUMMARY));
+                    latencyMs, errorCode, hasContent(errorMessage), charCount(errorMessage));
         } catch (RuntimeException e) {
-            log.debug("external mcp audit failure failed: {}", e.getMessage());
+            log.debug("external mcp audit failure failed: exceptionClass={}", e.getClass().getName());
         }
     }
 
@@ -66,19 +63,19 @@ public class Slf4jMcpToolAuditLogger implements McpToolAuditLogger {
             return;
         }
         try {
-            log.warn("external mcp tool denied: traceId={}, serverName={}, serverType={}, toolName={}, riskLevel={}, allowed=false, latencyMs={}, errorCode={}, argumentsPreview={}",
+            log.warn("external mcp tool denied: traceId={}, serverName={}, serverType={}, toolName={}, riskLevel={}, allowed=false, status=DENIED, latencyMs={}, errorCode={}, argumentsPresent={}, argumentCharCount={}",
                     traceId, tool.getServerName(), tool.getServerType(), tool.getToolName(), tool.getRiskLevel(),
-                    latencyMs, errorCode, truncate(argumentsJson, MAX_ARGUMENT_PREVIEW));
+                    latencyMs, errorCode, hasContent(argumentsJson), charCount(argumentsJson));
         } catch (RuntimeException e) {
-            log.debug("external mcp audit denied failed: {}", e.getMessage());
+            log.debug("external mcp audit denied failed: exceptionClass={}", e.getClass().getName());
         }
     }
 
-    private String truncate(String value, int maxLength) {
-        if (value == null || value.length() <= maxLength) {
-            return value;
-        }
-        int keep = Math.max(0, maxLength - 32);
-        return value.substring(0, keep) + "\n...[truncated]";
+    private boolean hasContent(String value) {
+        return value != null && !value.isEmpty();
+    }
+
+    private int charCount(String value) {
+        return value == null ? 0 : value.length();
     }
 }

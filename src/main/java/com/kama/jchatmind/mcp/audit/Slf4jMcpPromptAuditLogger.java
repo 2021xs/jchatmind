@@ -8,8 +8,6 @@ import java.util.Set;
 
 @Slf4j
 public class Slf4jMcpPromptAuditLogger implements McpPromptAuditLogger {
-    private static final int MAX_SUMMARY = 800;
-
     private final McpClientProperties properties;
 
     public Slf4jMcpPromptAuditLogger(McpClientProperties properties) {
@@ -18,21 +16,23 @@ public class Slf4jMcpPromptAuditLogger implements McpPromptAuditLogger {
 
     @Override
     public void success(String traceId, ExternalMcpPromptRegistration prompt, Set<String> argumentNames,
-                        String promptSummary, long latencyMs, boolean truncated) {
+                         String promptSummary, long latencyMs, boolean truncated) {
         if (properties.isAuditEnabled()) {
-            log.info("external mcp prompt success: traceId={}, serverName={}, serverType={}, promptName={}, riskLevel={}, allowed=true, argumentNames={}, latencyMs={}, truncated={}, promptSummary={}",
+            log.info("external mcp prompt success: traceId={}, serverName={}, serverType={}, promptName={}, riskLevel={}, allowed=true, status=SUCCESS, argumentNames={}, latencyMs={}, truncated={}, contentPresent={}, contentCharCount={}",
                     traceId, prompt.getServerName(), prompt.getServerType(), prompt.getName(),
-                    prompt.getRiskLevel(), argumentNames, latencyMs, truncated, truncate(promptSummary));
+                    prompt.getRiskLevel(), argumentNames, latencyMs, truncated,
+                    hasContent(promptSummary), charCount(promptSummary));
         }
     }
 
     @Override
     public void failure(String traceId, ExternalMcpPromptRegistration prompt, Set<String> argumentNames,
-                        String errorMessage, long latencyMs, String errorCode) {
+                         String errorMessage, long latencyMs, String errorCode) {
         if (properties.isAuditEnabled()) {
-            log.warn("external mcp prompt failure: traceId={}, serverName={}, serverType={}, promptName={}, riskLevel={}, allowed=true, argumentNames={}, latencyMs={}, errorCode={}, errorMessage={}",
+            log.warn("external mcp prompt failure: traceId={}, serverName={}, serverType={}, promptName={}, riskLevel={}, allowed=true, status=FAILED, argumentNames={}, latencyMs={}, errorCode={}, failureDetailPresent={}, failureDetailCharCount={}",
                     traceId, prompt.getServerName(), prompt.getServerType(), prompt.getName(),
-                    prompt.getRiskLevel(), argumentNames, latencyMs, errorCode, truncate(errorMessage));
+                    prompt.getRiskLevel(), argumentNames, latencyMs, errorCode,
+                    hasContent(errorMessage), charCount(errorMessage));
         }
     }
 
@@ -45,10 +45,11 @@ public class Slf4jMcpPromptAuditLogger implements McpPromptAuditLogger {
         }
     }
 
-    private String truncate(String value) {
-        if (value == null || value.length() <= MAX_SUMMARY) {
-            return value;
-        }
-        return value.substring(0, MAX_SUMMARY - 32) + "\n...[truncated]";
+    private boolean hasContent(String value) {
+        return value != null && !value.isEmpty();
+    }
+
+    private int charCount(String value) {
+        return value == null ? 0 : value.length();
     }
 }

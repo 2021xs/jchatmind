@@ -92,17 +92,18 @@ public class McpToolCallbackAdapter {
                 auditLogger.failure(traceId, registration, safeFailure,
                         System.currentTimeMillis() - started, e.getErrorType());
                 log.warn("External MCP tool request failed before invocation: serverName={}, serverType={}, "
-                                + "toolName={}, errorType={}",
+                                + "toolName={}, status=FAILED, errorType={}, exceptionClass={}",
                         registration.getServerName(), registration.getServerType(), registration.getToolName(),
-                        e.getErrorType(), e);
+                        e.getErrorType(), e.getClass().getName());
                 throw e;
             } catch (RuntimeException e) {
                 String safeFailure = "MCP_TOOL_CALL_FAILED: External MCP tool invocation failed.";
                 auditLogger.failure(traceId, registration, safeFailure,
                         System.currentTimeMillis() - started, "MCP_TOOL_CALL_FAILED");
                 log.warn("External MCP tool invocation failed: serverName={}, serverType={}, toolName={}, "
-                                + "errorType=MCP_TOOL_CALL_FAILED",
-                        registration.getServerName(), registration.getServerType(), registration.getToolName(), e);
+                                + "status=FAILED, errorType=MCP_TOOL_CALL_FAILED, exceptionClass={}",
+                        registration.getServerName(), registration.getServerType(), registration.getToolName(),
+                        e.getClass().getName());
                 throw new McpToolCallException(registration.getExposedName(), e);
             }
         }

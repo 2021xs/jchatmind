@@ -3,6 +3,7 @@ package com.kama.jchatmind.agent;
 import com.kama.jchatmind.message.AgentSseEvent;
 import com.kama.jchatmind.model.entity.AgentStep;
 import com.kama.jchatmind.service.AgentTaskLogService;
+import com.kama.jchatmind.tool.ToolFailureException;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -35,8 +36,16 @@ public class AgentRunFailureHandler {
                 "errorMessage", truncate(errorMessage)
         ));
         eventPublisher.complete(sessionId, taskId);
-        log.error("Error running agent: taskId={}, sessionId={}, stepId={}",
-                taskId, sessionId, currentStep == null ? null : currentStep.getId(), error);
+        if (error instanceof ToolFailureException toolFailure) {
+            log.error("Agent tool failure: taskId={}, sessionId={}, stepId={}, stepType={}, status=FAILED, "
+                            + "failureClassification={}, exceptionClass={}",
+                    taskId, sessionId, currentStep == null ? null : currentStep.getId(),
+                    currentStep == null ? null : currentStep.getStepType(), toolFailure.getErrorType(),
+                    error.getClass().getName());
+        } else {
+            log.error("Error running agent: taskId={}, sessionId={}, stepId={}",
+                    taskId, sessionId, currentStep == null ? null : currentStep.getId(), error);
+        }
     }
 
     private Map<String, Object> payload(Object... keyValues) {

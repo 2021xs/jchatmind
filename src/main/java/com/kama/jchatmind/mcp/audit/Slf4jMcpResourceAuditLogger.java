@@ -6,8 +6,6 @@ import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 public class Slf4jMcpResourceAuditLogger implements McpResourceAuditLogger {
-    private static final int MAX_SUMMARY = 800;
-
     private final McpClientProperties properties;
 
     public Slf4jMcpResourceAuditLogger(McpClientProperties properties) {
@@ -18,34 +16,36 @@ public class Slf4jMcpResourceAuditLogger implements McpResourceAuditLogger {
     public void success(String traceId, ExternalMcpResourceRegistration resource, String contentSummary,
                         long latencyMs, boolean truncated) {
         if (properties.isAuditEnabled()) {
-            log.info("external mcp resource success: traceId={}, serverName={}, serverType={}, uri={}, riskLevel={}, allowed=true, latencyMs={}, truncated={}, contentSummary={}",
-                    traceId, resource.getServerName(), resource.getServerType(), resource.getUri(),
-                    resource.getRiskLevel(), latencyMs, truncated, truncate(contentSummary));
+            log.info("external mcp resource success: traceId={}, serverName={}, serverType={}, resourceName={}, riskLevel={}, allowed=true, status=SUCCESS, latencyMs={}, truncated={}, contentPresent={}, contentCharCount={}",
+                    traceId, resource.getServerName(), resource.getServerType(), resource.getName(),
+                    resource.getRiskLevel(), latencyMs, truncated, hasContent(contentSummary), charCount(contentSummary));
         }
     }
 
     @Override
     public void failure(String traceId, ExternalMcpResourceRegistration resource, String errorMessage,
-                        long latencyMs, String errorCode) {
+                         long latencyMs, String errorCode) {
         if (properties.isAuditEnabled()) {
-            log.warn("external mcp resource failure: traceId={}, serverName={}, serverType={}, uri={}, riskLevel={}, allowed=true, latencyMs={}, errorCode={}, errorMessage={}",
-                    traceId, resource.getServerName(), resource.getServerType(), resource.getUri(),
-                    resource.getRiskLevel(), latencyMs, errorCode, truncate(errorMessage));
+            log.warn("external mcp resource failure: traceId={}, serverName={}, serverType={}, resourceName={}, riskLevel={}, allowed=true, status=FAILED, latencyMs={}, errorCode={}, failureDetailPresent={}, failureDetailCharCount={}",
+                    traceId, resource.getServerName(), resource.getServerType(), resource.getName(),
+                    resource.getRiskLevel(), latencyMs, errorCode, hasContent(errorMessage), charCount(errorMessage));
         }
     }
 
     @Override
     public void denied(String traceId, String serverName, String uri, String errorCode) {
         if (properties.isAuditEnabled()) {
-            log.warn("external mcp resource denied: traceId={}, serverName={}, uri={}, allowed=false, errorCode={}",
-                    traceId, serverName, uri, errorCode);
+            log.warn("external mcp resource denied: traceId={}, serverName={}, operation=RESOURCE_READ, "
+                            + "resourceUriPresent={}, resourceUriCharCount={}, allowed=false, status=DENIED, errorCode={}",
+                    traceId, serverName, hasContent(uri), charCount(uri), errorCode);
         }
     }
 
-    private String truncate(String value) {
-        if (value == null || value.length() <= MAX_SUMMARY) {
-            return value;
-        }
-        return value.substring(0, MAX_SUMMARY - 32) + "\n...[truncated]";
+    private boolean hasContent(String value) {
+        return value != null && !value.isEmpty();
+    }
+
+    private int charCount(String value) {
+        return value == null ? 0 : value.length();
     }
 }

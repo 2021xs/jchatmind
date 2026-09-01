@@ -35,8 +35,8 @@ public class ExternalMcpCapabilityRegistry {
         } catch (RuntimeException e) {
             log.warn("External MCP server unavailable during capability discovery: serverName={}, serverType={}, "
                             + "status=UNAVAILABLE, failureType=MCP_DISCOVERY_FAILED, "
-                            + "message=External MCP capability discovery failed",
-                    server.getName(), server.getType(), e);
+                            + "exceptionClass={}",
+                    server.getName(), server.getType(), e.getClass().getName());
             return ExternalMcpServerCapabilities.builder()
                     .serverName(server.getName())
                     .tools(List.of())

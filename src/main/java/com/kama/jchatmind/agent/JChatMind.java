@@ -239,8 +239,9 @@ public class JChatMind {
         String logMessage = IntStream.range(0, toolCalls.size())
                 .mapToObj(i -> {
                     AssistantMessage.ToolCall call = toolCalls.get(i);
-                    return String.format("[ToolCalling #%d]\n- name      : %s\n- arguments : %s",
-                            i + 1, call.name(), call.arguments());
+                    return String.format("[ToolCalling #%d] id=%s name=%s argumentsPresent=%s argumentCharCount=%d",
+                            i + 1, call.id(), call.name(), StringUtils.hasText(call.arguments()),
+                            call.arguments() == null ? 0 : call.arguments().length());
                 })
                 .collect(Collectors.joining("\n\n"));
         log.info("\n\n========== Tool Calling ==========\n{}\n=================================\n", logMessage);
@@ -1134,9 +1135,11 @@ public class JChatMind {
         ToolResponseMessage toolResponseMessage = contextResponseMessage;
         String collect = toolResponseMessage.getResponses()
                 .stream()
-                .map(resp -> "Tool " + resp.name() + " result: " + truncate(resp.responseData()))
+                .map(resp -> "Tool id=" + resp.id() + " name=" + resp.name()
+                        + " resultPresent=" + StringUtils.hasText(resp.responseData())
+                        + " resultCharCount=" + (resp.responseData() == null ? 0 : resp.responseData().length()))
                 .collect(Collectors.joining("\n"));
-        log.info("Tool call result: {}", collect);
+        log.info("Tool call completed: {}", collect);
 
         if (duplicateCallState.isHardStopRequested()) {
             forceFinalAnswer = true;

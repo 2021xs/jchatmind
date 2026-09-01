@@ -73,8 +73,8 @@ public class ExternalMcpToolRegistry {
         } catch (RuntimeException e) {
             log.warn("External MCP server unavailable after tool discovery failure: serverName={}, serverType={}, "
                             + "status=UNAVAILABLE, failureType=MCP_DISCOVERY_FAILED, "
-                            + "message=External MCP tool discovery failed",
-                    server.getName(), server.getType(), e);
+                            + "exceptionClass={}",
+                    server.getName(), server.getType(), e.getClass().getName());
             return List.of();
         }
         if (discoveredTools == null) {
