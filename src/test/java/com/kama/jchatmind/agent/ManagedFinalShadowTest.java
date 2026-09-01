@@ -115,21 +115,16 @@ class ManagedFinalShadowTest {
     }
 
     @Test
-    void unrelatedTaskTranscriptCannotChangeManagedShadow() {
+    void managedInputIsTheOnlyFinalEvidenceSource() {
         List<Message> managed = List.of(
                 new UserMessage("question"),
                 toolCalls("call-managed", "searchProjectCode"),
                 toolResponses("call-managed", "searchProjectCode", "managed evidence"));
         FinalSynthesisRequest before = factory.createFromManagedContext(managed, "question");
-
-        TaskToolTranscript unrelated = new TaskToolTranscript();
-        unrelated.append(toolCalls("call-unrelated", "databaseQuery"),
-                toolResponses("call-unrelated", "databaseQuery", "UNRELATED_TRANSCRIPT_GARBAGE"));
-        assertThat(unrelated.snapshot()).isNotEmpty();
-
         FinalSynthesisRequest after = factory.createFromManagedContext(managed, "question");
+
         assertThat(after).isEqualTo(before);
-        assertThat(evidenceContents(after)).doesNotContain("UNRELATED_TRANSCRIPT_GARBAGE");
+        assertThat(evidenceContents(after)).containsExactly("managed evidence");
     }
 
     @Test

@@ -1,9 +1,6 @@
 package com.kama.jchatmind.benchmark.context;
 
 import com.kama.jchatmind.agent.AgentToolProtocolInspector;
-import com.kama.jchatmind.agent.FinalContextCompiler;
-import com.kama.jchatmind.agent.FinalSynthesisRequest;
-import com.kama.jchatmind.agent.FinalSynthesisRequestFactory;
 import com.kama.jchatmind.agent.observability.AgentLifecycleObservationPublisher;
 import com.kama.jchatmind.config.FinalSynthesisProperties;
 import com.kama.jchatmind.model.dto.ChatMessageDTO;
@@ -29,8 +26,6 @@ final class ContextLifecycleResultAssembler {
     private final EstimatedMessageTokenMeasurer measurer;
     private final ContextOriginAttributor attributor;
     private final DeterministicCorrectnessScorer correctnessScorer = new DeterministicCorrectnessScorer();
-    private final FinalContextCompiler finalContextCompiler;
-    private final ContextLifecycleBenchmarkResult.ExecutionArchitecture executionArchitecture;
 
     ContextLifecycleResultAssembler(int charsPerToken, FinalSynthesisProperties finalProperties) {
         this(charsPerToken, finalProperties, ContextLifecycleBenchmarkResult.ExecutionArchitecture.LEGACY);
@@ -42,9 +37,8 @@ final class ContextLifecycleResultAssembler {
             ContextLifecycleBenchmarkResult.ExecutionArchitecture executionArchitecture) {
         measurer = new EstimatedMessageTokenMeasurer(charsPerToken);
         attributor = new ContextOriginAttributor(measurer);
-        finalContextCompiler = new FinalContextCompiler(finalProperties);
-        this.executionArchitecture = Objects.requireNonNull(
-                executionArchitecture, "executionArchitecture cannot be null");
+        Objects.requireNonNull(finalProperties, "finalProperties cannot be null");
+        Objects.requireNonNull(executionArchitecture, "executionArchitecture cannot be null");
     }
 
     ContextLifecycleBenchmarkResult.CaseResult assemble(ContextLifecycleCaseExecution execution) {
@@ -141,10 +135,6 @@ final class ContextLifecycleResultAssembler {
                         .toList();
         String taskId = projection == null ? execution.capture().taskId : projection.taskId();
         String sessionId = projection == null ? execution.sessionId() : projection.sessionId();
-        List<ContextLifecycleBenchmarkResult.DiagnosticMessage> executionContext = projection == null
-                ? List.of() : diagnosticMessages(projection.executionTranscript());
-        List<ContextLifecycleBenchmarkResult.DiagnosticMessage> transcript = projection == null
-                ? List.of() : diagnosticMessages(projection.currentTaskToolTranscript());
         int requestMessageCount = providerRequests.isEmpty()
                 ? 0 : providerRequests.get(providerRequests.size() - 1).messages().size();
         List<Message> lastProviderMessages = execution.capture().finalProviderRequests.isEmpty()
@@ -154,20 +144,12 @@ final class ContextLifecycleResultAssembler {
                 ? List.of() : projection.managedWorkingContext();
         List<Message> managedFinalMessages = lastProviderMessages;
         return new ContextLifecycleBenchmarkResult.FinalDiagnostic(
-                taskId, sessionId, executionContext, transcript,
+                taskId, sessionId, diagnosticMessages(managedWorkingContext),
                 projection == null ? null : projection.finalRequest(), providerRequests,
-                requestMessageCount, transcript.size(),
-                projection == null ? 0 : measurer.measure(projection.executionTranscript(), null).tokens(),
-                projection == null ? 0 : measurer.measure(projection.currentTaskToolTranscript(), null).tokens(),
-                measurer.measure(lastProviderMessages, null).tokens(),
-                diagnosticMessages(managedWorkingContext),
-                projection == null ? null : projection.managedFinalRequest(),
+                requestMessageCount, measurer.measure(lastProviderMessages, null).tokens(),
                 diagnosticMessages(managedFinalMessages),
                 projection == null ? null : projection.acceptedState(),
                 projection == null ? 0 : projection.coveredThroughLogicalGroup(),
-                projection == null ? 0 : projection.finalTranscriptReadCount(),
-                projection == null ? 0 : projection.transcriptBatchCount(),
-                projection == null ? 0 : projection.transcriptToolCallCount(),
                 measurer.measure(managedFinalMessages, null).tokens());
     }
 
@@ -303,25 +285,7 @@ final class ContextLifecycleResultAssembler {
     private TranscriptMetrics transcriptMetrics(
             AgentLifecycleObservationPublisher.FinalProjectionObservation projection,
             List<ContextLifecycleBenchmarkResult.ModelCallMetric> calls) {
-        if (executionArchitecture == ContextLifecycleBenchmarkResult.ExecutionArchitecture.TASK_AWARE) {
-            return TranscriptMetrics.removed(lastFinalTokens(calls));
-        }
-        if (projection == null) {
-            return TranscriptMetrics.present(0, 0, null, lastFinalTokens(calls), 0);
-        }
-        int transcriptTokens = measurer.measure(projection.currentTaskToolTranscript(), null).tokens();
-        Integer before = null;
-        try {
-            FinalSynthesisRequest withoutTranscript = new FinalSynthesisRequestFactory().create(
-                    projection.executionTranscript(), projection.finalRequest().originalUserQuestion());
-            before = measurer.measure(finalContextCompiler.compile(withoutTranscript), null).tokens();
-        } catch (RuntimeException ignored) {
-            // The benchmark must report unavailable rather than repair an invalid Legacy transcript.
-        }
-        Integer after = lastFinalTokens(calls);
-        int contribution = before == null || after == null ? 0 : Math.max(0, after - before);
-        return TranscriptMetrics.present(projection.currentTaskToolTranscript().size(), transcriptTokens,
-                before, after, contribution);
+        return TranscriptMetrics.removed(lastFinalTokens(calls));
     }
 
     private Integer lastFinalTokens(List<ContextLifecycleBenchmarkResult.ModelCallMetric> calls) {
@@ -440,13 +404,10 @@ final class ContextLifecycleResultAssembler {
         AgentLifecycleObservationPublisher.FinalProjectionObservation projection =
                 execution.capture().finalProjection.get();
         if (projection != null) {
-            AgentToolProtocolInspector.Inspection executionInspection =
-                    AgentToolProtocolInspector.inspect(projection.executionTranscript());
-            AgentToolProtocolInspector.Inspection transcriptInspection =
-                    AgentToolProtocolInspector.inspect(projection.currentTaskToolTranscript());
-            orphan += executionInspection.orphanToolProtocolCount() + transcriptInspection.orphanToolProtocolCount();
-            protocolFailure += executionInspection.protocolValidationFailureCount()
-                    + transcriptInspection.protocolValidationFailureCount();
+            AgentToolProtocolInspector.Inspection managedInspection =
+                    AgentToolProtocolInspector.inspect(projection.managedWorkingContext());
+            orphan += managedInspection.orphanToolProtocolCount();
+            protocolFailure += managedInspection.protocolValidationFailureCount();
         }
         int compressionFailures = (int) execution.capture().compressions.stream()
                 .filter(value -> !value.succeeded()).count();
@@ -537,14 +498,6 @@ final class ContextLifecycleResultAssembler {
             Integer after,
             Integer contribution,
             ContextLifecycleBenchmarkResult.TranscriptMetricStatus contributionStatus) {
-
-        static TranscriptMetrics present(
-                int entries, int tokens, Integer before, Integer after, int contribution) {
-            return new TranscriptMetrics(entries, tokens,
-                    ContextLifecycleBenchmarkResult.TranscriptMetricStatus.PRESENT,
-                    before, after, contribution,
-                    ContextLifecycleBenchmarkResult.TranscriptMetricStatus.PRESENT);
-        }
 
         static TranscriptMetrics removed(Integer finalContextTokens) {
             return new TranscriptMetrics(0, null,

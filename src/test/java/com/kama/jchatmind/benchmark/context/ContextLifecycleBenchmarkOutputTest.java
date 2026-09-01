@@ -144,11 +144,12 @@ class ContextLifecycleBenchmarkOutputTest {
                         "primary state", null, null, "accepted continuation state body", true, 1,
                         List.of(selected), List.of(), 1, 1, 0, 100, 20, 10, null)),
                 new ContextLifecycleBenchmarkResult.FinalDiagnostic(
-                        "task-1", "session-1", List.of(diagnosticMessage("USER", "pre transcript")),
-                        List.of(diagnosticMessage("TOOL", "transcript body")), finalRequest,
+                        "task-1", "session-1", List.of(diagnosticMessage("USER", "managed context")),
+                        finalRequest,
                         List.of(new ContextLifecycleBenchmarkResult.ProviderRequestDiagnostic(
                                 1, List.of(diagnosticMessage("USER", "actual final provider body")))),
-                        1, 1, 10, 20, 30));
+                        1, 30, List.of(diagnosticMessage("USER", "actual final provider body")),
+                        "accepted state", 1, 30));
     }
 
     private ContextLifecycleBenchmarkResult.DiagnosticMessage diagnosticMessage(String role, String text) {

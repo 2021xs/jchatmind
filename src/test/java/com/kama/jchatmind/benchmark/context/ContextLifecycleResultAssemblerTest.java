@@ -41,17 +41,17 @@ class ContextLifecycleResultAssemblerTest {
     }
 
     @Test
-    void preservesLegacyTranscriptZeroAsPresent() {
+    void marksRemovedTranscriptMetricsNotApplicableForLegacyLabelledRuns() {
         ContextLifecycleBenchmarkResult.ContextMetrics context = new ContextLifecycleResultAssembler(
                 3, new FinalSynthesisProperties(),
                 ContextLifecycleBenchmarkResult.ExecutionArchitecture.LEGACY)
                 .assemble(execution()).context();
 
-        assertEquals(0, context.taskToolTranscriptEstimatedTokens());
-        assertEquals(ContextLifecycleBenchmarkResult.TranscriptMetricStatus.PRESENT,
+        assertNull(context.taskToolTranscriptEstimatedTokens());
+        assertEquals(ContextLifecycleBenchmarkResult.TranscriptMetricStatus.REMOVED_NOT_APPLICABLE,
                 context.taskToolTranscriptStatus());
-        assertEquals(0, context.finalTranscriptContributionTokens());
-        assertEquals(ContextLifecycleBenchmarkResult.TranscriptMetricStatus.PRESENT,
+        assertNull(context.finalTranscriptContributionTokens());
+        assertEquals(ContextLifecycleBenchmarkResult.TranscriptMetricStatus.REMOVED_NOT_APPLICABLE,
                 context.finalTranscriptContributionStatus());
     }
 
@@ -98,9 +98,8 @@ class ContextLifecycleResultAssemblerTest {
         FinalSynthesisRequest finalRequest = finalRequest();
         List<Message> managedWorkingContext = List.of(new UserMessage("managed context"));
         capture.finalProjection.set(new AgentLifecycleObservationPublisher.FinalProjectionObservation(
-                "task-1", "session-1", "model", List.of(new UserMessage("pre merge")),
-                List.of(), finalRequest, 1, 1,
-                managedWorkingContext, finalRequest, "accepted state", 2, 0));
+                "task-1", "session-1", "model", managedWorkingContext,
+                finalRequest, "accepted state", 2));
         capture.finalProviderRequests.add(
                 new AgentLifecycleObservationPublisher.FinalProviderRequestObservation(
                         "task-1", "session-1", "model", 1,
@@ -122,9 +121,6 @@ class ContextLifecycleResultAssemblerTest {
         assertEquals("selected model-view body",
                 compression.selectedLogicalGroupMessages().get(0).text());
         assertTrue(compression.accepted());
-        assertEquals(finalRequest, diagnostics.finalRequest().postTranscriptFinalRequest());
-        assertEquals("pre merge", diagnostics.finalRequest().preTranscriptExecutionContext().get(0).text());
-        assertTrue(diagnostics.finalRequest().taskToolTranscript().isEmpty());
         assertEquals("actual provider request",
                 diagnostics.finalRequest().compiledProviderRequests().get(0).messages().get(0).text());
         assertEquals("managed context", diagnostics.finalRequest().managedWorkingContext().get(0).text());
@@ -133,9 +129,6 @@ class ContextLifecycleResultAssemblerTest {
                 diagnostics.finalRequest().managedFinalProviderMessages().get(0).text());
         assertEquals("accepted state", diagnostics.finalRequest().acceptedState());
         assertEquals(2, diagnostics.finalRequest().coveredThroughLogicalGroup());
-        assertEquals(0, diagnostics.finalRequest().finalTranscriptReadCount());
-        assertEquals(1, diagnostics.finalRequest().transcriptBatchWriteCount());
-        assertEquals(1, diagnostics.finalRequest().transcriptToolCallWriteCount());
     }
 
     private ContextLifecycleCaseExecution execution() {

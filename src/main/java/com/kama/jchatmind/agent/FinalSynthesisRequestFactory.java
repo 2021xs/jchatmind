@@ -9,18 +9,15 @@ import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 /**
- * Read-only projection from the protocol-bearing execution transcript into a
- * structured final request. Invalid protocol fails closed; the transcript is
+ * Read-only projection from the protocol-bearing managed Working Context into
+ * a structured final request. Invalid protocol fails closed; the context is
  * never edited or repaired here.
  */
 public final class FinalSynthesisRequestFactory {
@@ -29,28 +26,19 @@ public final class FinalSynthesisRequestFactory {
             + "Use only supported evidence, distinguish facts from uncertainty, and do not expose internal formats.";
 
     public FinalSynthesisRequest create(List<Message> executionTranscript) {
-        return create(executionTranscript, null);
+        return createFromManagedContext(executionTranscript, null);
     }
 
     public FinalSynthesisRequest create(List<Message> executionTranscript, String originalUserQuestion) {
-        return create(executionTranscript, List.of(), originalUserQuestion);
+        return createFromManagedContext(executionTranscript, originalUserQuestion);
     }
 
     /** Builds the Final request exclusively from the managed Working Context. */
     public FinalSynthesisRequest createFromManagedContext(List<Message> managedWorkingContext,
                                                           String originalUserQuestion) {
-        return create(managedWorkingContext, List.of(), originalUserQuestion);
-    }
-
-    public FinalSynthesisRequest create(List<Message> executionTranscript,
-                                        List<Message> currentTaskToolTranscript,
-                                        String originalUserQuestion) {
-        Assert.notNull(executionTranscript, "Execution transcript cannot be null");
-        Assert.notNull(currentTaskToolTranscript, "Current task tool transcript cannot be null");
-        List<Message> mergedTranscript = mergeCurrentTaskToolTranscript(
-                executionTranscript, currentTaskToolTranscript);
-        List<Message> safeMessages = AgentMemoryHistorySanitizer.toSafeModelMessages(mergedTranscript);
-        assertProtocolWasNotDropped(mergedTranscript, safeMessages);
+        Assert.notNull(managedWorkingContext, "Managed Working Context cannot be null");
+        List<Message> safeMessages = AgentMemoryHistorySanitizer.toSafeModelMessages(managedWorkingContext);
+        assertProtocolWasNotDropped(managedWorkingContext, safeMessages);
 
         Map<String, ToolResponseMessage.ToolResponse> responsesById = responsesById(safeMessages);
         int lastUserIndex = lastUserIndex(safeMessages);
@@ -116,169 +104,6 @@ public final class FinalSynthesisRequestFactory {
         }
         return new FinalSynthesisRequest(
                 effectiveOriginalQuestion, conversation, batches, DEFAULT_FINAL_ANSWER_POLICY);
-    }
-
-    private List<Message> mergeCurrentTaskToolTranscript(List<Message> executionTranscript,
-                                                         List<Message> currentTaskToolTranscript) {
-        if (currentTaskToolTranscript.isEmpty()) {
-            return executionTranscript;
-        }
-
-        List<Message> safeExecution = AgentMemoryHistorySanitizer.toSafeModelMessages(executionTranscript);
-        assertProtocolWasNotDropped(executionTranscript, safeExecution);
-        assertCompleteProtocol(safeExecution, "Execution transcript");
-
-        List<Message> safeTask = AgentMemoryHistorySanitizer.toSafeModelMessages(currentTaskToolTranscript);
-        assertProtocolWasNotDropped(currentTaskToolTranscript, safeTask);
-        Set<String> currentTaskIds = assertCompleteCurrentTaskBatches(safeTask);
-        Map<String, AssistantMessage.ToolCall> currentTaskCalls = callsById(safeTask);
-        Map<String, ToolResponseMessage.ToolResponse> currentTaskResponses = responsesById(safeTask);
-
-        List<Message> merged = new ArrayList<>(safeExecution.size() + safeTask.size());
-        for (Message message : safeExecution) {
-            Set<String> messageProtocolIds = protocolIds(message);
-            if (messageProtocolIds.isEmpty()
-                    || Collections.disjoint(messageProtocolIds, currentTaskIds)) {
-                merged.add(message);
-                continue;
-            }
-            if (!currentTaskIds.containsAll(messageProtocolIds)) {
-                throw new IllegalStateException(
-                        "Execution transcript partially overlaps the current task tool transcript");
-            }
-            assertMatchingCurrentTaskCopy(message, currentTaskCalls, currentTaskResponses);
-            // The current task copy is authoritative and is appended below in true task order.
-        }
-        merged.addAll(safeTask);
-        return List.copyOf(merged);
-    }
-
-    private Map<String, AssistantMessage.ToolCall> callsById(List<Message> messages) {
-        Map<String, AssistantMessage.ToolCall> calls = new HashMap<>();
-        for (Message message : messages) {
-            if (!(message instanceof AssistantMessage assistant) || !hasToolCalls(assistant)) {
-                continue;
-            }
-            for (AssistantMessage.ToolCall call : assistant.getToolCalls()) {
-                if (calls.putIfAbsent(call.id(), call) != null) {
-                    throw new IllegalStateException(
-                            "Current task tool transcript contains duplicate toolCallId: " + call.id());
-                }
-            }
-        }
-        return calls;
-    }
-
-    private void assertMatchingCurrentTaskCopy(
-            Message message,
-            Map<String, AssistantMessage.ToolCall> currentTaskCalls,
-            Map<String, ToolResponseMessage.ToolResponse> currentTaskResponses) {
-        if (message instanceof AssistantMessage assistant && hasToolCalls(assistant)) {
-            for (AssistantMessage.ToolCall existing : assistant.getToolCalls()) {
-                AssistantMessage.ToolCall expected = currentTaskCalls.get(existing.id());
-                if (expected == null
-                        || !Objects.equals(existing.type(), expected.type())
-                        || !Objects.equals(existing.name(), expected.name())
-                        || !Objects.equals(existing.arguments(), expected.arguments())) {
-                    throw new IllegalStateException(
-                            "Execution transcript conflicts with current task tool call: toolCallId="
-                                    + existing.id());
-                }
-            }
-            return;
-        }
-        if (message instanceof ToolResponseMessage responseMessage) {
-            for (ToolResponseMessage.ToolResponse existing : responseMessage.getResponses()) {
-                ToolResponseMessage.ToolResponse expected = currentTaskResponses.get(existing.id());
-                if (expected == null
-                        || !Objects.equals(existing.name(), expected.name())
-                        || !Objects.equals(existing.responseData(), expected.responseData())) {
-                    throw new IllegalStateException(
-                            "Execution transcript conflicts with current task tool response: toolCallId="
-                                    + existing.id());
-                }
-            }
-        }
-    }
-
-    private void assertCompleteProtocol(List<Message> messages, String label) {
-        Map<String, ToolResponseMessage.ToolResponse> responses = responsesById(messages);
-        Set<String> callIds = new HashSet<>();
-        for (Message message : messages) {
-            if (!(message instanceof AssistantMessage assistant) || !hasToolCalls(assistant)) {
-                continue;
-            }
-            for (AssistantMessage.ToolCall call : assistant.getToolCalls()) {
-                if (call == null || !StringUtils.hasText(call.id())) {
-                    throw new IllegalStateException(label + " contains a tool call without id");
-                }
-                if (!callIds.add(call.id())) {
-                    throw new IllegalStateException(label + " contains duplicate toolCallId: " + call.id());
-                }
-                if (!responses.containsKey(call.id())) {
-                    throw new IllegalStateException(label + " contains an incomplete tool response batch");
-                }
-            }
-        }
-        if (callIds.size() != responses.size()) {
-            throw new IllegalStateException(label + " contains an unmatched tool response");
-        }
-    }
-
-    private Set<String> assertCompleteCurrentTaskBatches(List<Message> messages) {
-        Set<String> allIds = new LinkedHashSet<>();
-        int index = 0;
-        while (index < messages.size()) {
-            if (!(messages.get(index) instanceof AssistantMessage assistant) || !hasToolCalls(assistant)) {
-                throw new IllegalStateException(
-                        "Current task tool transcript must contain only complete tool protocol batches");
-            }
-            if (index + 1 >= messages.size()
-                    || !(messages.get(index + 1) instanceof ToolResponseMessage responseMessage)) {
-                throw new IllegalStateException("Current task tool transcript contains an incomplete batch");
-            }
-
-            Set<String> expectedIds = new LinkedHashSet<>();
-            for (AssistantMessage.ToolCall call : assistant.getToolCalls()) {
-                if (call == null || !StringUtils.hasText(call.id())
-                        || !expectedIds.add(call.id()) || !allIds.add(call.id())) {
-                    throw new IllegalStateException(
-                            "Current task tool transcript contains a missing or duplicate toolCallId");
-                }
-            }
-            Set<String> actualIds = new LinkedHashSet<>();
-            for (ToolResponseMessage.ToolResponse response : responseMessage.getResponses()) {
-                if (response == null || !StringUtils.hasText(response.id())
-                        || response.responseData() == null || !actualIds.add(response.id())) {
-                    throw new IllegalStateException(
-                            "Current task tool transcript contains an invalid tool response");
-                }
-            }
-            if (!actualIds.equals(expectedIds)) {
-                throw new IllegalStateException(
-                        "Current task tool transcript contains an incomplete tool response batch");
-            }
-            index += 2;
-        }
-        return Set.copyOf(allIds);
-    }
-
-    private Set<String> protocolIds(Message message) {
-        Set<String> ids = new LinkedHashSet<>();
-        if (message instanceof AssistantMessage assistant && hasToolCalls(assistant)) {
-            for (AssistantMessage.ToolCall call : assistant.getToolCalls()) {
-                if (call != null && StringUtils.hasText(call.id())) {
-                    ids.add(call.id());
-                }
-            }
-        } else if (message instanceof ToolResponseMessage responseMessage) {
-            for (ToolResponseMessage.ToolResponse response : responseMessage.getResponses()) {
-                if (response != null && StringUtils.hasText(response.id())) {
-                    ids.add(response.id());
-                }
-            }
-        }
-        return ids;
     }
 
     private void assertProtocolWasNotDropped(List<Message> original, List<Message> safe) {

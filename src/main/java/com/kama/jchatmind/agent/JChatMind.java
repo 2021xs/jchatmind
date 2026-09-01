@@ -104,7 +104,6 @@ public class JChatMind {
     private final Map<String, Integer> toolCorrectionAttempts = new HashMap<>();
     private final ToolDuplicateCallState duplicateCallState = new ToolDuplicateCallState();
     private final TaskEvidenceState taskEvidenceState = new TaskEvidenceState();
-    private final TaskToolTranscript taskToolTranscript = new TaskToolTranscript();
     private boolean forceFinalAnswer;
     private boolean finalizationRequired;
     private AgentTaskRuntimeRegistry taskRuntimeRegistry;
@@ -679,13 +678,9 @@ public class JChatMind {
                 managedWorkingContext, originalUserQuestion);
         AgentLifecycleObservationPublisher.publishFinalProjection(
                 new AgentLifecycleObservationPublisher.FinalProjectionObservation(
-                        currentTaskId, chatSessionId, model, managedWorkingContext,
-                        List.of(), finalRequest,
-                        taskToolTranscript.batchCount(), taskToolTranscript.toolCallCount(),
-                        managedWorkingContext, finalRequest,
+                        currentTaskId, chatSessionId, model, managedWorkingContext, finalRequest,
                         currentTaskWorkingState.summary(),
-                        currentTaskWorkingState.coveredThroughLogicalGroup(),
-                        taskToolTranscript.readCount()));
+                        currentTaskWorkingState.coveredThroughLogicalGroup()));
         int evidenceCount = finalRequest.evidenceBatches().stream()
                 .mapToInt(batch -> batch.evidence().size())
                 .sum();
@@ -694,12 +689,9 @@ public class JChatMind {
                 .mapToInt(evidence -> evidence.content().length())
                 .sum();
         log.info("Final synthesis request projected: conversationMessages={}, evidenceBatches={}, "
-                        + "evidenceCount={}, evidenceChars={}, managedContextMessages={}, "
-                        + "transcriptWriteBatches={}, transcriptWriteToolCalls={}, transcriptReads={}",
+                        + "evidenceCount={}, evidenceChars={}, managedContextMessages={}",
                 finalRequest.conversationContext().size(), finalRequest.evidenceBatches().size(),
-                evidenceCount, evidenceChars, managedWorkingContext.size(),
-                taskToolTranscript.batchCount(), taskToolTranscript.toolCallCount(),
-                taskToolTranscript.readCount());
+                evidenceCount, evidenceChars, managedWorkingContext.size());
         finalLogicalRequestStartedAtMs = System.currentTimeMillis();
         int accumulatedReasoningEventCount = 0;
         int accumulatedReasoningChars = 0;
@@ -1030,7 +1022,6 @@ public class JChatMind {
             throw execution.getError();
         }
 
-        taskToolTranscript.append(assistantToolCallMessage, contextResponseMessage);
         this.chatMemory.clear(this.chatSessionId);
         this.chatMemory.add(this.chatSessionId, contextView.toolExecutionResult().conversationHistory());
 
@@ -1207,7 +1198,6 @@ public class JChatMind {
 
         duplicateCallState.reset();
         taskEvidenceState.reset();
-        taskToolTranscript.clear();
         currentTaskWorkingState = ConversationContextCompressor.CurrentTaskWorkingState.empty();
         forceFinalAnswer = false;
         finalizationRequired = false;

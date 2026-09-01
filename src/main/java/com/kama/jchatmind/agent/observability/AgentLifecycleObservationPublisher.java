@@ -298,37 +298,14 @@ public final class AgentLifecycleObservationPublisher {
             String taskId,
             String sessionId,
             String model,
-            List<Message> executionTranscript,
-            List<Message> currentTaskToolTranscript,
-            FinalSynthesisRequest finalRequest,
-            int transcriptBatchCount,
-            int transcriptToolCallCount,
             List<Message> managedWorkingContext,
-            FinalSynthesisRequest managedFinalRequest,
+            FinalSynthesisRequest finalRequest,
             String acceptedState,
-            int coveredThroughLogicalGroup,
-            int finalTranscriptReadCount) {
+            int coveredThroughLogicalGroup) {
 
         public FinalProjectionObservation {
-            executionTranscript = executionTranscript == null ? List.of() : List.copyOf(executionTranscript);
-            currentTaskToolTranscript = currentTaskToolTranscript == null
-                    ? List.of() : List.copyOf(currentTaskToolTranscript);
             managedWorkingContext = managedWorkingContext == null
                     ? List.of() : List.copyOf(managedWorkingContext);
-        }
-
-        public FinalProjectionObservation(
-                String taskId,
-                String sessionId,
-                String model,
-                List<Message> executionTranscript,
-                List<Message> currentTaskToolTranscript,
-                FinalSynthesisRequest finalRequest,
-                int transcriptBatchCount,
-                int transcriptToolCallCount) {
-            this(taskId, sessionId, model, executionTranscript, currentTaskToolTranscript,
-                    finalRequest, transcriptBatchCount, transcriptToolCallCount,
-                    executionTranscript, finalRequest, null, 0, 0);
         }
     }
 

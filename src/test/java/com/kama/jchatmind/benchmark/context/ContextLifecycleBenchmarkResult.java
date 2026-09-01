@@ -375,50 +375,20 @@ record ContextLifecycleBenchmarkResult(
     record FinalDiagnostic(
             String taskId,
             String sessionId,
-            List<DiagnosticMessage> preTranscriptExecutionContext,
-            List<DiagnosticMessage> taskToolTranscript,
-            FinalSynthesisRequest postTranscriptFinalRequest,
-            List<ProviderRequestDiagnostic> compiledProviderRequests,
-            int requestMessageCount,
-            int transcriptMessageCount,
-            int preTranscriptEstimatedTokens,
-            int transcriptEstimatedTokens,
-            int finalProviderEstimatedTokens,
             List<DiagnosticMessage> managedWorkingContext,
             FinalSynthesisRequest managedFinalRequest,
+            List<ProviderRequestDiagnostic> compiledProviderRequests,
+            int requestMessageCount,
+            int finalProviderEstimatedTokens,
             List<DiagnosticMessage> managedFinalProviderMessages,
             String acceptedState,
             int coveredThroughLogicalGroup,
-            int finalTranscriptReadCount,
-            int transcriptBatchWriteCount,
-            int transcriptToolCallWriteCount,
             int managedFinalEstimatedTokens) {
 
         FinalDiagnostic {
-            preTranscriptExecutionContext = immutable(preTranscriptExecutionContext);
-            taskToolTranscript = immutable(taskToolTranscript);
             compiledProviderRequests = immutable(compiledProviderRequests);
             managedWorkingContext = immutable(managedWorkingContext);
             managedFinalProviderMessages = immutable(managedFinalProviderMessages);
-        }
-
-        FinalDiagnostic(
-                String taskId,
-                String sessionId,
-                List<DiagnosticMessage> preTranscriptExecutionContext,
-                List<DiagnosticMessage> taskToolTranscript,
-                FinalSynthesisRequest postTranscriptFinalRequest,
-                List<ProviderRequestDiagnostic> compiledProviderRequests,
-                int requestMessageCount,
-                int transcriptMessageCount,
-                int preTranscriptEstimatedTokens,
-                int transcriptEstimatedTokens,
-                int finalProviderEstimatedTokens) {
-            this(taskId, sessionId, preTranscriptExecutionContext, taskToolTranscript,
-                    postTranscriptFinalRequest, compiledProviderRequests, requestMessageCount,
-                    transcriptMessageCount, preTranscriptEstimatedTokens, transcriptEstimatedTokens,
-                    finalProviderEstimatedTokens, List.of(), null, List.of(),
-                    null, 0, 0, 0, 0, 0);
         }
     }
 

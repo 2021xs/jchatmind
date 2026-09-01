@@ -244,17 +244,12 @@ class JChatMindToolResultGuardTest {
             assertFalse(promptResult.contains("[TRUNCATED: originalChars="));
         }
         assertEquals(rawResult, storedToolResult);
-        assertEquals(promptResult, finalProjection.get().executionTranscript().stream()
+        assertEquals(promptResult, finalProjection.get().managedWorkingContext().stream()
                 .filter(ToolResponseMessage.class::isInstance)
                 .map(ToolResponseMessage.class::cast)
                 .findFirst()
                 .orElseThrow()
                 .getResponses().get(0).responseData());
-        assertTrue(finalProjection.get().currentTaskToolTranscript().isEmpty());
-        assertEquals(0, finalProjection.get().finalTranscriptReadCount());
-        assertEquals(1, finalProjection.get().transcriptBatchCount());
-        assertEquals(1, finalProjection.get().transcriptToolCallCount());
-        assertEquals(finalProjection.get().finalRequest(), finalProjection.get().managedFinalRequest());
         assertEquals(promptResult, finalProjection.get().finalRequest().evidenceBatches().get(0)
                 .evidence().get(0).content());
         assertEquals(0, ProtocolAwareMessageWindowChatMemory.inspectProtocol(List.of(
